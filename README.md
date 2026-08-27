@@ -1,16 +1,51 @@
-# React + Vite
+# Мотивація ТМ
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Веб-застосунок для розрахунку зарплати територіальних менеджерів (перенесено з
+артефакту Claude у повноцінний проект Vite + React).
 
-Currently, two official plugins are available:
+## Запуск
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+nvm use            # Node 24 (див. нижче, якщо nvm не підхопився)
+npm install        # один раз
+npm run dev        # http://localhost:5173
+```
 
-## React Compiler
+Якщо `nvm`/`node` не знаходиться в терміналі — відкрий новий термінал або виконай:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"
+```
 
-## Expanding the Oxlint configuration
+## Збірка та деплой
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+```bash
+npm run build      # готова статика у dist/
+npm run preview    # локальний перегляд збірки
+```
+
+`dist/` — це звичайна статика, її можна викласти на Vercel, Netlify, GitHub Pages
+чи будь-який статичний хостинг.
+
+## Коди доступу (за замовчуванням)
+
+| Роль                         | Код    |
+| ---------------------------- | ------ |
+| Кавецький Віктор (керівник)  | `4739` |
+| Шах Андрій (ТМ)              | `5417` |
+| Паньків Іван (ТМ)            | `8206` |
+| Код відновлення              | `9184` |
+
+Коди зберігаються в `localStorage` браузера і змінюються через «Забули код?».
+Щоб скинути все до заводських значень — очисти дані сайту в браузері.
+
+## Як влаштовано зберігання
+
+Артефакт використовував серверний `window.storage` від Claude. Тут його замінює
+шим на `localStorage` — [src/lib/storage.js](src/lib/storage.js), підключається в
+[src/main.jsx](src/main.jsx). Уся логіка застосунку — у [src/App.jsx](src/App.jsx)
+без змін.
+
+**Наслідок:** дані (заповнені форми, скріншоти, грейди, бонуси) живуть лише в
+одному браузері на одному пристрої. Для спільної роботи керівника й ТМ з різних
+комп'ютерів знадобиться справжній бекенд (напр. Supabase) — це наступний крок.
