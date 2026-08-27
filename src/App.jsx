@@ -5,19 +5,24 @@ import {
 } from "recharts";
 import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
+  Store, Calculator, LogIn, Wallet,
 } from "lucide-react";
+import {
+  MANAGER, ACCOUNTANT, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, tmByKey,
+  ensureCredentialsSeeded, verifyLogin,
+} from "./org.js";
+import {
+  calcSmAll, emptySmData, SM_FIELD_LABELS, SM_CATEGORIES, PLAN_BRACKETS,
+  categoryOf, normDaysOff, MANAGER_COEFS,
+} from "./smCalc.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
 ========================================================= */
-const TM_LIST = [
-  { key: "andriy", name: "Шах Андрій" },
-  { key: "ivan", name: "Паньків Іван" },
-];
-const MANAGER_NAME = "Кавецький Віктор Васильович";
+const TM_LIST = TMS.map((t) => ({ key: t.key, name: t.name }));
+const MANAGER_NAME = MANAGER.name;
 const MONTH_NAMES = ["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"];
 const GRADE_MIN = { 1: 60000, 2: 50000, 3: 45000 };
-const PIN_DEFAULTS = { andriy: "5417", ivan: "8206", manager: "4739", recovery: "9184" };
 
 const FIELD_LABELS = {
   "block1.salesPlanPercent": "1.1 % виконання плану продажів",
@@ -232,23 +237,21 @@ async function listMonths(tmKey) {
     return (r?.keys || []).map((k) => k.replace(`data:${tmKey}:`, ""));
   } catch { return []; }
 }
-async function verifyPin(roleId, pin) {
-  try { const r = await window.storage.get(`pin:${roleId}`, true); return r?.value === pin; }
-  catch { return false; }
-}
-async function changePin(roleId, recoveryCode, newPin) {
+/* ---------- СМ: сховище розрахунків салонів ---------- */
+async function loadSmData(salonKey, ym) {
   try {
-    const rec = await window.storage.get(`pin:recovery`, true);
-    if (rec?.value !== recoveryCode) return false;
-    await window.storage.set(`pin:${roleId}`, newPin, true);
-    return true;
-  } catch { return false; }
+    const r = await window.storage.get(`smdata:${salonKey}:${ym}`, true);
+    return r ? { ...emptySmData(), ...JSON.parse(r.value) } : emptySmData();
+  } catch { return emptySmData(); }
 }
-async function ensurePinsSeeded() {
-  for (const key of Object.keys(PIN_DEFAULTS)) {
-    try { await window.storage.get(`pin:${key}`, true); }
-    catch { try { await window.storage.set(`pin:${key}`, PIN_DEFAULTS[key], true); } catch (e) { console.error(e); } }
-  }
+async function saveSmData(salonKey, ym, data) {
+  try { await window.storage.set(`smdata:${salonKey}:${ym}`, JSON.stringify(data), true); } catch (e) { console.error(e); }
+}
+async function listSmMonths(salonKey) {
+  try {
+    const r = await window.storage.list(`smdata:${salonKey}:`, true);
+    return (r?.keys || []).map((k) => k.replace(`smdata:${salonKey}:`, ""));
+  } catch { return []; }
 }
 
 function resizeImage(file) {
@@ -662,7 +665,7 @@ function CorrectionsTab({ data, onReply }) {
 /* =========================================================
    TM VIEW
 ========================================================= */
-function TmView({ tmKey, tmName, onBack }) {
+function TmView({ tmKey, tmName, onBack, embedded }) {
   const [ym, setYm] = useState(nowYm());
   const [data, setData] = useState(emptyData());
   const [adj, setAdj] = useState({ amount: 0, comment: "", advance: 0 });
@@ -735,8 +738,8 @@ function TmView({ tmKey, tmName, onBack }) {
   }, []);
 
   return (
-    <div className="view">
-      <TopBar title={`ТМ · ${tmName}`} onBack={onBack} />
+    <div className={embedded ? "embedded" : "view"}>
+      {!embedded && <TopBar title={`ТМ · ${tmName}`} onBack={onBack} />}
       <div className="month-picker">
         <select value={ym} onChange={(e) => setYm(e.target.value)}>
           {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
@@ -866,7 +869,7 @@ function QuarterPanel({ qKey, onDone }) {
 /* =========================================================
    MANAGER VIEW
 ========================================================= */
-function ManagerView({ onBack }) {
+function ManagerView({ onBack, embedded }) {
   const [tmKey, setTmKey] = useState("andriy");
   const [ym, setYm] = useState(nowYm());
   const [data, setData] = useState(emptyData());
@@ -966,8 +969,8 @@ function ManagerView({ onBack }) {
   };
 
   return (
-    <div className="view">
-      <TopBar title={MANAGER_NAME} onBack={onBack} />
+    <div className={embedded ? "embedded" : "view"}>
+      {!embedded && <TopBar title={MANAGER_NAME} onBack={onBack} />}
       <div className="tm-tabs">
         {TM_LIST.map((t) => (
           <button key={t.key} className={`tm-tab ${t.key === tmKey ? "active" : ""}`} onClick={() => setTmKey(t.key)}>{t.name}</button>
@@ -1069,115 +1072,349 @@ function ManagerView({ onBack }) {
   );
 }
 
+
 /* =========================================================
-   PIN GATE
+   ЖИВИЙ ФОН
 ========================================================= */
-function PinDigits({ value, onChange, autoFocus, shake, id }) {
-  const refs = [React.useRef(null), React.useRef(null), React.useRef(null), React.useRef(null)];
-  const digits = value.split("");
-  while (digits.length < 4) digits.push("");
-
-  useEffect(() => {
-    if (autoFocus) refs[0].current?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const setAt = (i, ch) => {
-    const next = digits.slice();
-    next[i] = ch;
-    onChange(next.join("").slice(0, 4));
-  };
-
+function LivingBackground() {
   return (
-    <div className={`pin-digits ${shake ? "shake" : ""}`}>
-      {[0, 1, 2, 3].map((i) => (
-        <input
-          key={i}
-          ref={refs[i]}
-          className="pin-digit"
-          type="password"
-          inputMode="numeric"
-          maxLength={1}
-          value={digits[i]}
-          onChange={(e) => {
-            const ch = e.target.value.replace(/\D/g, "").slice(-1);
-            setAt(i, ch);
-            if (ch && i < 3) refs[i + 1].current?.focus();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Backspace" && !digits[i] && i > 0) refs[i - 1].current?.focus();
-          }}
-          onFocus={selectOnFocus}
-        />
-      ))}
+    <div className="living-bg" aria-hidden="true">
+      <span className="blob blob-1" />
+      <span className="blob blob-2" />
+      <span className="blob blob-3" />
+      <span className="blob blob-4" />
     </div>
   );
 }
 
-function PinGate({ label, onCancel, onSuccess, checkPin, resetPin }) {
-  const [mode, setMode] = useState("enter");
-  const [pin, setPin] = useState("");
+/* =========================================================
+   ІЄРАРХІЯ КАБІНЕТІВ (початковий екран)
+========================================================= */
+function CabinetCard({ icon, name, sub, tone, onClick }) {
+  return (
+    <button className={`cab-card ${tone || ""}`} onClick={onClick}>
+      <span className="cab-card-icon">{icon}</span>
+      <span className="cab-card-text">
+        <span className="cab-card-name">{name}</span>
+        <span className="cab-card-sub">{sub}</span>
+      </span>
+    </button>
+  );
+}
+
+function HierarchyHome({ onPick }) {
+  return (
+    <div className="role-select">
+      <div className="hierarchy-inner fade-in">
+        <span className="role-eyebrow">Робочий простір</span>
+        <h1>Мотивація команди</h1>
+        <p>Оберіть кабінет — вхід за логіном і паролем</p>
+
+        <div className="cab-top">
+          <CabinetCard
+            tone="cab-manager" icon={<Users size={20} />}
+            name={MANAGER.name} sub="Керівник"
+            onClick={() => onPick({ type: "manager", key: "manager", label: MANAGER.name })}
+          />
+          <CabinetCard
+            tone="cab-acct" icon={<Wallet size={20} />}
+            name={ACCOUNTANT.name} sub="Бухгалтер · зведення й виплати"
+            onClick={() => onPick({ type: "accountant", key: "accountant", label: ACCOUNTANT.name })}
+          />
+        </div>
+
+        {TMS.map((tm) => (
+          <div className="cab-branch" key={tm.key}>
+            <CabinetCard
+              tone="cab-tm" icon={<ClipboardList size={20} />}
+              name={tm.name} sub={`Територіальний менеджер · ${salonsOfTm(tm.key).length} салони`}
+              onClick={() => onPick({ type: "tm", key: tm.key, label: tm.name })}
+            />
+            <div className="cab-children">
+              {salonsOfTm(tm.key).map((s) => (
+                <CabinetCard
+                  key={s.key} tone="cab-sm" icon={<Store size={17} />}
+                  name={salonLabel(s)} sub={`Салон майстерності · ${s.area}`}
+                  onClick={() => onPick({ type: "sm", key: s.key, label: salonLabel(s) })}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   ВХІД (логін + пароль)
+========================================================= */
+function LoginGate({ title, subtitle, onCancel, onSuccess, verify }) {
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [shake, setShake] = useState(false);
-  const [recoveryCode, setRecoveryCode] = useState("");
-  const [newPin, setNewPin] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const submitPin = async (candidate) => {
+  const submit = async () => {
+    if (!login || !password) return;
     setBusy(true);
-    const ok = await checkPin(candidate ?? pin);
+    const ok = await verify(login, password);
     setBusy(false);
     if (ok) onSuccess();
-    else {
-      setError("Невірний код. Спробуйте ще раз");
-      setPin("");
-      setShake(true);
-      setTimeout(() => setShake(false), 400);
-    }
-  };
-  const submitRecovery = async () => {
-    setBusy(true);
-    const ok = await resetPin(recoveryCode, newPin);
-    setBusy(false);
-    if (ok) { setMode("enter"); setPin(""); setRecoveryCode(""); setNewPin(""); setError("Код змінено — увійдіть новим кодом"); }
-    else setError("Невірний код відновлення");
+    else { setError("Невірний логін або пароль"); setPassword(""); }
   };
 
   return (
     <div className="role-select">
       <div className="role-select-inner fade-in">
-        <div className="pin-avatar">{label.split(" ").map((w) => w[0]).slice(0, 2).join("")}</div>
-        <h1>{label}</h1>
-        {mode === "enter" ? (
-          <>
-            <p>Введіть 4-значний код доступу</p>
-            <PinDigits
-              value={pin}
-              autoFocus
-              shake={shake}
-              onChange={(v) => { setPin(v); setError(""); if (v.length === 4) submitPin(v); }}
+        <div className="pin-avatar"><LogIn size={22} /></div>
+        <h1>{title}</h1>
+        {subtitle && <p>{subtitle}</p>}
+        <div className="login-fields">
+          <label className="login-field">
+            <span>Логін</span>
+            <input
+              autoFocus autoComplete="username" value={login}
+              onChange={(e) => { setLogin(e.target.value); setError(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") document.getElementById("lg-pass")?.focus(); }}
             />
-            <p className={`pin-error ${error ? "visible" : ""}`}>{error || " "}</p>
-            <div className="pin-actions">
-              <button className="btn-secondary" onClick={onCancel}>Назад</button>
-              <button className="btn-primary" onClick={() => submitPin()} disabled={pin.length !== 4 || busy}>{busy ? "Перевірка…" : "Увійти"}</button>
-            </div>
-            <button className="pin-forgot" onClick={() => { setMode("recover"); setError(""); setPin(""); }}>Забули код?</button>
-          </>
-        ) : (
-          <>
-            <p>Код відновлення</p>
-            <PinDigits value={recoveryCode} autoFocus onChange={setRecoveryCode} />
-            <p className="pin-sublabel">Новий код</p>
-            <PinDigits value={newPin} onChange={setNewPin} />
-            <p className={`pin-error ${error ? "visible" : ""}`}>{error || " "}</p>
-            <div className="pin-actions">
-              <button className="btn-secondary" onClick={() => { setMode("enter"); setError(""); }}>Назад</button>
-              <button className="btn-primary" onClick={submitRecovery} disabled={recoveryCode.length !== 4 || newPin.length !== 4 || busy}>
-                {busy ? "…" : "Змінити код"}
-              </button>
-            </div>
-          </>
+          </label>
+          <label className="login-field">
+            <span>Пароль</span>
+            <input
+              id="lg-pass" type="password" inputMode="numeric" autoComplete="current-password" value={password}
+              onChange={(e) => { setPassword(e.target.value); setError(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+            />
+          </label>
+        </div>
+        <p className={`pin-error ${error ? "visible" : ""}`}>{error || " "}</p>
+        <div className="pin-actions">
+          <button className="btn-secondary" onClick={onCancel}>Назад</button>
+          <button className="btn-primary" onClick={submit} disabled={!login || !password || busy}>
+            {busy ? "Перевірка…" : "Увійти"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   СМ · дрібні поля
+========================================================= */
+function SelectField({ label, value, onChange, options, readOnly }) {
+  const cur = options.find((o) => String(o.value) === String(value));
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      {readOnly ? (
+        <div className="field-value">{cur ? cur.label : "—"}</div>
+      ) : (
+        <div className="field-input-wrap">
+          <select className="field-input" value={value} onChange={(e) => onChange(e.target.value)}>
+            {options.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}
+          </select>
+        </div>
+      )}
+    </label>
+  );
+}
+
+/* =========================================================
+   СМ · ФОРМА КРИТЕРІЇВ
+========================================================= */
+function SmCriteriaForm({ data, update, calc, area, showAmounts, onUpload, onRemove, onPreview, readOnly, isQuarterEnd }) {
+  const shot = { screenshots: data.screenshots, onUpload, onRemove, onPreview, readOnly };
+  const catOptions = [
+    { value: "", label: `Авто (${categoryOf(data.base.avg3To)})` },
+    ...SM_CATEGORIES.map((c) => ({ value: c.key, label: `${c.key} · ${c.note}` })),
+  ];
+  const coefOptions = MANAGER_COEFS.map((c) => ({ value: c.value, label: c.label }));
+
+  return (
+    <div className="criteria-form">
+      <BlockHeader n="1" title="Основна частина за виконання плану" />
+      <Item num="1.1" title="Категорія та база" amount={showAmounts ? calc.baseAdjusted : undefined} screenshotKey="base" {...shot}>
+        <Field readOnly={readOnly} label="Середній ТО за 3 міс" suffix="грн" value={data.base.avg3To} onChange={(v) => update(["base", "avg3To"], v)} />
+        <SelectField readOnly={readOnly} label="Категорія салону" value={data.base.categoryOverride} onChange={(v) => update(["base", "categoryOverride"], v)} options={catOptions} />
+        <Field readOnly={readOnly} label="% виконання плану ТО" suffix="%" value={data.base.planPercent} onChange={(v) => update(["base", "planPercent"], v)} />
+        <Field readOnly={readOnly} label="Вихідних за місяць (факт)" value={data.base.daysOff} onChange={(v) => update(["base", "daysOff"], v)} />
+        {showAmounts && (
+          <div className="ez-sub">
+            <span>Категорія: {calc.category}</span>
+            <span>Брекет: {PLAN_BRACKETS[calc.bracket]}</span>
+            <span>База: {fmt(calc.baseRaw)}</span>
+            <span>Відпрац. коеф: {calc.factor.toFixed(2)} (норма вихідних {normDaysOff(area)})</span>
+          </div>
+        )}
+      </Item>
+
+      <BlockHeader n="2" title="Мотивація керуючого" />
+      <Item num="2.1" title="Атестація співробітників ФМ" amount={showAmounts ? calc.mgr.attest : undefined} screenshotKey="attest" {...shot}>
+        <CheckField readOnly={readOnly} label="Атестація всіма співробітниками ≥ 98%" checked={data.manager.attestationAll} onChange={(v) => update(["manager", "attestationAll"], v)} />
+      </Item>
+      <Item num="2.2" title="Підтримання стандартів ФМ" amount={showAmounts ? calc.mgr.standards : undefined} screenshotKey="standards" {...shot}>
+        <CheckField readOnly={readOnly} label="Без зауважень (бонус 2 000)" checked={data.manager.noRemarks} onChange={(v) => update(["manager", "noRemarks"], v)} />
+        <Field readOnly={readOnly} label="Виявлені зауваження (−200)" value={data.manager.remarksFound} onChange={(v) => update(["manager", "remarksFound"], v)} />
+        <Field readOnly={readOnly} label="Невиправлені зауваження (−400)" value={data.manager.remarksUnfixed} onChange={(v) => update(["manager", "remarksUnfixed"], v)} />
+        <div className="hint">Штраф до −2 000 грн. Виявлене та виправлене зауваження не сумуються.</div>
+      </Item>
+      <Item num="2.3" title="Коефіцієнт керуючого" amount={showAmounts ? calc.mgr.coefBonus : undefined} screenshotKey="coef" {...shot}>
+        <SelectField readOnly={readOnly} label="Статус" value={data.manager.coef} onChange={(v) => update(["manager", "coef"], Number(v))} options={coefOptions} />
+        <div className="hint">Додатковий бонус = ставка за категорією ({fmt(calc.baseRaw)}) × (коеф − 1). Умова переходу на «Керуючий»: 2 з 3 планів по СМ.</div>
+      </Item>
+
+      <BlockHeader n="3" title="Бонусна частина" />
+      <Item num="3.1" title="Обіг з дзвінків" amount={showAmounts ? calc.bonus.calls : undefined} screenshotKey="calls" {...shot}>
+        <Field readOnly={readOnly} label="Загальний план ТО на місяць" suffix="грн" value={data.bonus.monthlyToPlan} onChange={(v) => update(["bonus", "monthlyToPlan"], v)} />
+        <CheckField readOnly={readOnly} label="Виконано кількість дзвінків" checked={data.bonus.callsCountDone} onChange={(v) => update(["bonus", "callsCountDone"], v)} />
+        <CheckField readOnly={readOnly} label="Виконано оборот з дзвінків" checked={data.bonus.callsRevenueDone} onChange={(v) => update(["bonus", "callsRevenueDone"], v)} />
+        <Field readOnly={readOnly} label="Факт. оборот з дзвінків" suffix="грн" value={data.bonus.callsRevenue} onChange={(v) => update(["bonus", "callsRevenue"], v)} />
+        {showAmounts && (
+          <div className="ez-sub">
+            <span>План обороту з дзвінків (10% від плану ТО): {fmt(calc.bonus.callsPlanRevenue)}</span>
+            <span>Ставка бонусу: {calc.bonus.callsPct}%</span>
+          </div>
+        )}
+      </Item>
+      <Item num="3.2" title="Заміна на іншому магазині" amount={showAmounts ? calc.bonus.replacement : undefined} screenshotKey="replace" {...shot}>
+        <Field readOnly={readOnly} label="Днів заміни" value={data.bonus.replacementDays} onChange={(v) => update(["bonus", "replacementDays"], v)} />
+        {showAmounts && <div className="hint">Денна ставка на своєму магазині: {fmt(calc.dailyRate)} · +20% за день заміни</div>}
+      </Item>
+      <Item num="3.3" title="Середній чек" amount={showAmounts ? calc.bonus.avgCheck : undefined} screenshotKey="sc" {...shot}>
+        <Field readOnly={readOnly} label="Факт. середній чек" suffix="грн" value={data.bonus.avgCheckFact} onChange={(v) => update(["bonus", "avgCheckFact"], v)} />
+        <Field readOnly={readOnly} label="Поріг 1 → 700 грн" value={data.bonus.scN1} onChange={(v) => update(["bonus", "scN1"], v)} />
+        <Field readOnly={readOnly} label="Поріг 2 → 1 500 грн" value={data.bonus.scN2} onChange={(v) => update(["bonus", "scN2"], v)} />
+        <Field readOnly={readOnly} label="Поріг 3 → 2 000 грн" value={data.bonus.scN3} onChange={(v) => update(["bonus", "scN3"], v)} />
+        <div className="hint">Мінімальний середній чек на місяць надає ТМ.</div>
+      </Item>
+      <Item num="3.4" title="Довжина чека" amount={showAmounts ? calc.bonus.checkLen : undefined} screenshotKey="cl" {...shot}>
+        <Field readOnly={readOnly} label="Факт. довжина чека" value={data.bonus.checkLenFact} onChange={(v) => update(["bonus", "checkLenFact"], v)} />
+        <Field readOnly={readOnly} label="Поріг 1 → 700 грн" value={data.bonus.clN1} onChange={(v) => update(["bonus", "clN1"], v)} />
+        <Field readOnly={readOnly} label="Поріг 2 → 1 500 грн" value={data.bonus.clN2} onChange={(v) => update(["bonus", "clN2"], v)} />
+        <Field readOnly={readOnly} label="Поріг 3 → 2 000 грн" value={data.bonus.clN3} onChange={(v) => update(["bonus", "clN3"], v)} />
+        <div className="hint">Мінімальну довжину чека на місяць надає ТМ.</div>
+      </Item>
+      <Item num="3.5" title="Атестація (курси)" amount={showAmounts ? calc.bonus.courses : undefined} screenshotKey="courses" {...shot}>
+        <CheckField readOnly={readOnly} label="≥ 98% середньо-місячних курсів, без перепризначення" checked={data.bonus.coursesOk} onChange={(v) => update(["bonus", "coursesOk"], v)} />
+      </Item>
+      <Item num="3.6" title="Продажі із сайту через НП" amount={showAmounts ? calc.bonus.siteNp : undefined} screenshotKey="np" {...shot}>
+        <Field readOnly={readOnly} label="Оборот продажів через НП" suffix="грн" value={data.bonus.siteNpRevenue} onChange={(v) => update(["bonus", "siteNpRevenue"], v)} />
+        <div className="hint">4% на команду</div>
+      </Item>
+      <Item num="3.7" title="Продаж по БН" amount={showAmounts ? calc.bonus.bn : undefined} screenshotKey="bn" {...shot}>
+        <Field readOnly={readOnly} label="Оборот по БН" suffix="грн" value={data.bonus.bnRevenue} onChange={(v) => update(["bonus", "bnRevenue"], v)} />
+        <div className="hint">4% на команду</div>
+      </Item>
+
+      <BlockHeader n="4" title="Додаткова мотивація за продаж PPI" />
+      <Item num="4.1" title="Продаж PPI" amount={showAmounts ? calc.ppi.bonus : undefined} screenshotKey="ppi" {...shot}>
+        <Field readOnly={readOnly} label="Оборот по категорії PPI" suffix="грн" value={data.ppi.ppiRevenue} onChange={(v) => update(["ppi", "ppiRevenue"], v)} />
+        <CheckField readOnly={readOnly} label="План PPI закрито" checked={data.ppi.planClosed} onChange={(v) => update(["ppi", "planClosed"], v)} />
+        {showAmounts && <div className="hint">{calc.ppi.pct}% від обороту PPI ({data.ppi.planClosed ? "план закрито" : "план не закрито"})</div>}
+      </Item>
+
+      <BlockHeader n="5" title="Рекорд та квартальна премія" />
+      <Item num="5.1" title="Бонус за рекордні показники" amount={showAmounts ? calc.record.bonus : undefined} screenshotKey="record" {...shot}>
+        <Field readOnly={readOnly} label="Оборот ТО за місяць (команда)" suffix="грн" value={data.record.monthlyTo} onChange={(v) => update(["record", "monthlyTo"], v)} />
+        <Field readOnly={readOnly} label="Попередній рекорд ТО" suffix="грн" value={data.record.prevRecord} onChange={(v) => update(["record", "prevRecord"], v)} />
+        {showAmounts && (
+          <div className="hint">
+            Поточний поріг рекорду: {fmt(calc.record.threshold)} (мін. 1 млн, крок +10%). Бонус — 1% від ТО.
+            {calc.record.beaten ? " Рекорд перебито ✔" : ""}
+          </div>
+        )}
+      </Item>
+      {isQuarterEnd && (
+        <Item num="5.2" title="Квартальна премія" amount={showAmounts ? calc.quarterly : undefined} screenshotKey="quarter" {...shot}>
+          <CheckField readOnly={readOnly} label="3/3 місяці план по обороту закрито" checked={data.quarterly.threeOfThree} onChange={(v) => update(["quarterly", "threeOfThree"], v)} />
+          <Field readOnly={readOnly} label="Сума 3 останніх ЗП" suffix="грн" value={data.quarterly.last3SalarySum} onChange={(v) => update(["quarterly", "last3SalarySum"], v)} />
+          <div className="hint">Премія — 10% від суми трьох останніх заробітних плат.</div>
+        </Item>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================
+   СМ · ЗВЕДЕННЯ ЗП
+========================================================= */
+function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
+  const grand = calc.total;
+
+  const baseItems = [
+    { label: `База (${calc.category} · ${PLAN_BRACKETS[calc.bracket]})`, amount: calc.baseRaw },
+    { label: `Коеф. відпрацьованих змін ×${calc.factor.toFixed(2)}`, amount: calc.baseAdjusted - calc.baseRaw },
+  ];
+  const mgrItems = [
+    { label: "Атестація співробітників", amount: calc.mgr.attest },
+    { label: "Стандарти ФМ", amount: calc.mgr.standards },
+    { label: "Коефіцієнт керуючого", amount: calc.mgr.coefBonus },
+  ];
+  const bonusItems = [
+    { label: `Обіг з дзвінків (${calc.bonus.callsPct}%)`, amount: calc.bonus.calls },
+    { label: "Заміна на іншому магазині", amount: calc.bonus.replacement },
+    { label: "Середній чек", amount: calc.bonus.avgCheck },
+    { label: "Довжина чека", amount: calc.bonus.checkLen },
+    { label: "Атестація (курси)", amount: calc.bonus.courses },
+    { label: "Сайт через НП (4%)", amount: calc.bonus.siteNp },
+    { label: "Продаж по БН (4%)", amount: calc.bonus.bn },
+  ];
+
+  return (
+    <div className="summary">
+      <SummaryBlock id="base" title="1 · Основна частина" total={calc.baseAdjusted} items={baseItems} expanded={expandedBlock === "base"} onToggle={onToggle} />
+      <SummaryBlock id="mgr" title="2 · Мотивація керуючого" total={calc.mgr.subtotal} items={mgrItems} expanded={expandedBlock === "mgr"} onToggle={onToggle} />
+      <SummaryBlock id="bonus" title="3 · Бонусна частина" total={calc.bonus.subtotal} items={bonusItems} expanded={expandedBlock === "bonus"} onToggle={onToggle} />
+
+      <div className="summary-row"><span>4 · Продаж PPI ({calc.ppi.pct}%)</span><b>{fmt(calc.ppi.bonus)}</b></div>
+      <div className="summary-row"><span>5 · Рекордний показник{calc.record.beaten ? " ✔" : ""}</span><b>{fmt(calc.record.bonus)}</b></div>
+      {calc.quarterly !== 0 && (
+        <div className="summary-row"><span>5 · Квартальна премія</span><b>{fmt(calc.quarterly)}</b></div>
+      )}
+
+      {editable ? (
+        <>
+          <div className="adj-row">
+            <span>Додатково (ТМ)</span>
+            <input className="adj-comment" placeholder="коментар" value={data.adj.comment} onChange={(e) => onAdjChange({ ...data.adj, comment: e.target.value })} />
+            <input className="adj-amount" type="number" value={data.adj.amount} onFocus={selectOnFocus} onChange={(e) => onAdjChange({ ...data.adj, amount: Number(e.target.value) })} />
+            <span>грн</span>
+          </div>
+          <div className="adj-row">
+            <span>Аванс (вирахувати)</span>
+            <input className="adj-amount" type="number" value={data.adj.advance || 0} onFocus={selectOnFocus} onChange={(e) => onAdjChange({ ...data.adj, advance: Number(e.target.value) })} />
+            <span>грн</span>
+            <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>
+          </div>
+        </>
+      ) : (
+        <>
+          {(data.adj.amount || 0) !== 0 && (
+            <div className="summary-row"><span>Додатково{data.adj.comment ? ` (${data.adj.comment})` : ""}</span><b>{fmt(data.adj.amount)}</b></div>
+          )}
+          {(data.adj.advance || 0) !== 0 && (
+            <div className="summary-row"><span>Аванс (вирахувано)</span><b>-{fmt(data.adj.advance)}</b></div>
+          )}
+        </>
+      )}
+
+      <div className="summary-row grand"><span>Загальна ЗП за {monthLbl}</span><b>{fmt(grand)}</b></div>
+
+      <div className="payment-row">
+        <span>Статус виплати:</span>
+        <span className={`badge ${data.paymentStatus === "paid" ? "badge-ok" : data.paymentStatus === "to_pay" ? "badge-warn" : "badge-off"}`}>
+          {data.paymentStatus === "paid" ? "Виплачено" : data.paymentStatus === "to_pay" ? "До виплати" : "Не підтверджено"}
+        </span>
+        {editable && data.paymentStatus !== "to_pay" && data.paymentStatus !== "paid" && (
+          <button className="btn-secondary small" onClick={() => onSetPaymentStatus("to_pay")}>Позначити «До виплати»</button>
+        )}
+        {editable && data.paymentStatus === "to_pay" && (
+          <button className="btn-secondary small" onClick={() => onSetPaymentStatus("paid")}>Позначити «Виплачено»</button>
+        )}
+        {editable && data.paymentStatus === "paid" && (
+          <button className="btn-secondary small" onClick={() => onSetPaymentStatus("to_pay")}>Повернути «До виплати»</button>
         )}
       </div>
     </div>
@@ -1185,39 +1422,531 @@ function PinGate({ label, onCancel, onSuccess, checkPin, resetPin }) {
 }
 
 /* =========================================================
-   ROLE SELECT & ROOT APP
+   СМ · КОРЕКТИВИ ВІД ТМ (сторона СМ)
 ========================================================= */
-function RoleSelect({ onSelect }) {
+function SmCorrectionsTab({ data, onReply }) {
+  const [reply, setReply] = useState(data.smReplyComment || "");
+  const [saving, setSaving] = useState(false);
+
+  if (!data.tmComment && (!data.correctionDiff || data.correctionDiff.length === 0)) {
+    return <div className="loading">Корективів від ТМ ще немає.</div>;
+  }
+  const submit = async () => { setSaving(true); await onReply(reply); setSaving(false); };
+
   return (
-    <div className="role-select">
-      <div className="role-select-inner fade-in">
-        <span className="role-eyebrow">Облік мотивації</span>
-        <h1>Мотивація ТМ</h1>
-        <p>Оберіть, хто заходить у систему</p>
-        <div className="role-cards">
-          <button className="role-card role-card-manager" onClick={() => onSelect({ role: "manager" })}>
-            <span className="role-card-icon"><Users size={20} /></span>
-            <span className="role-card-text">
-              <span className="role-card-name">{MANAGER_NAME}</span>
-              <span className="role-card-sub">Керівник</span>
-            </span>
-          </button>
-          <div className="role-card-group">
-            {TM_LIST.map((t) => (
-              <button key={t.key} className="role-card" onClick={() => onSelect({ role: "tm", tmKey: t.key })}>
-                <span className="role-card-icon"><ClipboardList size={20} /></span>
-                <span className="role-card-text">
-                  <span className="role-card-name">{t.name}</span>
-                  <span className="role-card-sub">Територіальний менеджер</span>
-                </span>
-              </button>
-            ))}
-          </div>
+    <div className="corrections-panel">
+      <p className="hint">Внесено: {fmtDate(data.correctedAt)}</p>
+      {data.tmComment && <div className="manager-comment">{data.tmComment}</div>}
+      {data.correctionDiff?.length > 0 && (
+        <div className="diff-list">
+          {data.correctionDiff.map((d, i) => (
+            <div className="diff-row" key={i}>
+              <span className="diff-label">{d.label}</span>
+              <span className="diff-old">{String(d.oldV)}</span>
+              <span className="diff-arrow">→</span>
+              <span className="diff-new">{String(d.newV)}</span>
+            </div>
+          ))}
         </div>
-      </div>
+      )}
+      <label className="over-field" style={{ maxWidth: "100%" }}>
+        Ваш коментар ТМ
+        <textarea rows={3} value={reply} onChange={(e) => setReply(e.target.value)} />
+      </label>
+      <button className="btn-primary" onClick={submit} disabled={saving}>{saving ? "Надсилання…" : "Надіслати коментар"}</button>
+      {data.smRepliedAt && <p className="hint">Надіслано: {fmtDate(data.smRepliedAt)}</p>}
     </div>
   );
 }
+
+function smBuildDiff(snapshot, current) {
+  if (!snapshot) return [];
+  const out = [];
+  for (const path of Object.keys(SM_FIELD_LABELS)) {
+    const oldV = _.get(snapshot, path);
+    const newV = _.get(current, path);
+    if (oldV !== newV) out.push({ label: SM_FIELD_LABELS[path], oldV, newV });
+  }
+  return out;
+}
+
+/* =========================================================
+   СМ · КАБІНЕТ (вкладка «Розрахунок ЗП»)
+========================================================= */
+function SmView({ salon, embedded }) {
+  const [ym, setYm] = useState(nowYm());
+  const [data, setData] = useState(emptySmData());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [tab, setTab] = useState("form");
+  const [expandedBlock, setExpandedBlock] = useState(null);
+
+  const qMonths = quarterMonths(ymToQuarter(ym));
+  const isQuarterEnd = ym === qMonths[2];
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setTab("form");
+    loadSmData(salon.key, ym).then((d) => { if (active) { setData(d); setLoading(false); } });
+    return () => { active = false; };
+  }, [salon.key, ym]);
+
+  const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
+  const onUpload = (k, url) => update(["screenshots", k], url);
+  const onRemove = (k) => update(["screenshots", k], null);
+  const toggleBlock = (id) => setExpandedBlock((p) => (p === id ? null : id));
+
+  const calc = useMemo(() => calcSmAll(data, { ym, area: salon.area }), [data, ym, salon.area]);
+
+  const months = useMemo(() => {
+    const arr = []; const d = new Date();
+    for (let i = 0; i < 12; i++) { arr.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`); d.setMonth(d.getMonth() - 1); }
+    return arr;
+  }, []);
+
+  const submit = async () => {
+    setSaving(true);
+    const snap = _.cloneDeep({
+      base: data.base, manager: data.manager, bonus: data.bonus,
+      ppi: data.ppi, record: data.record, quarterly: data.quarterly,
+    });
+    const next = {
+      ...data, status: "submitted", submittedAt: new Date().toISOString(), smSnapshot: snap,
+      tmComment: "", correctionDiff: [], correctedAt: null, smReplyComment: "", smRepliedAt: null,
+      tmApproved: false, tmApprovedAt: null,
+    };
+    await saveSmData(salon.key, ym, next);
+    setData(next);
+    setSaving(false);
+  };
+  const onReply = async (comment) => {
+    const next = { ...data, smReplyComment: comment, smRepliedAt: new Date().toISOString() };
+    await saveSmData(salon.key, ym, next);
+    setData(next);
+  };
+
+  const day = new Date().getDate();
+  const isCurrent = ym === nowYm();
+  const showBanner = isCurrent && data.status === "draft";
+  const hasCorr = !!data.tmComment || (data.correctionDiff && data.correctionDiff.length > 0);
+
+  return (
+    <div className={embedded ? "embedded" : "view"}>
+      {!embedded && <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={() => {}} />}
+      <div className="month-picker">
+        <select value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
+        </select>
+        {data.status === "submitted" && <span className="badge-ok"><Check size={13} /> На розгляді в ТМ</span>}
+        {data.status === "corrected" && <span className="badge-off">ТМ вніс корективи</span>}
+        {data.tmApproved && <span className="badge-warn">Передано керівнику</span>}
+      </div>
+      {showBanner && (
+        <div className={`banner ${day > 10 ? "banner-late" : "banner-warn"}`}>
+          <AlertTriangle size={16} />
+          {day > 10
+            ? "Термін подачі (до 10 числа) минув — заповніть дані якнайшвидше."
+            : `Заповніть дані та скріншоти до 10 числа (сьогодні ${day}-е)`}
+        </div>
+      )}
+
+      <div className="inner-tabs">
+        <button className={tab === "form" ? "active" : ""} onClick={() => setTab("form")}>Форма</button>
+        <button className={tab === "corrections" ? "active" : ""} onClick={() => setTab("corrections")}>
+          Корективи від ТМ{hasCorr && !data.smRepliedAt ? " •" : ""}
+        </button>
+      </div>
+
+      {loading ? <div className="loading">Завантаження…</div> : tab === "form" ? (
+        <>
+          <SmCriteriaForm
+            data={data} update={update} calc={calc} area={salon.area} showAmounts
+            onUpload={onUpload} onRemove={onRemove} onPreview={setPreview} readOnly={false} isQuarterEnd={isQuarterEnd}
+          />
+          <SmSummary data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)} />
+          <div className="save-bar">
+            <button className="btn-primary" onClick={submit} disabled={saving}>
+              {saving ? "Надсилання…" : "Подати ТМ на погодження"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <SmCorrectionsTab data={data} onReply={onReply} />
+      )}
+      {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
+    </div>
+  );
+}
+
+/* =========================================================
+   СМ · ДЕТАЛЬ ДЛЯ ТМ / КЕРІВНИКА (перегляд + корективи)
+========================================================= */
+function SalonDetail({ salon, reviewer, onBack }) {
+  const [ym, setYm] = useState(nowYm());
+  const [data, setData] = useState(emptySmData());
+  const [months, setMonths] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [editMode, setEditMode] = useState(false);
+  const [comment, setComment] = useState("");
+  const [expandedBlock, setExpandedBlock] = useState(null);
+
+  const canEdit = reviewer === "tm"; // корективи вносить ТМ; керівник дивиться
+  const qMonths = quarterMonths(ymToQuarter(ym));
+  const isQuarterEnd = ym === qMonths[2];
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setEditMode(false); setComment(""); setExpandedBlock(null);
+    loadSmData(salon.key, ym).then((d) => { if (active) { setData(d); setLoading(false); } });
+    return () => { active = false; };
+  }, [salon.key, ym]);
+  useEffect(() => { listSmMonths(salon.key).then((m) => setMonths(m.sort().reverse())); }, [salon.key, ym]);
+
+  const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
+  const onUpload = (k, url) => update(["screenshots", k], url);
+  const onRemove = (k) => update(["screenshots", k], null);
+  const toggleBlock = (id) => setExpandedBlock((p) => (p === id ? null : id));
+
+  const calc = useMemo(() => calcSmAll(data, { ym, area: salon.area }), [data, ym, salon.area]);
+
+  const saveAdjOnly = async () => { setSaving(true); await saveSmData(salon.key, ym, data); setSaving(false); };
+  const setPaymentStatus = async (status) => {
+    const next = { ...data, paymentStatus: status, paymentStatusAt: new Date().toISOString() };
+    setData(next);
+    await saveSmData(salon.key, ym, next);
+  };
+  const cancelEdit = async () => {
+    const d = await loadSmData(salon.key, ym);
+    setData(d); setComment(""); setEditMode(false);
+  };
+  const saveCorrections = async () => {
+    setSaving(true);
+    const diff = smBuildDiff(data.smSnapshot, data);
+    const next = { ...data, status: "corrected", correctedAt: new Date().toISOString(), tmComment: comment, correctionDiff: diff };
+    await saveSmData(salon.key, ym, next);
+    setData(next); setEditMode(false); setComment(""); setSaving(false);
+  };
+  const approveToManager = async () => {
+    const next = { ...data, tmApproved: true, tmApprovedAt: new Date().toISOString() };
+    setData(next);
+    await saveSmData(salon.key, ym, next);
+  };
+
+  return (
+    <div className="embedded">
+      <div className="detail-head">
+        <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> До списку салонів</button>
+        <span className="detail-title">{salonLabel(salon)}</span>
+      </div>
+
+      <div className="month-row">
+        <select value={ym} onChange={(e) => setYm(e.target.value)}>
+          {Array.from(new Set([ym, ...months])).sort().reverse().map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
+        </select>
+      </div>
+
+      {loading ? <div className="loading">Завантаження…</div> : (
+        <>
+          <div className="status-line">
+            Статус: {data.status === "submitted" ? "подано на погодження" : data.status === "corrected" ? "внесено корективи" : "салон ще не подав дані"}
+            {data.submittedAt && ` · подано ${fmtDate(data.submittedAt)}`}
+            {data.tmApproved && " · передано керівнику"}
+          </div>
+          {data.smReplyComment && <div className="reply-banner"><b>Коментар салону:</b> {data.smReplyComment}</div>}
+
+          {canEdit && (!editMode ? (
+            <div className="edit-toggle-bar">
+              <button className="btn-secondary" onClick={() => setEditMode(true)}><Pencil size={14} /> Внести корективи</button>
+              {!data.tmApproved && data.status !== "draft" && (
+                <button className="btn-secondary" onClick={approveToManager}><Check size={14} /> Передати керівнику</button>
+              )}
+            </div>
+          ) : (
+            <div className="correction-bar">
+              <label className="over-field" style={{ maxWidth: "100%" }}>
+                Коментар до корективи (побачить салон)
+                <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
+              </label>
+              <div className="correction-actions">
+                <button className="btn-secondary" onClick={cancelEdit}>Скасувати</button>
+                <button className="btn-primary" onClick={saveCorrections} disabled={saving}>{saving ? "Збереження…" : "Зберегти корективи"}</button>
+              </div>
+            </div>
+          ))}
+
+          <SmCriteriaForm
+            data={data} update={update} calc={calc} area={salon.area} showAmounts
+            onUpload={onUpload} onRemove={onRemove} onPreview={setPreview} readOnly={!editMode} isQuarterEnd={isQuarterEnd}
+          />
+          <SmSummary
+            data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock}
+            editable={canEdit} onAdjChange={(a) => setData((p) => ({ ...p, adj: a }))}
+            onSaveAdj={saveAdjOnly} savingAdj={saving} onSetPaymentStatus={setPaymentStatus} monthLbl={monthLabel(ym)}
+          />
+        </>
+      )}
+      {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
+    </div>
+  );
+}
+
+/* =========================================================
+   ТМ · ВКЛАДКА «ЗП САЛОНІВ» (лише свої салони)
+========================================================= */
+function SalonReviewPanel({ tmKey, reviewer }) {
+  const salons = useMemo(() => salonsOfTm(tmKey), [tmKey]);
+  const [ym, setYm] = useState(nowYm());
+  const [rows, setRows] = useState(null);
+  const [openKey, setOpenKey] = useState(null);
+
+  const months = useMemo(() => {
+    const arr = []; const d = new Date();
+    for (let i = 0; i < 12; i++) { arr.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`); d.setMonth(d.getMonth() - 1); }
+    return arr;
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setRows(null);
+    (async () => {
+      const out = {};
+      for (const s of salons) {
+        const d = await loadSmData(s.key, ym);
+        out[s.key] = { data: d, total: calcSmAll(d, { ym, area: s.area }).total };
+      }
+      if (active) setRows(out);
+    })();
+    return () => { active = false; };
+  }, [salons, ym, openKey]);
+
+  if (openKey) {
+    const salon = salonByKey(openKey);
+    return <SalonDetail salon={salon} reviewer={reviewer} onBack={() => setOpenKey(null)} />;
+  }
+
+  return (
+    <div className="embedded">
+      <div className="month-row">
+        <select value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
+        </select>
+      </div>
+      {!rows ? <div className="loading">Завантаження…</div> : (
+        <div className="salon-list">
+          {salons.map((s) => {
+            const r = rows[s.key];
+            const st = r.data.status;
+            return (
+              <button className="salon-row" key={s.key} onClick={() => setOpenKey(s.key)}>
+                <span className="salon-row-main">
+                  <span className="salon-row-name">{salonLabel(s)}</span>
+                  <span className="salon-row-sub">{s.area}</span>
+                </span>
+                <span className={`badge ${st === "submitted" ? "badge-ok" : st === "corrected" ? "badge-off" : "badge-warn"}`}>
+                  {st === "submitted" ? "подано" : st === "corrected" ? "корективи" : "чернетка"}
+                </span>
+                {r.data.tmApproved && <span className="badge badge-warn">керівнику</span>}
+                <b className="salon-row-total">{fmt(r.total)}</b>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================
+   ЗВЕДЕННЯ ЗП (керівник + бухгалтер)
+========================================================= */
+async function tmGrandTotal(tmKey, ym) {
+  const qKey = ymToQuarter(ym);
+  const qMonths = quarterMonths(qKey);
+  const isLast = ym === qMonths[2];
+  const [d, a, g, qb] = await Promise.all([
+    loadData(tmKey, ym), loadAdj(tmKey, ym), loadGrade(tmKey, qKey),
+    isLast ? loadQBonus(tmKey, qKey) : Promise.resolve({ bonus41: 0, bonus42: 0 }),
+  ]);
+  const calc = calcAll(d, g);
+  const total = calc.floored + (isLast ? (qb.bonus41 + qb.bonus42) : 0) + (a.amount || 0) - (a.advance || 0);
+  return { data: d, total, status: d.status, paymentStatus: d.paymentStatus };
+}
+
+function ConsolidationPanel({ role }) {
+  const [ym, setYm] = useState(nowYm());
+  const [rows, setRows] = useState(null);
+  const [reload, setReload] = useState(0);
+
+  const months = useMemo(() => {
+    const arr = []; const d = new Date();
+    for (let i = 0; i < 12; i++) { arr.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`); d.setMonth(d.getMonth() - 1); }
+    return arr;
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setRows(null);
+    (async () => {
+      const tmRows = [];
+      for (const t of TMS) {
+        const r = await tmGrandTotal(t.key, ym);
+        tmRows.push({ kind: "tm", key: t.key, name: t.name, tm: null, ...r });
+      }
+      const smRows = [];
+      for (const s of SALONS) {
+        const d = await loadSmData(s.key, ym);
+        smRows.push({
+          kind: "sm", key: s.key, name: salonLabel(s), tm: s.tm,
+          data: d, total: calcSmAll(d, { ym, area: s.area }).total,
+          status: d.status, paymentStatus: d.paymentStatus, tmApproved: d.tmApproved,
+        });
+      }
+      if (active) setRows([...tmRows, ...smRows]);
+    })();
+    return () => { active = false; };
+  }, [ym, reload]);
+
+  const setPay = async (row, status) => {
+    if (row.kind === "tm") {
+      const d = await loadData(row.key, ym);
+      await saveData(row.key, ym, { ...d, paymentStatus: status, paymentStatusAt: new Date().toISOString() });
+    } else {
+      const d = await loadSmData(row.key, ym);
+      await saveSmData(row.key, ym, { ...d, paymentStatus: status, paymentStatusAt: new Date().toISOString() });
+    }
+    setReload((n) => n + 1);
+  };
+
+  const total = rows ? rows.reduce((s, r) => s + r.total, 0) : 0;
+  const toPay = rows ? rows.filter((r) => r.paymentStatus === "to_pay").length : 0;
+  const paid = rows ? rows.filter((r) => r.paymentStatus === "paid").length : 0;
+
+  const statusLabel = (s) => (s === "submitted" ? "подано" : s === "corrected" ? "корективи" : "чернетка");
+
+  return (
+    <div className="embedded">
+      <div className="month-row">
+        <select value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
+        </select>
+        {rows && <span className="hint">До виплати: {toPay} · Виплачено: {paid}</span>}
+      </div>
+
+      {!rows ? <div className="loading">Завантаження…</div> : (
+        <div className="consol-table">
+          {rows.map((r) => (
+            <div className="consol-row" key={r.kind + r.key}>
+              <span className="consol-name">
+                {r.name}
+                <span className="consol-role">{r.kind === "tm" ? "ТМ" : `Салон · ${tmByKey(r.tm)?.name || ""}`}</span>
+              </span>
+              <span className={`badge ${r.status === "submitted" ? "badge-ok" : r.status === "corrected" ? "badge-off" : "badge-warn"}`}>
+                {statusLabel(r.status)}
+              </span>
+              {r.kind === "sm" && r.tmApproved && <span className="badge badge-warn">керівнику</span>}
+              <b className="consol-total">{fmt(r.total)}</b>
+              <span className={`badge ${r.paymentStatus === "paid" ? "badge-ok" : r.paymentStatus === "to_pay" ? "badge-warn" : "badge-off"}`}>
+                {r.paymentStatus === "paid" ? "виплачено" : r.paymentStatus === "to_pay" ? "до виплати" : "—"}
+              </span>
+              <span className="consol-actions">
+                {role === "manager" && r.paymentStatus !== "to_pay" && r.paymentStatus !== "paid" && (
+                  <button className="btn-secondary small" onClick={() => setPay(r, "to_pay")}>До виплати</button>
+                )}
+                {role === "manager" && r.paymentStatus === "to_pay" && (
+                  <button className="btn-secondary small" onClick={() => setPay(r, "paid")}>Виплачено</button>
+                )}
+                {role === "manager" && r.paymentStatus === "paid" && (
+                  <button className="btn-secondary small" onClick={() => setPay(r, "to_pay")}>Повернути</button>
+                )}
+                {role === "accountant" && r.paymentStatus === "to_pay" && (
+                  <button className="btn-secondary small" onClick={() => setPay(r, "paid")}>Виплачено</button>
+                )}
+                {role === "accountant" && r.paymentStatus === "paid" && (
+                  <button className="btn-secondary small" onClick={() => setPay(r, "to_pay")}>Повернути</button>
+                )}
+              </span>
+            </div>
+          ))}
+          <div className="consol-row consol-total-row">
+            <span className="consol-name">Разом за {monthLabel(ym)}</span>
+            <b className="consol-total">{fmt(total)}</b>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================
+   КАБІНЕТИ (обгортки з навігацією)
+========================================================= */
+function TmCabinet({ tmKey, onExit }) {
+  const tm = tmByKey(tmKey);
+  const [tab, setTab] = useState("salary");
+  return (
+    <div className="view">
+      <TopBar title={`ТМ · ${tm.name}`} onBack={onExit} />
+      <div className="cab-nav">
+        <button className={tab === "salary" ? "active" : ""} onClick={() => setTab("salary")}><Calculator size={14} /> Розрахунок ЗП</button>
+        <button className={tab === "salons" ? "active" : ""} onClick={() => setTab("salons")}><Store size={14} /> ЗП салонів</button>
+      </div>
+      {tab === "salary" && <TmView tmKey={tmKey} tmName={tm.name} embedded />}
+      {tab === "salons" && <SalonReviewPanel tmKey={tmKey} reviewer="tm" />}
+    </div>
+  );
+}
+
+function ManagerCabinet({ onExit }) {
+  const [tab, setTab] = useState("byTm");
+  return (
+    <div className="view">
+      <TopBar title={MANAGER.name} onBack={onExit} />
+      <div className="cab-nav">
+        <button className={tab === "byTm" ? "active" : ""} onClick={() => setTab("byTm")}><Users size={14} /> По ТМ</button>
+        <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
+      </div>
+      {tab === "byTm" && <ManagerView embedded />}
+      {tab === "consol" && <ConsolidationPanel role="manager" />}
+    </div>
+  );
+}
+
+function AccountantCabinet({ onExit }) {
+  return (
+    <div className="view">
+      <TopBar title={ACCOUNTANT.name} onBack={onExit} />
+      <div className="cab-nav"><button className="active"><Wallet size={14} /> Зведення ЗП</button></div>
+      <ConsolidationPanel role="accountant" />
+    </div>
+  );
+}
+
+function SmCabinet({ salonKey, onExit }) {
+  const salon = salonByKey(salonKey);
+  return (
+    <div className="view">
+      <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={onExit} />
+      <div className="cab-nav"><button className="active"><Calculator size={14} /> Розрахунок ЗП</button></div>
+      <SmView salon={salon} embedded />
+    </div>
+  );
+}
+
+function CabinetRouter({ cabinet, onExit }) {
+  switch (cabinet.type) {
+    case "manager": return <ManagerCabinet onExit={onExit} />;
+    case "accountant": return <AccountantCabinet onExit={onExit} />;
+    case "tm": return <TmCabinet tmKey={cabinet.key} onExit={onExit} />;
+    case "sm": return <SmCabinet salonKey={cabinet.key} onExit={onExit} />;
+    default: return null;
+  }
+}
+
+const SUBTITLE = { manager: "Керівник", accountant: "Бухгалтер", tm: "Територіальний менеджер", sm: "Салон майстерності" };
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;450;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -1496,37 +2225,110 @@ const CSS = `
   .btn-primary,.btn-secondary{min-height:44px;}
   .save-bar .btn-primary{width:100%;justify-content:center;}
   .role-card{padding:14px;}
+  .cab-top{grid-template-columns:1fr;}
+  .cab-children{padding-left:12px;}
+  .consol-row{grid-template-columns:1fr auto;row-gap:6px;}
+  .consol-row .consol-total{grid-column:2;}
+  .consol-actions{grid-column:1 / -1;justify-content:flex-start;}
+  .cab-nav{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  .salon-row{flex-wrap:wrap;}
 }
+
+/* ---------- живий фон ---------- */
+.living-bg{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;}
+.living-bg .blob{position:absolute;border-radius:50%;filter:blur(70px);opacity:.5;
+  background:radial-gradient(circle at 50% 50%, rgba(190,138,46,.20), rgba(190,138,46,0) 70%);
+  will-change:transform;}
+.blob-1{width:52vw;height:52vw;top:-14vw;left:-10vw;animation:drift1 34s var(--ease) infinite alternate;}
+.blob-2{width:44vw;height:44vw;bottom:-16vw;right:-12vw;animation:drift2 42s var(--ease) infinite alternate;}
+.blob-3{width:34vw;height:34vw;top:32%;left:44%;opacity:.35;animation:drift3 50s var(--ease) infinite alternate;}
+.blob-4{width:26vw;height:26vw;top:8%;right:16%;opacity:.3;animation:drift1 46s var(--ease) infinite alternate-reverse;}
+@keyframes drift1{from{transform:translate3d(0,0,0) scale(1);}to{transform:translate3d(6vw,8vh,0) scale(1.12);}}
+@keyframes drift2{from{transform:translate3d(0,0,0) scale(1.05);}to{transform:translate3d(-7vw,-6vh,0) scale(.92);}}
+@keyframes drift3{from{transform:translate3d(0,0,0) scale(.95);}to{transform:translate3d(-5vw,7vh,0) scale(1.1);}}
+@media (prefers-reduced-motion:reduce){.living-bg .blob{animation:none;}}
+.role-select,.view,.embedded{position:relative;z-index:1;}
+
+/* ---------- ієрархія кабінетів ---------- */
+.hierarchy-inner{max-width:760px;width:100%;text-align:center;}
+.hierarchy-inner .role-eyebrow{margin-bottom:14px;}
+.hierarchy-inner h1{font-family:'Fraunces',serif;font-size:32px;line-height:1.1;color:var(--on-dark);margin:0 0 8px;font-weight:600;letter-spacing:-.015em;}
+.hierarchy-inner>p{color:var(--on-dark-2);margin:0 0 26px;font-size:13.5px;}
+.cab-top{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
+.cab-branch{margin-top:14px;padding-top:14px;border-top:1px solid var(--line-dark);}
+.cab-children{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:9px;margin-top:9px;padding-left:22px;position:relative;}
+.cab-children::before{content:"";position:absolute;left:9px;top:-6px;bottom:14px;width:1px;background:var(--line-dark);}
+.cab-card{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid transparent;border-radius:var(--radius-md);padding:13px 15px;cursor:pointer;color:var(--ink);text-align:left;box-shadow:var(--sh-2);transition:transform .16s var(--ease),box-shadow .16s var(--ease),border-color .16s var(--ease);}
+.cab-card:hover{transform:translateY(-2px);box-shadow:var(--sh-3);border-color:var(--gold);}
+.cab-card:active{transform:translateY(0);}
+.cab-card-icon{flex-shrink:0;width:38px;height:38px;border-radius:10px;background:linear-gradient(180deg,var(--surface-alt),var(--surface-sink));display:flex;align-items:center;justify-content:center;color:var(--gold);box-shadow:inset 0 0 0 1px rgba(0,0,0,.04);}
+.cab-card-text{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.cab-card-name{font-size:13.5px;font-weight:700;letter-spacing:-.01em;line-height:1.3;}
+.cab-card-sub{font-size:10.5px;color:var(--muted);letter-spacing:.01em;}
+.cab-manager{background:linear-gradient(180deg,#FFFDF6,var(--surface-alt));}
+.cab-manager .cab-card-icon,.cab-acct .cab-card-icon{background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);}
+.cab-tm{background:linear-gradient(180deg,#FFFDF6,var(--surface-alt));}
+
+/* ---------- вхід ---------- */
+.login-fields{display:flex;flex-direction:column;gap:12px;margin:4px 0 2px;text-align:left;}
+.login-field{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--on-dark-2);}
+.login-field input{padding:11px 13px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--ink);font-family:'IBM Plex Mono',monospace;font-size:14px;}
+.login-field input:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(190,138,46,.2);}
+
+/* ---------- навігація кабінету ---------- */
+.cab-nav{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line-dark);}
+.cab-nav button{background:none;border:none;border-bottom:2px solid transparent;padding:11px 15px;font-size:13px;font-weight:600;color:var(--on-dark-2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;margin-bottom:-1px;transition:color .15s var(--ease),border-color .15s var(--ease);}
+.cab-nav button:hover{color:var(--on-dark);}
+.cab-nav button.active{color:var(--gold-bright);border-bottom-color:var(--gold);}
+.embedded{animation:fadeIn .28s ease both;}
+
+/* ---------- детальний перегляд салону ---------- */
+.detail-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+.detail-title{font-family:'Fraunces',serif;font-size:17px;color:var(--on-dark);font-weight:600;}
+
+/* ---------- список салонів ---------- */
+.salon-list{display:flex;flex-direction:column;gap:9px;}
+.salon-row{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:13px 15px;cursor:pointer;text-align:left;box-shadow:var(--sh-1);transition:border-color .15s var(--ease),transform .15s var(--ease);}
+.salon-row:hover{border-color:var(--gold);transform:translateY(-1px);}
+.salon-row-main{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;}
+.salon-row-name{font-size:13.5px;font-weight:600;color:var(--ink);}
+.salon-row-sub{font-size:10.5px;color:var(--muted);}
+.salon-row-total{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);white-space:nowrap;}
+
+/* ---------- зведення ---------- */
+.consol-table{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:8px 16px 14px;box-shadow:var(--sh-2);}
+.consol-row{display:grid;grid-template-columns:1fr auto auto auto auto;gap:10px;align-items:center;padding:11px 4px;border-bottom:1px dashed var(--line-strong);font-size:12.5px;}
+.consol-name{display:flex;flex-direction:column;gap:2px;font-weight:600;color:var(--ink);min-width:0;}
+.consol-role{font-weight:500;font-size:10.5px;color:var(--muted);}
+.consol-total{font-family:'IBM Plex Mono',monospace;color:var(--ink);white-space:nowrap;}
+.consol-actions{display:flex;gap:6px;justify-content:flex-end;}
+.consol-total-row{border-bottom:none;border-top:2px solid var(--ink);margin-top:4px;font-weight:700;}
+.consol-total-row .consol-total{font-size:15px;color:var(--gold);}
 `;
 
 export default function App() {
   const [session, setSession] = useState(null);
-  const [pendingRole, setPendingRole] = useState(null);
-  const [pinsReady, setPinsReady] = useState(false);
+  const [pending, setPending] = useState(null);
+  const [ready, setReady] = useState(false);
 
-  useEffect(() => { ensurePinsSeeded().then(() => setPinsReady(true)); }, []);
-
-  const roleId = (r) => (r.role === "manager" ? "manager" : r.tmKey);
-  const roleLabel = (r) => (r.role === "manager" ? MANAGER_NAME : TM_LIST.find((t) => t.key === r.tmKey)?.name);
+  useEffect(() => { ensureCredentialsSeeded().then(() => setReady(true)); }, []);
 
   return (
     <div className="app-root">
       <style>{CSS}</style>
-      {!pinsReady && <div className="loading" style={{ paddingTop: 120 }}>Завантаження…</div>}
-      {pinsReady && !session && !pendingRole && <RoleSelect onSelect={setPendingRole} />}
-      {pinsReady && pendingRole && !session && (
-        <PinGate
-          label={roleLabel(pendingRole)}
-          onCancel={() => setPendingRole(null)}
-          onSuccess={() => { setSession(pendingRole); setPendingRole(null); }}
-          checkPin={(pin) => verifyPin(roleId(pendingRole), pin)}
-          resetPin={(rc, np) => changePin(roleId(pendingRole), rc, np)}
+      <LivingBackground />
+      {!ready && <div className="loading" style={{ paddingTop: 120 }}>Завантаження…</div>}
+      {ready && !session && !pending && <HierarchyHome onPick={setPending} />}
+      {ready && pending && !session && (
+        <LoginGate
+          title={pending.label}
+          subtitle={SUBTITLE[pending.type]}
+          onCancel={() => setPending(null)}
+          onSuccess={() => { setSession(pending); setPending(null); }}
+          verify={(login, password) => verifyLogin(pending.key, login, password)}
         />
       )}
-      {session?.role === "manager" && <ManagerView onBack={() => setSession(null)} />}
-      {session?.role === "tm" && (
-        <TmView tmKey={session.tmKey} tmName={TM_LIST.find((t) => t.key === session.tmKey)?.name} onBack={() => setSession(null)} />
-      )}
+      {ready && session && <CabinetRouter cabinet={session} onExit={() => setSession(null)} />}
     </div>
   );
 }
