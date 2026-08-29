@@ -24,33 +24,8 @@ import { TM_CONDITIONS, SM_CONDITIONS } from "./conditions.js";
 const TM_LIST = TMS.map((t) => ({ key: t.key, name: t.name }));
 const MANAGER_NAME = MANAGER.name;
 const MONTH_NAMES = ["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"];
+const MONTH_GEN = ["січня","лютого","березня","квітня","травня","червня","липня","серпня","вересня","жовтня","листопада","грудня"];
 const GRADE_MIN = { 1: 60000, 2: 50000, 3: 45000 };
-
-const FIELD_LABELS = {
-  "block1.salesPlanPercent": "1.1 % виконання плану продажів",
-  "block1.lflPercent": "1.2 % LFL",
-  "block1.smPlanPercent": "1.3 % СМ, що виконали план",
-  "block2.callsPlan": "2.1 План додзвонів",
-  "block2.callsFact": "2.1 Факт додзвонів",
-  "block2.callsRevenue": "2.1 Оборот з дзвінків",
-  "block2.callsCostNorm": "2.1 Норма вартості дзвінка",
-  "block2.rentabilityPercent": "2.2 % рентабельності",
-  "block2.pbiObligatory": "2.3 Виконано місячний план (PBI)",
-  "block2.pbiTotalRevenue": "2.3 Загальний оборот",
-  "block2.pbiRevenue": "2.3 Оборот PBI",
-  "block3.staffPercent": "3.1 % укомплектованості штату",
-  "block3.violationsCount": "3.2 Неприпустимі ситуації",
-  "block3.scheduleViolationsCount": "3.3 Порушення графіку",
-  "block3.smViolationsFound": "3.4 Порушень виявлено",
-  "block3.smViolationsUnfixed": "3.4 Порушень не виправлено",
-  "block3.merchViolationsCount": "3.5 Порушення мерчандайзингу",
-  "block3.trainingScore": "3.6 Середній бал навчання",
-  "ez.revenue": "ЕЗ Сума продажів",
-  "ez.profitabilityPercent": "ЕЗ Рентабельність",
-  "ez.och": "ЕЗ Витрати ОЧ",
-  "ez.np": "ЕЗ Витрати НП",
-  "ez.acquiring": "ЕЗ Еквайринг",
-};
 
 const pad = (n) => String(n).padStart(2, "0");
 const nowYm = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
@@ -80,103 +55,155 @@ const recentMonths = (n = 12) => {
 };
 const fmt = (n) => Math.round(n || 0).toLocaleString("uk-UA") + " грн";
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/* ЗП за місяць M подають до 10-го числа наступного місяця (M+1) */
+function deadlineInfo(ym) {
+  const [y, m] = ym.split("-").map(Number); // m — 1-based
+  const due = new Date(y, m, 10, 23, 59, 59); // місяць-індекс m = наступний місяць
+  const now = new Date();
+  const monthStart = new Date(y, m - 1, 1);
+  return {
+    due,
+    dueLabel: `10 ${MONTH_GEN[due.getMonth()]} ${due.getFullYear()}`,
+    overdue: now > due,
+    future: monthStart > now,
+  };
+}
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString("uk-UA") : "—");
 const selectOnFocus = (e) => e.target.select();
 
 function emptyData() {
   return {
-    block1: { salesPlanPercent: 0, lflPercent: 0, smPlanPercent: 0 },
+    block1: {
+      salesPlan: 0, salesFact: 0, salesEz: 0,   // 1.1
+      lflPrev: 0, lflCurrent: 0,                // 1.2
+      smPlanMet: {},                            // 1.3 { [salonKey]: bool }
+    },
     block2: {
-      callsPlan: 0, callsFact: 0, callsRevenue: 0, callsCostNorm: 0,
-      rentabilityPercent: 0,
-      pbiObligatory: false, pbiTotalRevenue: 0, pbiRevenue: 0,
-      stores: [],
+      callsPlanMet: false, callsRevenue: 0, callsFact: 0, callsCostNorm: 0, // 2.1
+      rentabilityByStore: {},                   // 2.2 { [salonKey]: percent }
+      pbiTotalRevenue: 0, pbiRevenue: 0,        // 2.3
+      profitByStore: {},                        // 2.4 { [salonKey]: percent }
     },
     block3: {
-      staffPercent: 0,
-      violationsCount: 0,
-      scheduleViolationsCount: 0,
-      smViolationsFound: 0, smViolationsUnfixed: 0,
-      merchViolationsCount: 0,
-      trainingScore: 0,
+      staffPlan: 0, staffFact: 0,               // 3.1
+      violationsCount: 0,                       // 3.2
+      scheduleViolationsCount: 0,               // 3.3
+      smViolationsFound: 0, smViolationsUnfixed: 0, // 3.4
+      merchViolationsCount: 0,                  // 3.5
+      trainingScore: 0,                         // 3.6
     },
-    ez: { revenue: 0, profitabilityPercent: 0, och: 0, np: 0, acquiring: 0 },
-    screenshots: {},
+    ez: { revenue: 0, profitabilityPercent: 0, och: 0, np: 0, acquiring: 0, taxes: 0 },
+    screenshots: {},          // { [key]: [dataURL, ...] } — до 5 на пункт
+    managerFlags: {},         // { [itemNum]: { flagged: bool, comment: string } }
     submittedAt: null,
-    status: "draft", // draft | submitted | corrected
+    status: "draft",          // draft | submitted | corrected | approved
+    approvedAt: null,
     tmSnapshot: null,
     managerComment: "",
     correctionDiff: [],
     correctedAt: null,
     tmReplyComment: "",
     tmRepliedAt: null,
-    paymentStatus: "none", // none | to_pay | paid
+    paymentStatus: "none",    // none | to_pay | paid
     paymentStatusAt: null,
   };
 }
 
-function buildDiff(snapshot, current) {
-  if (!snapshot) return [];
-  const diffs = [];
-  for (const path of Object.keys(FIELD_LABELS)) {
-    const oldV = _.get(snapshot, path);
-    const newV = _.get(current, path);
-    if (oldV !== newV) diffs.push({ label: FIELD_LABELS[path], oldV, newV });
-  }
-  const oldStores = JSON.stringify((snapshot.block2?.stores || []).map((s) => [s.name, s.profitPercent]));
-  const newStores = JSON.stringify((current.block2?.stores || []).map((s) => [s.name, s.profitPercent]));
-  if (oldStores !== newStores) diffs.push({ label: "2.4 Список магазинів / прибутковість", oldV: "змінено", newV: "змінено" });
-  return diffs;
+/* нормалізація скрінів: раніше зберігали рядок, тепер масив (до 5) */
+function shotList(v) {
+  if (!v) return [];
+  return Array.isArray(v) ? v.slice(0, 5) : [v];
 }
+const makeAddShot = (setData) => (key, url) => setData((prev) => {
+  const cur = shotList(prev.screenshots?.[key]);
+  return _.set(_.cloneDeep(prev), ["screenshots", key], [...cur, url].slice(0, 5));
+});
+const makeRemoveShot = (setData) => (key, i) => setData((prev) => {
+  const cur = shotList(prev.screenshots?.[key]);
+  return _.set(_.cloneDeep(prev), ["screenshots", key], cur.filter((_x, j) => j !== i));
+});
 
 /* =========================================================
-   CALCULATION ENGINE
+   CALCULATION ENGINE (мотивація ТМ)
 ========================================================= */
 function rowOf(v, edges) { return v < edges[0] ? 0 : v < edges[1] ? 1 : v <= edges[2] ? 2 : 3; }
+const GI = (grade) => clamp((grade || 2) - 1, 0, 2);
 
-function calcBlock1(b1, grade) {
-  const gi = grade - 1;
-  const salesTable = [[15000,10000,5000],[20000,15000,10000],[25000,20000,15000],[30000,25000,20000]];
-  const lflTable = [[4000,3000,2000],[10000,8000,6000],[20000,16000,12000],[25000,20000,15000]];
-  const smTable = [[3000,2000,1000],[10000,8000,6000],[16000,14000,12000],[20000,18000,16000]];
-  const sales = salesTable[rowOf(b1.salesPlanPercent, [90,100,110])][gi];
-  const lfl = lflTable[rowOf(b1.lflPercent, [25,35,45])][gi];
-  const sm = smTable[rowOf(b1.smPlanPercent, [50,75,100])][gi];
-  return { sales, lfl, sm, subtotal: sales + lfl + sm };
+const SALES_TABLE = [[15000, 10000, 5000], [20000, 15000, 10000], [25000, 20000, 15000], [30000, 25000, 20000]];
+const LFL_TABLE = [[4000, 3000, 2000], [10000, 8000, 6000], [20000, 16000, 12000], [25000, 20000, 15000]];
+const SM13_TABLE = [[3000, 2000, 1000], [10000, 8000, 6000], [16000, 14000, 12000], [20000, 18000, 16000]];
+
+/* 1.1 — План / Факт / ЕЗ → % = (Факт − ЕЗ) / План */
+function calcSales(b1, grade) {
+  const factNet = (b1.salesFact || 0) - (b1.salesEz || 0);
+  const pct = b1.salesPlan > 0 ? (factNet / b1.salesPlan) * 100 : 0;
+  const bonus = SALES_TABLE[rowOf(pct, [90, 100, 110])][GI(grade)];
+  return { factNet, pct, bonus };
+}
+/* 1.2 — Попередній / Поточний період → % приросту */
+function calcLfl(b1, grade) {
+  const growth = (b1.lflCurrent || 0) - (b1.lflPrev || 0);
+  const pct = b1.lflPrev > 0 ? (growth / b1.lflPrev) * 100 : 0;
+  const bonus = LFL_TABLE[rowOf(pct, [25, 35, 45])][GI(grade)];
+  return { growth, pct, bonus };
+}
+/* 1.3 — галочки по салонах ТМ → % = виконали / всього */
+function calcSm13(b1, grade, salonKeys) {
+  const total = salonKeys.length;
+  const met = salonKeys.filter((k) => b1.smPlanMet?.[k]).length;
+  const pct = total > 0 ? (met / total) * 100 : 0;
+  const bonus = SM13_TABLE[rowOf(pct, [50, 75, 100])][GI(grade)];
+  return { total, met, pct, bonus };
 }
 
+/* 2.1 — галочка «план виконано» + оборот + к-ть + норма вартості дзвінка */
 function calcCalls(b2) {
-  if (!b2.callsFact || b2.callsFact < b2.callsPlan || !b2.callsCostNorm) return 0;
-  const avgCost = b2.callsRevenue / b2.callsFact;
+  if (!b2.callsPlanMet || !b2.callsFact || !b2.callsCostNorm) return { avgCost: 0, ratio: 0, pct: 0, bonus: 0 };
+  const avgCost = (b2.callsRevenue || 0) / b2.callsFact;
   const ratio = (avgCost / b2.callsCostNorm) * 100;
   const pct = ratio < 90 ? 0.5 : ratio <= 110 ? 1 : 1.5;
-  return b2.callsRevenue * (pct / 100);
+  return { avgCost, ratio, pct, bonus: (b2.callsRevenue || 0) * (pct / 100) };
 }
-function calcRentability(pct) { return pct < 25 ? 0 : pct <= 27 ? 5000 : 10000; }
+/* 2.2 — рентабельність по кожному магазину → середнє по території */
+function calcRent(b2, salonKeys) {
+  const total = salonKeys.length;
+  const filled = salonKeys.filter((k) => {
+    const x = b2.rentabilityByStore?.[k];
+    return x !== undefined && x !== "" && x !== null;
+  });
+  const avg = total > 0
+    ? salonKeys.reduce((s, k) => s + (Number(b2.rentabilityByStore?.[k]) || 0), 0) / total
+    : 0;
+  const bonus = avg < 25 ? 0 : avg <= 27 ? 5000 : 10000;
+  return { avg, filled: filled.length, total, bonus };
+}
+/* 2.3 — без умови виконання плану */
 function calcPbi(b2) {
-  if (!b2.pbiObligatory) return { percent: 0, bonus: 0 };
   const total = b2.pbiTotalRevenue || 0;
-  const pbiRev = b2.pbiRevenue || 0;
-  const percent = total > 0 ? (pbiRev / total) * 100 : 0;
+  const percent = total > 0 ? ((b2.pbiRevenue || 0) / total) * 100 : 0;
   const bp = percent < 15 ? 0.2 : percent <= 20 ? 0.5 : 0.7;
   return { percent, bonus: total * (bp / 100) };
 }
-function calcStores(stores) {
-  return (stores || []).reduce((sum, s) => {
-    const p = s.profitPercent;
-    const v = p < 0 ? -2000 : p <= 5 ? 0 : p <= 10 ? 2000 : 5000;
-    return sum + v;
+/* 2.4 — прибутковість по кожному магазину → сума балів */
+function calcStores(b2, salonKeys) {
+  return salonKeys.reduce((sum, k) => {
+    const p = Number(b2.profitByStore?.[k]) || 0;
+    return sum + (p < 0 ? -2000 : p <= 5 ? 0 : p <= 10 ? 2000 : 5000);
   }, 0);
 }
-function calcBlock2(b2) {
-  const calls = calcCalls(b2);
-  const rentability = calcRentability(b2.rentabilityPercent);
-  const pbiCalc = calcPbi(b2);
-  const stores = calcStores(b2.stores);
-  return { calls, rentability, pbi: pbiCalc.bonus, pbiPercent: pbiCalc.percent, stores, subtotal: calls + rentability + pbiCalc.bonus + stores };
-}
 
-function calcStaff(pct) { return pct < 75 ? 0 : pct <= 90 ? 2000 : pct <= 99 ? 4000 : 8000; }
+/* 3.1 — планова / фактична к-ть співробітників → % */
+function calcStaff(b3) {
+  const pct = b3.staffPlan > 0 ? ((b3.staffFact || 0) / b3.staffPlan) * 100 : 0;
+  const bonus = pct < 75 ? 0 : pct <= 90 ? 2000 : pct <= 99 ? 4000 : 8000;
+  return { pct, bonus };
+}
+/* 3.2 — 0 порушень → +1000; ≥1 → штраф −200 за кожне (без +1000) */
+function calcViolations32(count) {
+  const c = count || 0;
+  return c === 0 ? 1000 : Math.max(-1000, -200 * c);
+}
 function calcCapped1000(count) { return clamp(1000 - 200 * (count || 0), -1000, 1000); }
 function calcSmState(smCount, found, unfixed) { return 500 * smCount - 100 * (found || 0) - 200 * (unfixed || 0); }
 function calcTraining(score) {
@@ -185,33 +212,48 @@ function calcTraining(score) {
   if (score < 98) return 1000;
   return 2000;
 }
-function calcBlock3(b3, smCount) {
-  const staff = calcStaff(b3.staffPercent);
-  const violations = calcCapped1000(b3.violationsCount);
+function calcBlock3(b3, salonCount) {
+  const staff = calcStaff(b3).bonus;
+  const violations = calcViolations32(b3.violationsCount);
   const schedule = calcCapped1000(b3.scheduleViolationsCount);
-  const smState = calcSmState(smCount, b3.smViolationsFound, b3.smViolationsUnfixed);
+  const smState = calcSmState(salonCount, b3.smViolationsFound, b3.smViolationsUnfixed);
   const merch = calcCapped1000(b3.merchViolationsCount);
   const training = calcTraining(b3.trainingScore);
   const rawSubtotal = staff + violations + schedule + smState + merch + training;
   return { staff, violations, schedule, smState, merch, training, rawSubtotal, subtotal: Math.min(rawSubtotal, 15000) };
 }
 
+/* ЕЗ — додано «Податки» до відрахувань */
 function calcEz(ez) {
   const netProfit = (ez.revenue || 0) * ((ez.profitabilityPercent || 0) / 100);
-  const ezValue = netProfit - (ez.och || 0) - (ez.np || 0) - (ez.acquiring || 0);
+  const ezValue = netProfit - (ez.och || 0) - (ez.np || 0) - (ez.acquiring || 0) - (ez.taxes || 0);
   return { netProfit, ezValue, bonus: ezValue * 0.10 };
 }
 
-function calcAll(data, grade) {
-  const smCount = data.block2.stores.length;
-  const b1 = calcBlock1(data.block1, grade);
-  const b2 = calcBlock2(data.block2);
-  const b3 = calcBlock3(data.block3, smCount);
+function calcAll(data, grade, tmKey) {
+  const salonKeys = salonsOfTm(tmKey || TMS[0].key).map((s) => s.key);
+  const salonCount = salonKeys.length;
+
+  const sales = calcSales(data.block1, grade);
+  const lfl = calcLfl(data.block1, grade);
+  const sm13 = calcSm13(data.block1, grade, salonKeys);
+  const b1 = { sales: sales.bonus, lfl: lfl.bonus, sm: sm13.bonus, subtotal: sales.bonus + lfl.bonus + sm13.bonus, d: { sales, lfl, sm13 } };
+
+  const calls = calcCalls(data.block2);
+  const rent = calcRent(data.block2, salonKeys);
+  const pbi = calcPbi(data.block2);
+  const stores = calcStores(data.block2, salonKeys);
+  const b2 = { calls: calls.bonus, rentability: rent.bonus, pbi: pbi.bonus, pbiPercent: pbi.percent, stores, subtotal: calls.bonus + rent.bonus + pbi.bonus + stores, d: { calls, rent, pbi } };
+
+  const b3 = calcBlock3(data.block3, salonCount);
+  const staff = calcStaff(data.block3);
+  b3.d = { staff };
+
   const ez = calcEz(data.ez);
   const beforeFloor = b1.subtotal + b2.subtotal + b3.subtotal + ez.bonus;
   const min = GRADE_MIN[grade] || GRADE_MIN[2];
   const floored = Math.max(beforeFloor, min);
-  return { b1, b2, b3, ez, beforeFloor, floored, floorApplied: beforeFloor < min, min };
+  return { b1, b2, b3, ez, beforeFloor, floored, floorApplied: beforeFloor < min, min, salonKeys, salonCount };
 }
 
 /* =========================================================
@@ -325,31 +367,100 @@ function CheckField({ label, checked, onChange, readOnly }) {
     </label>
   );
 }
-function ScreenshotSlot({ value, onUpload, onRemove, onPreview, readOnly }) {
+function PasteShotModal({ startCount, onClose, onAdd }) {
+  const [busy, setBusy] = useState(false);
+  const [count, setCount] = useState(startCount);
   const inputRef = React.useRef(null);
-  if (readOnly) {
-    return value ? (
-      <div className="shot-slot"><div className="shot-thumb" onClick={() => onPreview(value)}><img src={value} alt="скрін" /></div></div>
-    ) : <div className="shot-slot"><div className="shot-empty">немає скріна</div></div>;
-  }
-  return (
-    <div className="shot-slot">
-      {value ? (
-        <div className="shot-thumb" onClick={() => onPreview(value)}>
-          <img src={value} alt="скрін" />
-          <button className="shot-remove" onClick={(e) => { e.stopPropagation(); onRemove(); }}><X size={12} /></button>
+  const full = count >= 5;
+
+  const handleFile = async (file) => {
+    if (!file || !file.type?.startsWith("image/") || count >= 5) return;
+    setBusy(true);
+    try {
+      const url = await resizeImage(file);
+      onAdd(url);
+      setCount((x) => Math.min(5, x + 1));
+    } catch (e) { console.error(e); }
+    setBusy(false);
+  };
+
+  useEffect(() => {
+    const onPaste = (e) => {
+      const items = e.clipboardData?.items || [];
+      for (const it of items) {
+        if (it.type && it.type.startsWith("image/")) {
+          e.preventDefault();
+          handleFile(it.getAsFile());
+          return;
+        }
+      }
+    };
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("paste", onPaste); window.removeEventListener("keydown", onKey); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [count]);
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="paste-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="info-modal-head">
+          <span className="info-modal-title">Додати скрін · {count}/5</span>
+          <button className="modal-close info-modal-close" onClick={onClose}><X size={16} /></button>
         </div>
-      ) : (
-        <button className="shot-add" onClick={() => inputRef.current?.click()}>
+        <button
+          type="button"
+          className="paste-zone"
+          onDrop={(e) => { e.preventDefault(); handleFile(e.dataTransfer.files?.[0]); }}
+          onDragOver={(e) => e.preventDefault()}
+          onClick={() => !full && inputRef.current?.click()}
+        >
+          {busy ? (
+            <span>Обробка…</span>
+          ) : full ? (
+            <span>Максимум — 5 скрінів</span>
+          ) : (
+            <>
+              <Camera size={22} />
+              <b>Вставте скрін з буфера — Ctrl+V (⌘V)</b>
+              <span>або перетягніть сюди / натисніть, щоб вибрати файл</span>
+            </>
+          )}
+        </button>
+        <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }}
+          onChange={(e) => { handleFile(e.target.files?.[0]); e.target.value = ""; }} />
+        <div className="paste-actions">
+          <button className="btn-primary" onClick={onClose}>Готово</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function ScreenshotStack({ shots, onAdd, onRemove, onPreview, readOnly }) {
+  const [adding, setAdding] = useState(false);
+  const list = shotList(shots);
+  return (
+    <div className="shot-stack">
+      {list.map((url, i) => (
+        <div className="shot-thumb" key={i} onClick={() => onPreview(url)}>
+          <img src={url} alt={`скрін ${i + 1}`} />
+          {!readOnly && (
+            <button className="shot-remove" onClick={(e) => { e.stopPropagation(); onRemove(i); }}><X size={12} /></button>
+          )}
+        </div>
+      ))}
+      {!readOnly && list.length < 5 && (
+        <button type="button" className="shot-add" onClick={() => setAdding(true)}>
           <Camera size={14} /><span>скрін</span>
         </button>
       )}
-      <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }}
-        onChange={async (e) => {
-          const file = e.target.files?.[0];
-          if (file) onUpload(await resizeImage(file));
-          e.target.value = "";
-        }} />
+      {readOnly && list.length === 0 && <div className="shot-empty">немає скрінів</div>}
+      {adding && (
+        <PasteShotModal startCount={list.length} onAdd={onAdd} onClose={() => setAdding(false)} />
+      )}
     </div>
   );
 }
@@ -402,29 +513,58 @@ function InfoModal({ title, blocks, onClose }) {
   );
 }
 
-function Item({ num, title, amount, children, screenshotKey, screenshots, onUpload, onRemove, onPreview, readOnly, conditions }) {
+function Item({
+  num, title, amount, children, screenshotKey, screenshots,
+  onAddShot, onRemoveShot, onPreview, readOnly, conditions,
+  flag, managerMode, onFlag, headerNote,
+}) {
   const [showCond, setShowCond] = useState(false);
+  const [editFlag, setEditFlag] = useState(false);
+  const flagged = !!flag?.flagged;
   return (
-    <div className="item">
+    <div className={`item ${flagged ? "item-flagged" : ""}`}>
       <div className="item-head">
         <span className="item-num">{num}</span>
-        <span className="item-title">{title}</span>
+        <span className="item-title">{title}{headerNote ? <span className="item-note"> · {headerNote}</span> : null}</span>
         {amount !== undefined && (
           <span className={`item-amount ${amount < 0 ? "neg" : amount > 0 ? "pos" : ""}`}>{fmt(amount)}</span>
         )}
         {conditions && (
           <button type="button" className="item-cond" onClick={() => setShowCond(true)}>Умови</button>
         )}
+        {managerMode && (
+          <button type="button" className={`item-flagbtn ${flagged ? "on" : ""}`} onClick={() => setEditFlag((v) => !v)}>
+            <Pencil size={12} /> {flagged ? "Корективу внесено" : "Внести корективи"}
+          </button>
+        )}
       </div>
+
+      {managerMode && editFlag && (
+        <div className="item-flag-editor">
+          <textarea
+            rows={2} placeholder="Що виправити в цьому пункті (побачить ТМ)"
+            value={flag?.comment || ""}
+            onChange={(e) => onFlag(num, { flagged: true, comment: e.target.value })}
+          />
+          <div className="item-flag-actions">
+            <button className="btn-secondary small" onClick={() => { onFlag(num, { flagged: false, comment: "" }); setEditFlag(false); }}>Прибрати</button>
+            <button className="btn-secondary small" onClick={() => setEditFlag(false)}>Готово</button>
+          </div>
+        </div>
+      )}
+      {!managerMode && flagged && (
+        <div className="item-flag-note"><b>Керівник просить виправити:</b> {flag.comment || "—"}</div>
+      )}
+
       {showCond && conditions && (
         <InfoModal title={conditions.title} blocks={conditions.blocks} onClose={() => setShowCond(false)} />
       )}
       <div className="item-body">
         <div className="item-fields">{children}</div>
-        <ScreenshotSlot
-          value={screenshots?.[screenshotKey]}
-          onUpload={(url) => onUpload && onUpload(screenshotKey, url)}
-          onRemove={() => onRemove && onRemove(screenshotKey)}
+        <ScreenshotStack
+          shots={screenshots?.[screenshotKey]}
+          onAdd={(url) => onAddShot && onAddShot(screenshotKey, url)}
+          onRemove={(i) => onRemoveShot && onRemoveShot(screenshotKey, i)}
           onPreview={onPreview}
           readOnly={readOnly}
         />
@@ -439,34 +579,6 @@ function BlockHeader({ n, title }) {
     <div className="block-header">
       <span className="block-header-n">Блок {n}</span>
       <span className="block-header-title">{title}</span>
-    </div>
-  );
-}
-function StoresEditor({ stores, update, readOnly }) {
-  if (readOnly) {
-    return (
-      <div className="stores-editor field-full">
-        {stores.length === 0 && <div className="hint">Магазини не додані</div>}
-        {stores.map((s) => (<div className="store-row-view" key={s.id}>{s.name || "Магазин"} — {s.profitPercent}%</div>))}
-      </div>
-    );
-  }
-  const setStores = (next) => update(["block2", "stores"], next);
-  return (
-    <div className="stores-editor field-full">
-      {stores.map((s, i) => (
-        <div className="store-row" key={s.id}>
-          <input className="store-name" placeholder={`Магазин ${i + 1}`} value={s.name}
-            onChange={(e) => setStores(stores.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
-          <input className="store-pct" type="number" value={s.profitPercent} onFocus={selectOnFocus}
-            onChange={(e) => setStores(stores.map((x, j) => (j === i ? { ...x, profitPercent: Number(e.target.value) } : x)))} />
-          <span className="store-pct-suffix">%</span>
-          <button className="store-remove" onClick={() => setStores(stores.filter((_x, j) => j !== i))}><X size={12} /></button>
-        </div>
-      ))}
-      <button className="store-add" onClick={() => setStores([...stores, { id: Date.now() + Math.random(), name: "", profitPercent: 0 }])}>
-        + Додати магазин
-      </button>
     </div>
   );
 }
@@ -492,90 +604,169 @@ function TopBar({ title, onBack }) {
 /* =========================================================
    CRITERIA FORM (shared by TM and Manager views)
 ========================================================= */
-function CriteriaForm({ data, update, grade, showAmounts, onUpload, onRemove, onPreview, readOnly }) {
-  const smCount = data.block2.stores.length;
-  const b1 = showAmounts ? calcBlock1(data.block1, grade) : {};
-  const callsAmt = showAmounts ? calcCalls(data.block2) : undefined;
-  const rentAmt = showAmounts ? calcRentability(data.block2.rentabilityPercent) : undefined;
-  const pbiCalcResult = showAmounts ? calcPbi(data.block2) : { percent: 0, bonus: 0 };
-  const pbiAmt = showAmounts ? pbiCalcResult.bonus : undefined;
-  const storesAmt = showAmounts ? calcStores(data.block2.stores) : undefined;
-  const staffAmt = showAmounts ? calcStaff(data.block3.staffPercent) : undefined;
-  const violAmt = showAmounts ? calcCapped1000(data.block3.violationsCount) : undefined;
-  const schedAmt = showAmounts ? calcCapped1000(data.block3.scheduleViolationsCount) : undefined;
-  const smStateAmt = showAmounts ? calcSmState(smCount, data.block3.smViolationsFound, data.block3.smViolationsUnfixed) : undefined;
-  const merchAmt = showAmounts ? calcCapped1000(data.block3.merchViolationsCount) : undefined;
-  const trainAmt = showAmounts ? calcTraining(data.block3.trainingScore) : undefined;
-  const ez = showAmounts ? calcEz(data.ez) : {};
+function SalonCheckRows({ salons, values, onToggle, readOnly }) {
+  return (
+    <div className="salon-rows field-full">
+      {salons.map((s) => (
+        <label className="salon-check-row" key={s.key}>
+          <input type="checkbox" disabled={readOnly} checked={!!values?.[s.key]}
+            onChange={(e) => onToggle(s.key, e.target.checked)} />
+          <span>{salonLabel(s)}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+function SalonPctRows({ salons, values, onSet, readOnly, suffix = "%" }) {
+  return (
+    <div className="salon-rows field-full">
+      {salons.map((s) => {
+        const v = values?.[s.key];
+        return (
+          <div className="salon-pct-row" key={s.key}>
+            <span className="salon-pct-name">{salonLabel(s)}</span>
+            {readOnly ? (
+              <span className="salon-pct-val">{v ?? 0}{suffix}</span>
+            ) : (
+              <span className="salon-pct-inputwrap">
+                <input type="number" className="salon-pct-input" value={v ?? ""} onFocus={selectOnFocus}
+                  onChange={(e) => onSet(s.key, e.target.value === "" ? "" : Number(e.target.value))} />
+                <span className="salon-pct-suffix">{suffix}</span>
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
-  const shotProps = { screenshots: data.screenshots, onUpload, onRemove, onPreview, readOnly };
+function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, tmKey, managerMode, onFlag }) {
+  const salons = salonsOfTm(tmKey);
+  const calc = calcAll(data, grade, tmKey);
+  const setMap = (block, field, key, val) => update([block, field, key], val);
+  const shot = { screenshots: data.screenshots, onAddShot, onRemoveShot, onPreview, readOnly, managerMode, onFlag };
+  const flg = (num) => data.managerFlags?.[num];
+  const A = (v) => (showAmounts ? v : undefined);
+  const note = `магазинів: ${salons.length}`;
 
   return (
     <div className="criteria-form">
       <BlockHeader n="1" title="Фінансовий блок" />
-      <TmItem num="1.1" title="Виконання плану продажів" amount={b1.sales} screenshotKey="sales" {...shotProps}>
-        <Field readOnly={readOnly} label="% виконання плану" value={data.block1.salesPlanPercent} onChange={(v) => update(["block1", "salesPlanPercent"], v)} suffix="%" />
+
+      <TmItem num="1.1" title="Виконання плану продажів" amount={A(calc.b1.sales)} screenshotKey="sales" flag={flg("1.1")} {...shot}>
+        <Field readOnly={readOnly} label="План продажів" suffix="грн" value={data.block1.salesPlan} onChange={(v) => update(["block1", "salesPlan"], v)} />
+        <Field readOnly={readOnly} label="Факт продажів" suffix="грн" value={data.block1.salesFact} onChange={(v) => update(["block1", "salesFact"], v)} />
+        <Field readOnly={readOnly} label="ЕЗ" suffix="грн" value={data.block1.salesEz} onChange={(v) => update(["block1", "salesEz"], v)} />
+        {showAmounts && (
+          <div className="ez-sub">
+            <span>Факт без ЕЗ: {fmt(calc.b1.d.sales.factNet)}</span>
+            <span>% виконання плану: {calc.b1.d.sales.pct.toFixed(1)}%</span>
+          </div>
+        )}
       </TmItem>
-      <TmItem num="1.2" title="Зростання продажів (LFL)" amount={b1.lfl} screenshotKey="lfl" {...shotProps}>
-        <Field readOnly={readOnly} label="% LFL" value={data.block1.lflPercent} onChange={(v) => update(["block1", "lflPercent"], v)} suffix="%" />
+
+      <TmItem num="1.2" title="Зростання продажів (LFL)" amount={A(calc.b1.lfl)} screenshotKey="lfl" flag={flg("1.2")} {...shot}>
+        <Field readOnly={readOnly} label="Попередній період" suffix="грн" value={data.block1.lflPrev} onChange={(v) => update(["block1", "lflPrev"], v)} />
+        <Field readOnly={readOnly} label="Поточний період" suffix="грн" value={data.block1.lflCurrent} onChange={(v) => update(["block1", "lflCurrent"], v)} />
+        {showAmounts && (
+          <div className="ez-sub">
+            <span>Приріст: {fmt(calc.b1.d.lfl.growth)}</span>
+            <span>% LFL: {calc.b1.d.lfl.pct.toFixed(1)}%</span>
+          </div>
+        )}
       </TmItem>
-      <TmItem num="1.3" title="% СМ, що виконали план на 100+%" amount={b1.sm} screenshotKey="smPlan" {...shotProps}>
-        <Field readOnly={readOnly} label="% магазинів" value={data.block1.smPlanPercent} onChange={(v) => update(["block1", "smPlanPercent"], v)} suffix="%" />
+
+      <TmItem num="1.3" title="% магазинів, що виконали план" amount={A(calc.b1.sm)} screenshotKey="smPlan" headerNote={note} flag={flg("1.3")} {...shot}>
+        <SalonCheckRows salons={salons} values={data.block1.smPlanMet} readOnly={readOnly}
+          onToggle={(k, v) => setMap("block1", "smPlanMet", k, v)} />
+        {showAmounts && (
+          <div className="ez-sub"><span>Виконали {calc.b1.d.sm13.met} з {calc.b1.d.sm13.total} · {calc.b1.d.sm13.pct.toFixed(0)}%</span></div>
+        )}
       </TmItem>
 
       <BlockHeader n="2" title="Фокусні задачі" />
-      <TmItem num="2.1" title="Дзвінки" amount={callsAmt} screenshotKey="calls" {...shotProps}>
-        <Field readOnly={readOnly} label="План додзвонів" value={data.block2.callsPlan} onChange={(v) => update(["block2", "callsPlan"], v)} />
-        <Field readOnly={readOnly} label="Факт додзвонів" value={data.block2.callsFact} onChange={(v) => update(["block2", "callsFact"], v)} />
-        <Field readOnly={readOnly} label="Оборот з дзвінків" value={data.block2.callsRevenue} onChange={(v) => update(["block2", "callsRevenue"], v)} suffix="грн" />
-        <Field readOnly={readOnly} label="Норма вартості дзвінка" value={data.block2.callsCostNorm} onChange={(v) => update(["block2", "callsCostNorm"], v)} suffix="грн" />
+
+      <TmItem num="2.1" title="Дзвінки" amount={A(calc.b2.calls)} screenshotKey="calls" flag={flg("2.1")} {...shot}>
+        <CheckField readOnly={readOnly} label="План по дзвінках виконано" checked={data.block2.callsPlanMet} onChange={(v) => update(["block2", "callsPlanMet"], v)} />
+        <Field readOnly={readOnly} label="Оборот з дзвінків" suffix="грн" value={data.block2.callsRevenue} onChange={(v) => update(["block2", "callsRevenue"], v)} />
+        <Field readOnly={readOnly} label="Кількість додзвонів" value={data.block2.callsFact} onChange={(v) => update(["block2", "callsFact"], v)} />
+        <Field readOnly={readOnly} label="Норма вартості дзвінка" suffix="грн" value={data.block2.callsCostNorm} onChange={(v) => update(["block2", "callsCostNorm"], v)} />
+        {showAmounts && data.block2.callsPlanMet && (
+          <div className="ez-sub">
+            <span>Середня вартість дзвінка: {fmt(calc.b2.d.calls.avgCost)}</span>
+            <span>Показник: {calc.b2.d.calls.ratio.toFixed(0)}% → {calc.b2.d.calls.pct}%</span>
+          </div>
+        )}
       </TmItem>
-      <TmItem num="2.2" title="Рентабельність" amount={rentAmt} screenshotKey="rentability" {...shotProps}>
-        <Field readOnly={readOnly} label="% рентабельності" value={data.block2.rentabilityPercent} onChange={(v) => update(["block2", "rentabilityPercent"], v)} suffix="%" />
+
+      <TmItem num="2.2" title="Рентабельність" amount={A(calc.b2.rentability)} screenshotKey="rentability" headerNote={note} flag={flg("2.2")} {...shot}>
+        <SalonPctRows salons={salons} values={data.block2.rentabilityByStore} readOnly={readOnly}
+          onSet={(k, v) => setMap("block2", "rentabilityByStore", k, v)} />
+        {showAmounts && (
+          <div className="ez-sub"><span>Середня по території: {calc.b2.d.rent.avg.toFixed(1)}% (заповнено {calc.b2.d.rent.filled} з {calc.b2.d.rent.total})</span></div>
+        )}
       </TmItem>
-      <TmItem num="2.3" title="Продажі PBI" amount={pbiAmt} screenshotKey="pbi" {...shotProps}>
-        <CheckField readOnly={readOnly} label="Виконано місячний план" checked={data.block2.pbiObligatory} onChange={(v) => update(["block2", "pbiObligatory"], v)} />
-        <Field readOnly={readOnly} label="Загальний оборот" value={data.block2.pbiTotalRevenue} onChange={(v) => update(["block2", "pbiTotalRevenue"], v)} suffix="грн" />
-        <Field readOnly={readOnly} label="Оборот PBI" value={data.block2.pbiRevenue} onChange={(v) => update(["block2", "pbiRevenue"], v)} suffix="грн" />
-        {showAmounts && <div className="ez-sub"><span>% PBI від обороту: {pbiCalcResult.percent.toFixed(1)}%</span></div>}
+
+      <TmItem num="2.3" title="Продажі PBI" amount={A(calc.b2.pbi)} screenshotKey="pbi" flag={flg("2.3")} {...shot}>
+        <Field readOnly={readOnly} label="Загальний оборот" suffix="грн" value={data.block2.pbiTotalRevenue} onChange={(v) => update(["block2", "pbiTotalRevenue"], v)} />
+        <Field readOnly={readOnly} label="Оборот PBI" suffix="грн" value={data.block2.pbiRevenue} onChange={(v) => update(["block2", "pbiRevenue"], v)} />
+        {showAmounts && <div className="ez-sub"><span>% PBI від обороту: {calc.b2.pbiPercent.toFixed(1)}%</span></div>}
       </TmItem>
-      <TmItem num="2.4" title="Прибутковість магазинів" amount={storesAmt} screenshotKey="stores" {...shotProps}>
-        <StoresEditor readOnly={readOnly} stores={data.block2.stores} update={update} />
+
+      <TmItem num="2.4" title="Прибутковість магазинів" amount={A(calc.b2.stores)} screenshotKey="stores" headerNote={note} flag={flg("2.4")} {...shot}>
+        <SalonPctRows salons={salons} values={data.block2.profitByStore} readOnly={readOnly}
+          onSet={(k, v) => setMap("block2", "profitByStore", k, v)} />
       </TmItem>
 
       <BlockHeader n="3" title="Стандарти" />
-      <TmItem num="3.1" title="Укомплектованість штату" amount={staffAmt} screenshotKey="staff" {...shotProps}>
-        <Field readOnly={readOnly} label="% укомплектованості" value={data.block3.staffPercent} onChange={(v) => update(["block3", "staffPercent"], v)} suffix="%" />
+
+      <TmItem num="3.1" title="Укомплектованість штату" amount={A(calc.b3.staff)} screenshotKey="staff" flag={flg("3.1")} {...shot}>
+        <Field readOnly={readOnly} label="Планова к-ть співробітників" value={data.block3.staffPlan} onChange={(v) => update(["block3", "staffPlan"], v)} />
+        <Field readOnly={readOnly} label="Фактична к-ть співробітників" value={data.block3.staffFact} onChange={(v) => update(["block3", "staffFact"], v)} />
+        {showAmounts && <div className="ez-sub"><span>% укомплектованості: {calc.b3.d.staff.pct.toFixed(1)}%</span></div>}
       </TmItem>
-      <TmItem num="3.2" title="Неприпустимі ситуації" amount={violAmt} screenshotKey="violations" {...shotProps}>
-        <Field readOnly={readOnly} label="Кількість підтверджених" value={data.block3.violationsCount} onChange={(v) => update(["block3", "violationsCount"], v)} />
+
+      <TmItem num="3.2" title="Неприпустимі ситуації" amount={A(calc.b3.violations)} screenshotKey="violations" flag={flg("3.2")} {...shot}>
+        <Field readOnly={readOnly} label="Кількість підтверджених порушень" value={data.block3.violationsCount} onChange={(v) => update(["block3", "violationsCount"], v)} />
+        {showAmounts && (
+          <div className="hint">
+            {(data.block3.violationsCount || 0) === 0
+              ? "Порушень немає → +1 000 грн"
+              : `${data.block3.violationsCount} порушень → штраф ${fmt(calc.b3.violations)} (бонус +1 000 не нараховується)`}
+          </div>
+        )}
       </TmItem>
-      <TmItem num="3.3" title="Дотримання графіків роботи" amount={schedAmt} screenshotKey="schedule" {...shotProps}>
+
+      <TmItem num="3.3" title="Дотримання графіків роботи" amount={A(calc.b3.schedule)} screenshotKey="schedule" flag={flg("3.3")} {...shot}>
         <Field readOnly={readOnly} label="Кількість порушень" value={data.block3.scheduleViolationsCount} onChange={(v) => update(["block3", "scheduleViolationsCount"], v)} />
       </TmItem>
-      <TmItem num="3.4" title="Стандарти внутрішнього стану СМ" amount={smStateAmt} screenshotKey="smState" {...shotProps}>
+
+      <TmItem num="3.4" title="Стандарти внутрішнього стану СМ" amount={A(calc.b3.smState)} screenshotKey="smState" headerNote={note} flag={flg("3.4")} {...shot}>
         <Field readOnly={readOnly} label="Порушень виявлено" value={data.block3.smViolationsFound} onChange={(v) => update(["block3", "smViolationsFound"], v)} />
         <Field readOnly={readOnly} label="Порушень не виправлено" value={data.block3.smViolationsUnfixed} onChange={(v) => update(["block3", "smViolationsUnfixed"], v)} />
-        <div className="hint">Магазинів на території: {smCount} (за списком у п. 2.4)</div>
       </TmItem>
-      <TmItem num="3.5" title="Стандарт мерчандайзингу" amount={merchAmt} screenshotKey="merch" {...shotProps}>
+
+      <TmItem num="3.5" title="Стандарт мерчандайзингу" amount={A(calc.b3.merch)} screenshotKey="merch" flag={flg("3.5")} {...shot}>
         <Field readOnly={readOnly} label="Кількість порушень" value={data.block3.merchViolationsCount} onChange={(v) => update(["block3", "merchViolationsCount"], v)} />
       </TmItem>
-      <TmItem num="3.6" title="Проходження навчання (АКО)" amount={trainAmt} screenshotKey="training" {...shotProps}>
-        <Field readOnly={readOnly} label="Середній бал, %" value={data.block3.trainingScore} onChange={(v) => update(["block3", "trainingScore"], v)} suffix="%" />
+
+      <TmItem num="3.6" title="Проходження навчання (АКО)" amount={A(calc.b3.training)} screenshotKey="training" flag={flg("3.6")} {...shot}>
+        <Field readOnly={readOnly} label="Середній бал, %" suffix="%" value={data.block3.trainingScore} onChange={(v) => update(["block3", "trainingScore"], v)} />
       </TmItem>
 
       <BlockHeader n="ЕЗ" title="Фінальний розрахунок" />
-      <TmItem num="2.5" title="Економічний ефект (ЕЗ)" amount={ez.bonus} screenshotKey="ez" {...shotProps}>
-        <Field readOnly={readOnly} label="Сума продажів (оборот)" value={data.ez.revenue} onChange={(v) => update(["ez", "revenue"], v)} suffix="грн" />
-        <Field readOnly={readOnly} label="Рентабельність" value={data.ez.profitabilityPercent} onChange={(v) => update(["ez", "profitabilityPercent"], v)} suffix="%" />
-        <Field readOnly={readOnly} label="Витрати ОЧ (Оплата частинами)" value={data.ez.och} onChange={(v) => update(["ez", "och"], v)} suffix="грн" />
-        <Field readOnly={readOnly} label="Витрати НП (Нова Пошта)" value={data.ez.np} onChange={(v) => update(["ez", "np"], v)} suffix="грн" />
-        <Field readOnly={readOnly} label="Еквайринг" value={data.ez.acquiring} onChange={(v) => update(["ez", "acquiring"], v)} suffix="грн" />
+      <TmItem num="2.5" title="Економічний ефект (ЕЗ)" amount={A(calc.ez.bonus)} screenshotKey="ez" flag={flg("2.5")} {...shot}>
+        <Field readOnly={readOnly} label="Сума продажів (оборот)" suffix="грн" value={data.ez.revenue} onChange={(v) => update(["ez", "revenue"], v)} />
+        <Field readOnly={readOnly} label="Рентабельність" suffix="%" value={data.ez.profitabilityPercent} onChange={(v) => update(["ez", "profitabilityPercent"], v)} />
+        <Field readOnly={readOnly} label="Витрати ОЧ (Оплата частинами)" suffix="грн" value={data.ez.och} onChange={(v) => update(["ez", "och"], v)} />
+        <Field readOnly={readOnly} label="Витрати НП (Нова Пошта)" suffix="грн" value={data.ez.np} onChange={(v) => update(["ez", "np"], v)} />
+        <Field readOnly={readOnly} label="Еквайринг" suffix="грн" value={data.ez.acquiring} onChange={(v) => update(["ez", "acquiring"], v)} />
+        <Field readOnly={readOnly} label="Податки" suffix="грн" value={data.ez.taxes} onChange={(v) => update(["ez", "taxes"], v)} />
         {showAmounts && (
           <div className="ez-sub">
-            <span>Чистий прибуток: {fmt(ez.netProfit)}</span>
-            <span>ЕЗ: {fmt(ez.ezValue)}</span>
+            <span>Чистий прибуток: {fmt(calc.ez.netProfit)}</span>
+            <span>ЕЗ: {fmt(calc.ez.ezValue)}</span>
           </div>
         )}
       </TmItem>
@@ -607,8 +798,8 @@ function SummaryBlock({ id, title, note, total, items, expanded, onToggle }) {
   );
 }
 
-function SalarySummary({ data, grade, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
-  const calc = useMemo(() => calcAll(data, grade), [data, grade]);
+function SalarySummary({ data, grade, tmKey, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
+  const calc = useMemo(() => calcAll(data, grade, tmKey), [data, grade, tmKey]);
   const advance = adj.advance || 0;
   const grandTotal = calc.floored + (isLastMonthOfQuarter ? (qbonus.bonus41 + qbonus.bonus42) : 0) + (adj.amount || 0) - advance;
 
@@ -706,7 +897,8 @@ function CorrectionsTab({ data, onReply }) {
   const [reply, setReply] = useState(data.tmReplyComment || "");
   const [saving, setSaving] = useState(false);
 
-  if (!data.managerComment && (!data.correctionDiff || data.correctionDiff.length === 0)) {
+  const flags = Object.entries(data.managerFlags || {}).filter(([, f]) => f?.flagged);
+  if (!data.managerComment && flags.length === 0 && (!data.correctionDiff || data.correctionDiff.length === 0)) {
     return <div className="loading">Корективів від керівника ще немає.</div>;
   }
 
@@ -716,6 +908,16 @@ function CorrectionsTab({ data, onReply }) {
     <div className="corrections-panel">
       <p className="hint">Внесено: {fmtDate(data.correctedAt)}</p>
       {data.managerComment && <div className="manager-comment">{data.managerComment}</div>}
+      {flags.length > 0 && (
+        <div className="flag-list">
+          {flags.map(([num, f]) => (
+            <div className="flag-list-row" key={num}>
+              <span className="flag-list-num">{num}</span>
+              <span className="flag-list-comment">{f.comment || "потребує коректив"}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {data.correctionDiff?.length > 0 && (
         <div className="diff-list">
           {data.correctionDiff.map((d, i) => (
@@ -773,9 +975,10 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   }, [tmKey, ym]);
 
   const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
-  const onUpload = (key, url) => update(["screenshots", key], url);
-  const onRemove = (key) => update(["screenshots", key], null);
+  const onAddShot = makeAddShot(setData);
+  const onRemoveShot = makeRemoveShot(setData);
   const toggleBlock = (id) => setExpandedBlock((prev) => (prev === id ? null : id));
+  const persistGrade = async (g) => { setGrade(g); await saveGrade(tmKey, qKey, g); };
 
   const submit = async () => {
     setSaving(true);
@@ -785,6 +988,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
       status: "submitted",
       submittedAt: new Date().toISOString(),
       tmSnapshot: snapshot,
+      managerFlags: {},
       managerComment: "",
       correctionDiff: [],
       correctedAt: null,
@@ -802,14 +1006,12 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
     setData(next);
   };
 
-  const day = new Date().getDate();
-  const isCurrent = ym === nowYm();
-  const showBanner = isCurrent && data.status === "draft";
-  const hasCorrections = !!data.managerComment || (data.correctionDiff && data.correctionDiff.length > 0);
+  const dl = deadlineInfo(ym);
+  const showBanner = !dl.future && (data.status === "draft" || data.status === "corrected");
+  const flagCount = Object.values(data.managerFlags || {}).filter((f) => f?.flagged).length;
+  const hasCorrections = data.status === "corrected" || flagCount > 0 || !!data.managerComment;
 
-  const months = useMemo(() => {
-    return recentMonths(12);
-  }, []);
+  const months = useMemo(() => recentMonths(12), []);
 
   return (
     <div className={embedded ? "embedded" : "view"}>
@@ -818,15 +1020,22 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
         <select value={ym} onChange={(e) => setYm(e.target.value)}>
           {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
         </select>
+        <div className="grade-picker">
+          <span>Грейд ({qKey}):</span>
+          {[1, 2, 3].map((g) => (
+            <button key={g} className={`grade-btn ${grade === g ? "active" : ""}`} onClick={() => persistGrade(g)}>{g}</button>
+          ))}
+        </div>
         {data.status === "submitted" && <span className="badge-ok"><Check size={13} /> На розгляді в керівника</span>}
+        {data.status === "approved" && <span className="badge-ok"><Check size={13} /> Погоджено керівником</span>}
         {data.status === "corrected" && <span className="badge-off">Керівник вніс корективи</span>}
       </div>
       {showBanner && (
-        <div className={`banner ${day > 10 ? "banner-late" : "banner-warn"}`}>
+        <div className={`banner ${dl.overdue ? "banner-late" : "banner-warn"}`}>
           <AlertTriangle size={16} />
-          {day > 10
-            ? "Термін подачі (до 10 числа) минув — заповніть дані якнайшвидше. Подати можна й зараз."
-            : `Заповніть дані та скріншоти до 10 числа (сьогодні ${day}-е)`}
+          {dl.overdue
+            ? `Термін подачі ЗП за ${monthLabel(ym)} минув (був до ${dl.dueLabel}). Подати можна й зараз.`
+            : `Подайте ЗП за ${monthLabel(ym)} до ${dl.dueLabel}.`}
         </div>
       )}
 
@@ -839,14 +1048,15 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
 
       {loading ? <div className="loading">Завантаження…</div> : tab === "form" ? (
         <>
-          <CriteriaForm data={data} update={update} grade={grade} showAmounts onUpload={onUpload} onRemove={onRemove} onPreview={setPreview} readOnly={false} />
+          <CriteriaForm data={data} update={update} grade={grade} tmKey={tmKey} showAmounts
+            onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} />
           <SalarySummary
-            data={data} grade={grade} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
+            data={data} grade={grade} tmKey={tmKey} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
             expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)}
           />
           <div className="save-bar">
             <button className="btn-primary" onClick={submit} disabled={saving}>
-              {saving ? "Надсилання…" : "Подати на погодження"}
+              {saving ? "Надсилання…" : data.status === "corrected" ? "Подати виправлене" : "Подати на погодження"}
             </button>
           </div>
         </>
@@ -875,9 +1085,10 @@ function QuarterPanel({ qKey, onDone }) {
       for (const t of TM_LIST) {
         const grade = await loadGrade(t.key, qKey);
         const monthsData = await Promise.all(qMonths.map((m) => loadData(t.key, m)));
-        const allMet = monthsData.every((d) => (d.block1.salesPlanPercent || 0) >= 100);
-        const avgOver = monthsData.reduce((s, d) => s + Math.max(0, (d.block1.salesPlanPercent || 0) - 100), 0) / 3;
-        const sumFloored = monthsData.reduce((s, d) => s + calcAll(d, grade).floored, 0);
+        const salesPct = (d) => calcSales(d.block1, grade).pct;
+        const allMet = monthsData.every((d) => salesPct(d) >= 100);
+        const avgOver = monthsData.reduce((s, d) => s + Math.max(0, salesPct(d) - 100), 0) / 3;
+        const sumFloored = monthsData.reduce((s, d) => s + calcAll(d, grade, t.key).floored, 0);
         const existing = await loadQBonus(t.key, qKey);
         out[t.key] = { grade, allMet, avgOver: existing.overExecOverride || Math.round(avgOver * 10) / 10, sumFloored };
       }
@@ -956,7 +1167,6 @@ function ManagerView({ onBack, embedded }) {
   const [savingCorr, setSavingCorr] = useState(false);
   const [preview, setPreview] = useState(null);
   const [tab, setTab] = useState("month");
-  const [editMode, setEditMode] = useState(false);
   const [correctionComment, setCorrectionComment] = useState("");
   const [expandedBlock, setExpandedBlock] = useState(null);
   const [chartData, setChartData] = useState([]);
@@ -969,7 +1179,6 @@ function ManagerView({ onBack, embedded }) {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    setEditMode(false);
     setCorrectionComment("");
     setExpandedBlock(null);
     Promise.all([
@@ -996,7 +1205,7 @@ function ManagerView({ onBack, embedded }) {
         const points = [];
         for (const m of ms) {
           const [d, g] = await Promise.all([loadData(t.key, m), loadGrade(t.key, ymToQuarter(m))]);
-          points.push({ month: m, total: Math.round(calcAll(d, g).floored) });
+          points.push({ month: m, total: Math.round(calcAll(d, g, t.key).floored) });
         }
         results[t.key] = points;
       }
@@ -1011,11 +1220,10 @@ function ManagerView({ onBack, embedded }) {
     return () => { active = false; };
   }, [tab]);
 
-  const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
-  const onUpload = (key, url) => update(["screenshots", key], url);
-  const onRemove = (key) => update(["screenshots", key], null);
   const persistGrade = async (g) => { setGrade(g); await saveGrade(tmKey, qKey, g); };
   const toggleBlock = (id) => setExpandedBlock((prev) => (prev === id ? null : id));
+  const onFlag = (num, val) => setData((prev) => _.set(_.cloneDeep(prev), ["managerFlags", num], val));
+  const flagCount = Object.values(data.managerFlags || {}).filter((f) => f?.flagged).length;
 
   const saveAdjOnly = async () => { setSavingAdj(true); await saveAdj(tmKey, ym, adj); setSavingAdj(false); };
   const setPaymentStatus = async (status) => {
@@ -1024,21 +1232,19 @@ function ManagerView({ onBack, embedded }) {
     await saveData(tmKey, ym, next);
   };
 
-  const startEdit = () => setEditMode(true);
-  const cancelEdit = async () => {
-    const d = await loadData(tmKey, ym);
-    setData(d);
-    setCorrectionComment("");
-    setEditMode(false);
-  };
-  const saveCorrections = async () => {
+  const sendBack = async () => {
     setSavingCorr(true);
-    const diff = buildDiff(data.tmSnapshot, data);
-    const next = { ...data, status: "corrected", correctedAt: new Date().toISOString(), managerComment: correctionComment, correctionDiff: diff };
+    const next = { ...data, status: "corrected", correctedAt: new Date().toISOString(), managerComment: correctionComment };
     await saveData(tmKey, ym, next);
     setData(next);
-    setEditMode(false);
     setCorrectionComment("");
+    setSavingCorr(false);
+  };
+  const approve = async () => {
+    setSavingCorr(true);
+    const next = { ...data, status: "approved", approvedAt: new Date().toISOString(), managerFlags: {}, managerComment: "" };
+    await saveData(tmKey, ym, next);
+    setData(next);
     setSavingCorr(false);
   };
 
@@ -1073,36 +1279,47 @@ function ManagerView({ onBack, embedded }) {
           {loading ? <div className="loading">Завантаження…</div> : (
             <>
               <div className="status-line">
-                Статус: {data.status === "submitted" ? "подано на погодження" : data.status === "corrected" ? "внесено корективи" : "ТМ ще не подав дані за цей місяць"}
+                Статус: {
+                  data.status === "submitted" ? "подано на погодження"
+                  : data.status === "approved" ? "погоджено керівником"
+                  : data.status === "corrected" ? "відправлено ТМ на доопрацювання"
+                  : "ТМ ще не подав дані за цей місяць"
+                }
                 {data.submittedAt && ` · подано ${fmtDate(data.submittedAt)}`}
               </div>
               {data.tmReplyComment && (
                 <div className="reply-banner"><b>Коментар ТМ:</b> {data.tmReplyComment}</div>
               )}
 
-              {!editMode ? (
-                <div className="edit-toggle-bar">
-                  <button className="btn-secondary" onClick={startEdit}><Pencil size={14} /> Внести корективи</button>
-                </div>
-              ) : (
+              {data.status !== "draft" && (
                 <div className="correction-bar">
+                  <p className="hint">
+                    Тисніть «Внести корективи» біля потрібних пунктів — вони підуть ТМ на доопрацювання.
+                    {flagCount > 0 ? ` Позначено пунктів: ${flagCount}.` : ""}
+                  </p>
                   <label className="over-field" style={{ maxWidth: "100%" }}>
-                    Коментар до корективи (побачить ТМ)
+                    Загальний коментар ТМ (необовʼязково)
                     <textarea rows={2} value={correctionComment} onChange={(e) => setCorrectionComment(e.target.value)} />
                   </label>
                   <div className="correction-actions">
-                    <button className="btn-secondary" onClick={cancelEdit}>Скасувати</button>
-                    <button className="btn-primary" onClick={saveCorrections} disabled={savingCorr}>
-                      {savingCorr ? "Збереження…" : "Зберегти корективи"}
+                    <button className="btn-secondary" onClick={sendBack} disabled={savingCorr || (flagCount === 0 && !correctionComment)}>
+                      {savingCorr ? "…" : "Надіслати ТМ на доопрацювання"}
+                    </button>
+                    <button className="btn-primary" onClick={approve} disabled={savingCorr}>
+                      {savingCorr ? "…" : "Погодити"}
                     </button>
                   </div>
                 </div>
               )}
 
-              <CriteriaForm data={data} update={update} grade={grade} showAmounts onUpload={onUpload} onRemove={onRemove} onPreview={setPreview} readOnly={!editMode} />
+              <CriteriaForm
+                data={data} grade={grade} tmKey={tmKey} showAmounts readOnly
+                managerMode={data.status !== "draft"} onFlag={onFlag}
+                onPreview={setPreview}
+              />
 
               <SalarySummary
-                data={data} grade={grade} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
+                data={data} grade={grade} tmKey={tmKey} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
                 expandedBlock={expandedBlock} onToggle={toggleBlock} editable
                 onAdjChange={setAdj} onSaveAdj={saveAdjOnly} savingAdj={savingAdj}
                 onSetPaymentStatus={setPaymentStatus} monthLbl={monthLabel(ym)}
@@ -1330,8 +1547,8 @@ function SelectField({ label, value, onChange, options, readOnly }) {
 /* =========================================================
    СМ · ФОРМА КРИТЕРІЇВ
 ========================================================= */
-function SmCriteriaForm({ data, update, calc, area, showAmounts, onUpload, onRemove, onPreview, readOnly, isQuarterEnd }) {
-  const shot = { screenshots: data.screenshots, onUpload, onRemove, onPreview, readOnly };
+function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, isQuarterEnd }) {
+  const shot = { screenshots: data.screenshots, onAddShot, onRemoveShot, onPreview, readOnly };
   const catOptions = [
     { value: "", label: `Авто (${categoryOf(data.base.avg3To)})` },
     ...SM_CATEGORIES.map((c) => ({ value: c.key, label: `${c.key} · ${c.note}` })),
@@ -1600,8 +1817,8 @@ function SmView({ salon, embedded }) {
   }, [salon.key, ym]);
 
   const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
-  const onUpload = (k, url) => update(["screenshots", k], url);
-  const onRemove = (k) => update(["screenshots", k], null);
+  const onAddShot = makeAddShot(setData);
+  const onRemoveShot = makeRemoveShot(setData);
   const toggleBlock = (id) => setExpandedBlock((p) => (p === id ? null : id));
 
   const calc = useMemo(() => calcSmAll(data, { ym, area: salon.area }), [data, ym, salon.area]);
@@ -1667,7 +1884,7 @@ function SmView({ salon, embedded }) {
         <>
           <SmCriteriaForm
             data={data} update={update} calc={calc} area={salon.area} showAmounts
-            onUpload={onUpload} onRemove={onRemove} onPreview={setPreview} readOnly={false} isQuarterEnd={isQuarterEnd}
+            onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} isQuarterEnd={isQuarterEnd}
           />
           <SmSummary data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)} />
           <div className="save-bar">
@@ -1711,8 +1928,8 @@ function SalonDetail({ salon, reviewer, onBack }) {
   useEffect(() => { listSmMonths(salon.key).then((m) => setMonths(m.sort().reverse())); }, [salon.key, ym]);
 
   const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
-  const onUpload = (k, url) => update(["screenshots", k], url);
-  const onRemove = (k) => update(["screenshots", k], null);
+  const onAddShot = makeAddShot(setData);
+  const onRemoveShot = makeRemoveShot(setData);
   const toggleBlock = (id) => setExpandedBlock((p) => (p === id ? null : id));
 
   const calc = useMemo(() => calcSmAll(data, { ym, area: salon.area }), [data, ym, salon.area]);
@@ -1784,7 +2001,7 @@ function SalonDetail({ salon, reviewer, onBack }) {
 
           <SmCriteriaForm
             data={data} update={update} calc={calc} area={salon.area} showAmounts
-            onUpload={onUpload} onRemove={onRemove} onPreview={setPreview} readOnly={!editMode} isQuarterEnd={isQuarterEnd}
+            onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={!editMode} isQuarterEnd={isQuarterEnd}
           />
           <SmSummary
             data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock}
@@ -1873,7 +2090,7 @@ async function tmGrandTotal(tmKey, ym) {
     loadData(tmKey, ym), loadAdj(tmKey, ym), loadGrade(tmKey, qKey),
     isLast ? loadQBonus(tmKey, qKey) : Promise.resolve({ bonus41: 0, bonus42: 0 }),
   ]);
-  const calc = calcAll(d, g);
+  const calc = calcAll(d, g, tmKey);
   const total = calc.floored + (isLast ? (qb.bonus41 + qb.bonus42) : 0) + (a.amount || 0) - (a.advance || 0);
   return { data: d, total, status: d.status, paymentStatus: d.paymentStatus };
 }
@@ -2187,7 +2404,7 @@ const CSS = `
 .check-dot.on{background:var(--positive);box-shadow:0 0 0 3px rgba(60,107,73,.18);}
 .hint{font-size:11px;color:var(--muted);width:100%;line-height:1.45;}
 
-.shot-slot{flex-shrink:0;}
+.shot-stack{flex-shrink:0;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start;max-width:150px;}
 .shot-add{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;width:68px;height:68px;border:1.5px dashed var(--line-strong);border-radius:var(--radius-md);background:var(--surface-alt);color:var(--muted);cursor:pointer;font-size:10px;transition:all .15s var(--ease);}
 .shot-add:hover{border-color:var(--gold);color:var(--gold);background:rgba(190,138,46,.06);}
 .shot-empty{width:68px;height:68px;border:1.5px dashed var(--line);border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--faint);text-align:center;padding:4px;}
@@ -2196,16 +2413,43 @@ const CSS = `
 .shot-thumb img{width:100%;height:100%;object-fit:cover;}
 .shot-remove{position:absolute;top:3px;right:3px;background:rgba(0,0,0,.62);border:none;border-radius:50%;width:19px;height:19px;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px);}
 
-.stores-editor{display:flex;flex-direction:column;gap:9px;}
-.store-row{display:flex;align-items:center;gap:9px;}
-.store-row-view{font-size:13px;padding:5px 0;color:var(--ink-soft);border-bottom:1px dashed var(--line);}
-.store-name{flex:1;padding:8px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;font-size:13px;font-family:inherit;}
-.store-pct{width:74px;padding:8px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;font-family:'IBM Plex Mono',monospace;font-size:13px;}
-.store-pct-suffix{font-size:12px;color:var(--muted);}
-.store-remove{background:none;border:none;color:var(--negative);cursor:pointer;display:flex;padding:4px;border-radius:6px;}
-.store-remove:hover{background:rgba(160,58,42,.1);}
-.store-add{align-self:flex-start;background:var(--surface-alt);border:1px dashed var(--line-strong);border-radius:var(--radius-sm);padding:8px 14px;font-size:12px;font-weight:500;color:var(--ink-soft);cursor:pointer;transition:all .15s var(--ease);}
-.store-add:hover{border-color:var(--gold);color:var(--gold);}
+/* ---------- вставка скріна (paste modal) ---------- */
+.paste-modal{position:relative;background:var(--surface);border-radius:var(--radius);max-width:440px;width:100%;box-shadow:var(--sh-3);overflow:hidden;animation:fadeIn .2s ease both;}
+.paste-zone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;margin:18px;padding:32px 20px;border:2px dashed var(--line-strong);border-radius:var(--radius-md);background:var(--surface-alt);color:var(--muted);text-align:center;cursor:pointer;font-family:inherit;transition:border-color .15s var(--ease),background .15s var(--ease);}
+.paste-zone:hover,.paste-zone:focus-visible{border-color:var(--gold);background:rgba(190,138,46,.06);}
+.paste-zone b{color:var(--ink);font-size:13px;font-weight:600;}
+.paste-zone span{font-size:11.5px;}
+.paste-actions{display:flex;justify-content:flex-end;padding:0 18px 18px;}
+
+/* ---------- рядки по магазинах ---------- */
+.salon-rows{display:flex;flex-direction:column;gap:2px;}
+.salon-check-row{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink);padding:7px 0;border-bottom:1px dashed var(--line);cursor:pointer;}
+.salon-check-row:last-child{border-bottom:none;}
+.salon-check-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--gold);cursor:pointer;flex-shrink:0;}
+.salon-pct-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px dashed var(--line);}
+.salon-pct-row:last-child{border-bottom:none;}
+.salon-pct-name{flex:1;font-size:12.5px;color:var(--ink-soft);min-width:0;}
+.salon-pct-inputwrap{display:flex;align-items:center;gap:5px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;padding:6px 10px;}
+.salon-pct-inputwrap:focus-within{border-color:var(--gold);box-shadow:0 0 0 3px rgba(190,138,46,.16);}
+.salon-pct-input{width:60px;border:none;background:none;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);outline:none;text-align:right;}
+.salon-pct-suffix{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.salon-pct-val{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink-soft);}
+
+/* ---------- корективи по пунктах ---------- */
+.item-note{font-weight:500;font-size:11px;color:var(--muted);}
+.item-flagbtn{flex-shrink:0;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;color:var(--ink-soft);background:var(--surface-alt);border:1px solid var(--line-strong);border-radius:999px;padding:4px 10px;cursor:pointer;transition:all .14s var(--ease);}
+.item-flagbtn:hover{border-color:var(--gold);color:var(--gold);}
+.item-flagbtn.on{background:rgba(160,58,42,.12);border-color:rgba(160,58,42,.35);color:var(--negative);}
+.item-flagged{border-color:rgba(160,58,42,.5);box-shadow:0 0 0 3px rgba(160,58,42,.1);}
+.item-flag-editor{margin-bottom:12px;}
+.item-flag-editor textarea{width:100%;padding:9px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:12.5px;resize:vertical;background:#fff;}
+.item-flag-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}
+.item-flag-note{background:rgba(160,58,42,.08);border-left:3px solid var(--negative);border-radius:var(--radius-sm);padding:9px 12px;font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.45;}
+.item-flag-note b{color:var(--negative);}
+.flag-list{display:flex;flex-direction:column;gap:7px;margin-bottom:16px;}
+.flag-list-row{display:flex;gap:10px;background:rgba(160,58,42,.06);border:1px solid rgba(160,58,42,.18);border-radius:var(--radius-sm);padding:9px 12px;}
+.flag-list-num{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--negative);flex-shrink:0;}
+.flag-list-comment{font-size:12.5px;color:var(--ink-soft);line-height:1.4;}
 
 .ez-sub{display:flex;flex-wrap:wrap;gap:8px 18px;width:100%;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);border-top:1px dashed var(--line-strong);padding-top:10px;margin-top:6px;}
 
@@ -2259,7 +2503,10 @@ const CSS = `
 .edit-toggle-bar{display:flex;justify-content:flex-end;margin-bottom:14px;}
 .correction-bar{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin-bottom:16px;box-shadow:var(--sh-2);}
 .correction-bar textarea{width:100%;padding:9px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:13px;resize:vertical;background:#fff;}
-.correction-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}
+.correction-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;flex-wrap:wrap;}
+.correction-bar .btn-secondary{color:var(--ink-soft);background:var(--surface-alt);border-color:var(--line-strong);}
+.correction-bar .btn-secondary:hover:not(:disabled){color:var(--gold);border-color:var(--gold);background:rgba(190,138,46,.08);}
+.correction-bar .btn-secondary:disabled{opacity:.5;}
 
 /* ---------- salary summary ---------- */
 .summary{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:8px 22px 22px;margin-top:24px;box-shadow:var(--sh-2);}
