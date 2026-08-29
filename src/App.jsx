@@ -593,11 +593,14 @@ function ImageModal({ src, onClose }) {
     </div>
   );
 }
-function TopBar({ title, onBack }) {
+function TopBar({ title, onBack, onLogout }) {
   return (
     <div className="topbar">
       <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> Назад</button>
       <span className="topbar-title">{title}</span>
+      {onLogout && (
+        <button className="topbar-logout" onClick={onLogout}>Вийти</button>
+      )}
     </div>
   );
 }
@@ -757,7 +760,7 @@ function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveSho
       </TmItem>
 
       <BlockHeader n="ЕЗ" title="Фінальний розрахунок" />
-      <TmItem num="2.5" title="Економічний ефект (ЕЗ)" amount={A(calc.ez.bonus)} screenshotKey="ez" flag={flg("2.5")} {...shot}>
+      <TmItem num="2.5" title="Енергозабезпечення (ЕЗ)" amount={A(calc.ez.bonus)} screenshotKey="ez" flag={flg("2.5")} {...shot}>
         <Field readOnly={readOnly} label="Сума продажів (оборот)" suffix="грн" value={data.ez.revenue} onChange={(v) => update(["ez", "revenue"], v)} />
         <Field readOnly={readOnly} label="Рентабельність" suffix="%" value={data.ez.profitabilityPercent} onChange={(v) => update(["ez", "profitabilityPercent"], v)} />
         <Field readOnly={readOnly} label="Витрати ОЧ (Оплата частинами)" suffix="грн" value={data.ez.och} onChange={(v) => update(["ez", "och"], v)} />
@@ -834,7 +837,7 @@ function SalarySummary({ data, grade, tmKey, adj, qbonus, isLastMonthOfQuarter, 
       <SummaryBlock id="b1" title="Блок 1 (Фінансовий)" total={calc.b1.subtotal} items={b1Items} expanded={expandedBlock === "b1"} onToggle={onToggle} />
       <SummaryBlock id="b2" title="Блок 2 (Фокусні задачі)" total={calc.b2.subtotal} items={b2Items} expanded={expandedBlock === "b2"} onToggle={onToggle} />
       <SummaryBlock id="b3" title="Блок 3 (Стандарти)" note={calc.b3.rawSubtotal > 15000 ? "обмежено стелею 15 000" : null} total={calc.b3.subtotal} items={b3Items} expanded={expandedBlock === "b3"} onToggle={onToggle} />
-      <SummaryBlock id="ez" title="ЕЗ (економічний ефект)" total={calc.ez.bonus} items={ezItems} expanded={expandedBlock === "ez"} onToggle={onToggle} />
+      <SummaryBlock id="ez" title="ЕЗ (енергозабезпечення)" total={calc.ez.bonus} items={ezItems} expanded={expandedBlock === "ez"} onToggle={onToggle} />
 
       <div className="summary-row total"><span>Разом до застосування мінімуму</span><b>{fmt(calc.beforeFloor)}</b></div>
       {calc.floorApplied && (
@@ -1405,7 +1408,7 @@ function useMonthStats() {
 
 const shortAddr = (addr) => addr.replace(/^(вул\.|пл\.|просп\.)\s+/, "");
 
-function HierarchyHome({ onPick }) {
+function HierarchyHome({ onPick, remembered, onLogout }) {
   const stats = useMonthStats();
   return (
     <div className="role-select deck-screen">
@@ -1413,6 +1416,16 @@ function HierarchyHome({ onPick }) {
         <span className="role-eyebrow">Dnipro-M</span>
         <h1>Ваш робочий простір</h1>
         <p>Оберіть кабінет — вхід за логіном і паролем</p>
+
+        {remembered && (
+          <div className="resume-bar">
+            <span>Вхід збережено: <b>{remembered.label}</b></span>
+            <span className="resume-actions">
+              <button className="btn-primary small" onClick={() => onPick(remembered)}>Продовжити</button>
+              <button className="btn-secondary small" onClick={onLogout}>Вийти</button>
+            </span>
+          </div>
+        )}
 
         <div className="deck-grid">
           <button className="deck-tile deck-lead" onClick={() => onPick({ type: "manager", key: "manager", label: MANAGER.name })}>
@@ -2329,13 +2342,13 @@ function AdminPanel() {
 /* =========================================================
    КАБІНЕТИ (обгортки з навігацією)
 ========================================================= */
-function TmCabinet({ tmKey, onExit }) {
+function TmCabinet({ tmKey, onExit, onLogout }) {
   const tm = tmByKey(tmKey);
   const [tab, setTab] = useState("salary");
   const isAdmin = tmKey === ADMIN_KEY;
   return (
     <div className="view">
-      <TopBar title={`ТМ · ${tm.name}`} onBack={onExit} />
+      <TopBar title={`ТМ · ${tm.name}`} onBack={onExit} onLogout={onLogout} />
       <div className="cab-nav">
         <button className={tab === "salary" ? "active" : ""} onClick={() => setTab("salary")}><Calculator size={14} /> Розрахунок ЗП</button>
         <button className={tab === "salons" ? "active" : ""} onClick={() => setTab("salons")}><Store size={14} /> ЗП салонів</button>
@@ -2350,11 +2363,11 @@ function TmCabinet({ tmKey, onExit }) {
   );
 }
 
-function ManagerCabinet({ onExit }) {
+function ManagerCabinet({ onExit, onLogout }) {
   const [tab, setTab] = useState("byTm");
   return (
     <div className="view">
-      <TopBar title={MANAGER.name} onBack={onExit} />
+      <TopBar title={MANAGER.name} onBack={onExit} onLogout={onLogout} />
       <div className="cab-nav">
         <button className={tab === "byTm" ? "active" : ""} onClick={() => setTab("byTm")}><Users size={14} /> По ТМ</button>
         <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
@@ -2365,32 +2378,32 @@ function ManagerCabinet({ onExit }) {
   );
 }
 
-function AccountantCabinet({ onExit }) {
+function AccountantCabinet({ onExit, onLogout }) {
   return (
     <div className="view">
-      <TopBar title={ACCOUNTANT.name} onBack={onExit} />
+      <TopBar title={ACCOUNTANT.name} onBack={onExit} onLogout={onLogout} />
       <div className="cab-nav"><button className="active"><Wallet size={14} /> Зведення ЗП</button></div>
       <ConsolidationPanel role="accountant" />
     </div>
   );
 }
 
-function SmCabinet({ salonKey, onExit }) {
+function SmCabinet({ salonKey, onExit, onLogout }) {
   const salon = salonByKey(salonKey);
   return (
     <div className="view">
-      <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={onExit} />
+      <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={onExit} onLogout={onLogout} />
       <div className="cab-nav"><button className="active"><Calculator size={14} /> Розрахунок ЗП</button></div>
       <SmView salon={salon} embedded />
     </div>
   );
 }
 
-function OfficeCabinet({ cabKey, onExit }) {
+function OfficeCabinet({ cabKey, onExit, onLogout }) {
   const person = OFFICE.find((o) => o.key === cabKey);
   return (
     <div className="view">
-      <TopBar title={person?.name || "Офіс"} onBack={onExit} />
+      <TopBar title={person?.name || "Офіс"} onBack={onExit} onLogout={onLogout} />
       <div className="cab-nav"><button className="active"><Clock size={14} /> Кабінет</button></div>
       <div className="office-stub">
         <span className="office-stub-ic"><Clock size={26} /></span>
@@ -2401,13 +2414,13 @@ function OfficeCabinet({ cabKey, onExit }) {
   );
 }
 
-function CabinetRouter({ cabinet, onExit }) {
+function CabinetRouter({ cabinet, onExit, onLogout }) {
   switch (cabinet.type) {
-    case "manager": return <ManagerCabinet onExit={onExit} />;
-    case "accountant": return <AccountantCabinet onExit={onExit} />;
-    case "office": return <OfficeCabinet cabKey={cabinet.key} onExit={onExit} />;
-    case "tm": return <TmCabinet tmKey={cabinet.key} onExit={onExit} />;
-    case "sm": return <SmCabinet salonKey={cabinet.key} onExit={onExit} />;
+    case "manager": return <ManagerCabinet onExit={onExit} onLogout={onLogout} />;
+    case "accountant": return <AccountantCabinet onExit={onExit} onLogout={onLogout} />;
+    case "office": return <OfficeCabinet cabKey={cabinet.key} onExit={onExit} onLogout={onLogout} />;
+    case "tm": return <TmCabinet tmKey={cabinet.key} onExit={onExit} onLogout={onLogout} />;
+    case "sm": return <SmCabinet salonKey={cabinet.key} onExit={onExit} onLogout={onLogout} />;
     default: return null;
   }
 }
@@ -2833,6 +2846,12 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .login-remember{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--on-dark-2);cursor:pointer;padding:2px 0;}
 .login-remember input[type=checkbox]{width:16px;height:16px;accent-color:var(--gold);cursor:pointer;flex-shrink:0;}
 .recover-lead{color:var(--on-dark-2);font-size:12.5px;line-height:1.5;margin:0 0 4px;text-align:left;}
+.resume-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:rgba(220,169,74,.1);border:1px solid rgba(220,169,74,.28);border-radius:var(--radius-md);padding:12px 16px;margin-bottom:18px;font-size:13px;color:var(--on-dark);}
+.resume-bar b{color:var(--gold-bright);}
+.resume-actions{display:flex;gap:8px;}
+.resume-bar .btn-primary.small,.resume-bar .btn-secondary.small{padding:7px 14px;font-size:12px;}
+.topbar-logout{margin-left:auto;background:rgba(247,244,234,.06);border:1px solid var(--line-dark);color:var(--on-dark-2);font-size:12px;padding:7px 13px;border-radius:999px;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease);}
+.topbar-logout:hover{color:var(--negative-bright);border-color:rgba(224,145,127,.4);}
 
 /* ---------- адміністрування ---------- */
 .admin-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--sh-2);}
@@ -2877,12 +2896,16 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 `;
 
 const SESSION_KEY = "tmapp:session";
-const loadSession = () => {
+const loadRemembered = () => {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch { return null; }
 };
+const storeRemembered = (cab) => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(cab)); } catch { /* ignore */ } };
+const forgetRemembered = () => { try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ } };
 
 export default function App() {
-  const [session, setSession] = useState(() => loadSession());
+  // якщо був відмічений «Не виходити» — одразу відкриваємо збережений кабінет
+  const [session, setSession] = useState(() => loadRemembered());
+  const [remembered, setRemembered] = useState(() => loadRemembered());
   const [pending, setPending] = useState(null);
   const [ready, setReady] = useState(false);
 
@@ -2891,14 +2914,17 @@ export default function App() {
   const enter = (cab, remember) => {
     setSession(cab);
     setPending(null);
-    try {
-      if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(cab));
-      else localStorage.removeItem(SESSION_KEY);
-    } catch { /* ignore */ }
+    if (remember) { storeRemembered(cab); setRemembered(cab); }
+    else { forgetRemembered(); setRemembered(null); }
   };
-  const exit = () => {
-    setSession(null);
-    try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+  // «Назад» з кабінету — на головну, але збережений вхід НЕ скидається
+  const goHome = () => setSession(null);
+  // явний вихід — скидає збережений вхід
+  const logout = () => { setSession(null); forgetRemembered(); setRemembered(null); };
+  // вибір кабінету з головної: якщо цей кабінет уже запамʼятаний — заходимо без пароля
+  const pick = (cab) => {
+    if (remembered && remembered.key === cab.key && remembered.type === cab.type) setSession(cab);
+    else setPending(cab);
   };
 
   return (
@@ -2906,7 +2932,9 @@ export default function App() {
       <style>{CSS}</style>
       <LivingBackground />
       {!ready && <div className="loading" style={{ paddingTop: 120 }}>Завантаження…</div>}
-      {ready && !session && !pending && <HierarchyHome onPick={setPending} />}
+      {ready && !session && !pending && (
+        <HierarchyHome onPick={pick} remembered={remembered} onLogout={logout} />
+      )}
       {ready && pending && !session && (
         <LoginGate
           title={pending.label}
@@ -2917,7 +2945,13 @@ export default function App() {
           verify={(login, password) => verifyLogin(pending.key, login, password)}
         />
       )}
-      {ready && session && <CabinetRouter cabinet={session} onExit={exit} />}
+      {ready && session && (
+        <CabinetRouter
+          cabinet={session}
+          onExit={goHome}
+          onLogout={remembered && remembered.key === session.key ? logout : null}
+        />
+      )}
     </div>
   );
 }
