@@ -4,7 +4,7 @@ import { installStorage } from "./lib/storage.js";
 import "./index.css";
 import App from "./App.jsx";
 
-// Підключаємо локальне сховище (localStorage) замість window.storage з артефакту.
+// window.storage → Supabase (таблиця kv). Див. src/lib/storage.js
 installStorage();
 
 createRoot(document.getElementById("root")).render(

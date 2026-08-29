@@ -1,55 +1,46 @@
 /*
- * Локальний шим для API, яке в артефакті Claude надавав `window.storage`.
- * Тут дані зберігаються в localStorage браузера (на цьому пристрої).
- *
- * Використовувані методи:
- *   window.storage.get(key)        -> { value } або кидає помилку, якщо ключа немає
- *   window.storage.set(key, value) -> зберігає рядкове значення
- *   window.storage.list(prefix)    -> { keys: string[] } (ключі з відкинутим службовим префіксом)
- *
- * Другий аргумент (global-прапорець) в оригіналі означав спільне сховище між
- * користувачами. У локальній версії воно одне, тож аргумент ігнорується.
+ * window.storage — тепер поверх Supabase (таблиця public.kv), а не localStorage.
+ * Інтерфейс збережено, щоб решта коду не мінялася:
+ *   window.storage.get(key)        -> { value } (рядок JSON) або кидає помилку
+ *   window.storage.set(key, value) -> зберігає (value — рядок; парситься у jsonb)
+ *   window.storage.list(prefix)    -> { keys: string[] }
+ *   window.storage.delete(key)
+ * Доступ обмежує RLS у базі (див. supabase/schema.sql).
  */
+import { supabase } from "./supabase.js";
 
-const NS = "tmapp:";
-
-function realKey(key) {
-  return NS + key;
+function toJsonb(value) {
+  if (typeof value !== "string") return value;
+  try { return JSON.parse(value); } catch { return value; }
 }
 
 export const storage = {
   async get(key) {
-    const raw = localStorage.getItem(realKey(key));
-    if (raw === null) {
-      throw new Error(`storage: ключ "${key}" не знайдено`);
-    }
-    return { key, value: raw };
+    const { data, error } = await supabase.from("kv").select("value").eq("key", key).maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error(`storage: ключ "${key}" не знайдено`);
+    return { key, value: JSON.stringify(data.value) };
   },
 
   async set(key, value) {
-    localStorage.setItem(realKey(key), String(value));
+    const { error } = await supabase.from("kv").upsert({ key, value: toJsonb(value) }, { onConflict: "key" });
+    if (error) throw error;
     return { key, value: String(value) };
   },
 
   async delete(key) {
-    localStorage.removeItem(realKey(key));
+    const { error } = await supabase.from("kv").delete().eq("key", key);
+    if (error) throw error;
   },
 
   async list(prefix = "") {
-    const full = realKey(prefix);
-    const keys = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(full)) {
-        keys.push(k.slice(NS.length));
-      }
-    }
-    return { keys };
+    const esc = prefix.replace(/[%_\\]/g, (m) => `\\${m}`);
+    const { data, error } = await supabase.from("kv").select("key").like("key", `${esc}%`);
+    if (error) return { keys: [] };
+    return { keys: (data || []).map((r) => r.key) };
   },
 };
 
 export function installStorage() {
-  if (typeof window !== "undefined" && !window.storage) {
-    window.storage = storage;
-  }
+  if (typeof window !== "undefined") window.storage = storage;
 }

@@ -11,8 +11,8 @@ import {
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
-  ensureCredentialsSeeded, verifyLogin, getLogin, setPassword,
-  ADMIN_KEY, ADMIN_NAME, isAdminCab, requestRecovery, listRecoveryRequests, clearRecovery, confirmRecovery,
+  verifyLogin, getLogin, currentCabinet, signOutCab, initAfterAuth,
+  ADMIN_KEY, ADMIN_NAME, listRecoveryRequests, clearRecovery,
   listReassignments, addReassignment, removeReassignment,
   CAPABILITIES, getCapabilities, setCapabilities, listLog, ALL_CAB_KEYS,
 } from "./org.js";
@@ -1511,24 +1511,12 @@ function HierarchyHome({ onPick, remembered, onLogout }) {
    ВХІД (логін + пароль)
 ========================================================= */
 function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
-  const [mode, setMode] = useState("login"); // login | recover
-  const [login, setLogin] = useState("");
+  const [login, setLogin] = useState(() => getLogin(cabKey));
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    getLogin(cabKey).then((l) => { if (active && l) setLogin(l); });
-    return () => { active = false; };
-  }, [cabKey]);
-
-  const admin = isAdminCab(cabKey);
-  const [reqSent, setReqSent] = useState(false);
-  const [code, setCode] = useState("");
-  const [newPass, setNewPass] = useState("");
-  const [recOk, setRecOk] = useState("");
+  const [forgot, setForgot] = useState(false);
 
   const submit = async () => {
     if (!login || !password) return;
@@ -1539,27 +1527,6 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
     else { setError("Невірний логін або пароль"); setPassword(""); }
   };
 
-  const doRequest = async () => {
-    setBusy(true);
-    await requestRecovery(cabKey);
-    setBusy(false);
-    setReqSent(true);
-    setRecOk("");
-  };
-  const doConfirm = async () => {
-    setBusy(true);
-    const r = await confirmRecovery(cabKey, code, newPass);
-    setBusy(false);
-    if (r.ok) {
-      setError("");
-      setRecOk("Пароль змінено. Увійдіть новим паролем.");
-      setCode(""); setNewPass("");
-      setTimeout(() => { setMode("login"); setReqSent(false); setRecOk(""); }, 1600);
-    } else {
-      setError(r.error);
-    }
-  };
-
   return (
     <div className="role-select">
       <div className="role-select-inner fade-in">
@@ -1567,73 +1534,41 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
         <h1>{title}</h1>
         {subtitle && <p>{subtitle}</p>}
 
-        {mode === "login" ? (
-          <>
-            <div className="login-fields">
-              <label className="login-field">
-                <span>Логін</span>
-                <input
-                  autoComplete="username" value={login}
-                  onChange={(e) => { setLogin(e.target.value); setError(""); }}
-                  onKeyDown={(e) => { if (e.key === "Enter") document.getElementById("lg-pass")?.focus(); }}
-                />
-              </label>
-              <label className="login-field">
-                <span>Пароль</span>
-                <input
-                  id="lg-pass" type="password" autoFocus autoComplete="current-password" value={password}
-                  onChange={(e) => { setPassword(e.target.value); setError(""); }}
-                  onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-                />
-              </label>
-              <label className="login-remember">
-                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-                <span>Не виходити на цьому пристрої</span>
-              </label>
-            </div>
-            <p className={`pin-error ${error || recOk ? "visible" : ""}`}>{error || recOk || " "}</p>
-            <div className="pin-actions">
-              <button className="btn-secondary" onClick={onCancel}>Назад</button>
-              <button className="btn-primary" onClick={submit} disabled={!login || !password || busy}>
-                {busy ? "Перевірка…" : "Увійти"}
-              </button>
-            </div>
-            <button className="pin-forgot" onClick={() => { setMode("recover"); setError(""); }}>Забули пароль?</button>
-          </>
+        <div className="login-fields">
+          <label className="login-field">
+            <span>Логін</span>
+            <input
+              autoComplete="username" value={login}
+              onChange={(e) => { setLogin(e.target.value); setError(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") document.getElementById("lg-pass")?.focus(); }}
+            />
+          </label>
+          <label className="login-field">
+            <span>Пароль</span>
+            <input
+              id="lg-pass" type="password" autoFocus autoComplete="current-password" value={password}
+              onChange={(e) => { setPassword(e.target.value); setError(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+            />
+          </label>
+          <label className="login-remember">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            <span>Не виходити на цьому пристрої</span>
+          </label>
+        </div>
+        <p className={`pin-error ${error ? "visible" : ""}`}>{error || " "}</p>
+        <div className="pin-actions">
+          <button className="btn-secondary" onClick={onCancel}>Назад</button>
+          <button className="btn-primary" onClick={submit} disabled={!login || !password || busy}>
+            {busy ? "Перевірка…" : "Увійти"}
+          </button>
+        </div>
+        {forgot ? (
+          <p className="recover-lead" style={{ textAlign: "center" }}>
+            Зверніться до адміністратора ({ADMIN_NAME}) — він змінить пароль. Онлайн-відновлення підключаємо.
+          </p>
         ) : (
-          <>
-            <p className="recover-lead">
-              {admin
-                ? "Введіть майстер-код відновлення адміністратора та новий пароль."
-                : `Запросіть код — він зʼявиться в кабінеті адміністратора (${ADMIN_NAME}). Отримайте його й введіть нижче разом із новим паролем.`}
-            </p>
-            <div className="login-fields">
-              {!admin && (
-                <button className="btn-secondary" onClick={doRequest} disabled={busy || reqSent}>
-                  {reqSent ? "Код надіслано адміністратору" : busy ? "…" : "Запросити код"}
-                </button>
-              )}
-              <label className="login-field">
-                <span>{admin ? "Майстер-код" : "Код відновлення"}</span>
-                <input value={code} onChange={(e) => { setCode(e.target.value); setError(""); }} />
-              </label>
-              <label className="login-field">
-                <span>Новий пароль</span>
-                <input
-                  type="password" value={newPass}
-                  onChange={(e) => { setNewPass(e.target.value); setError(""); }}
-                  onKeyDown={(e) => { if (e.key === "Enter") doConfirm(); }}
-                />
-              </label>
-            </div>
-            <p className={`pin-error ${error || recOk ? "visible" : ""}`}>{error || recOk || " "}</p>
-            <div className="pin-actions">
-              <button className="btn-secondary" onClick={() => { setMode("login"); setError(""); setReqSent(false); }}>До входу</button>
-              <button className="btn-primary" onClick={doConfirm} disabled={!code || !newPass || busy}>
-                {busy ? "…" : "Змінити пароль"}
-              </button>
-            </div>
-          </>
+          <button className="pin-forgot" onClick={() => setForgot(true)}>Забули пароль?</button>
         )}
       </div>
     </div>
@@ -2379,47 +2314,24 @@ function AdminRecovery() {
 }
 
 function AdminAccess() {
-  const [rows, setRows] = useState(null);
-  const [drafts, setDrafts] = useState({});
-  const [saved, setSaved] = useState("");
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      const out = [];
-      for (const k of ALL_CAB_KEYS) out.push({ key: k, name: cabName(k), login: await getLogin(k) });
-      if (active) setRows(out);
-    })();
-    return () => { active = false; };
-  }, []);
-  const save = async (k) => {
-    const v = (drafts[k] || "").trim();
-    if (v.length < 3) return;
-    await setPassword(k, v);
-    setDrafts((d) => ({ ...d, [k]: "" }));
-    setSaved(k);
-    setTimeout(() => setSaved(""), 1500);
-  };
+  const rows = ALL_CAB_KEYS.map((k) => ({ key: k, name: cabName(k), login: getLogin(k) }));
   return (
     <div className="admin-panel">
       <h3>Доступи</h3>
-      <p className="hint">Логіни фіксовані. Тут можна задати новий пароль будь-якому кабінету напряму.</p>
-      {rows === null ? <div className="loading">Завантаження…</div> : (
-        <div className="admin-list">
-          {rows.map((r) => (
-            <div className="admin-access-row" key={r.key}>
-              <div className="admin-req-info">
-                <span className="admin-req-name">{r.name}</span>
-                <span className="admin-req-time">логін: {r.login}</span>
-              </div>
-              <input className="admin-pass-input" type="text" placeholder="новий пароль"
-                value={drafts[r.key] || ""} onChange={(e) => setDrafts((d) => ({ ...d, [r.key]: e.target.value }))} />
-              <button className="btn-secondary small" onClick={() => save(r.key)} disabled={(drafts[r.key] || "").trim().length < 3}>
-                {saved === r.key ? "✓" : "Зберегти"}
-              </button>
+      <p className="hint">
+        Логіни фіксовані. Зміна паролів переноситься на сервер — тимчасово це робиться в Supabase → Authentication → Users
+        (знайти користувача за email виду <b>логін@dnipro-m.local</b> → «Reset password» / «Update user»).
+      </p>
+      <div className="admin-list">
+        {rows.map((r) => (
+          <div className="admin-access-row" key={r.key}>
+            <div className="admin-req-info">
+              <span className="admin-req-name">{r.name}</span>
+              <span className="admin-req-time">{r.login}@dnipro-m.local</span>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -3308,35 +3220,50 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .consol-total-row .consol-total{font-size:15px;color:var(--gold);}
 `;
 
-const SESSION_KEY = "tmapp:session";
-const loadRemembered = () => {
-  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch { return null; }
-};
-const storeRemembered = (cab) => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(cab)); } catch { /* ignore */ } };
-const forgetRemembered = () => { try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ } };
+const KEEP_KEY = "dnipro-m-keep";   // «Не виходити» відмічено
+const ALIVE_KEY = "dnipro-m-alive"; // sessionStorage: жива вкладка (переживає reload, не переживає закриття)
 
 export default function App() {
-  // якщо був відмічений «Не виходити» — одразу відкриваємо збережений кабінет
-  const [session, setSession] = useState(() => loadRemembered());
-  const [remembered, setRemembered] = useState(() => loadRemembered());
+  const [session, setSession] = useState(null);      // активний кабінет { key, type, tmKey, label }
+  const [remembered, setRemembered] = useState(null); // збережений вхід (для смужки на головній)
   const [pending, setPending] = useState(null);
   const [ready, setReady] = useState(false);
 
-  useEffect(() => { ensureCredentialsSeeded().then(() => setReady(true)); }, []);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const keep = localStorage.getItem(KEEP_KEY) === "1";
+      const aliveTab = sessionStorage.getItem(ALIVE_KEY) === "1";
+      const cab = await currentCabinet();
+      if (cab && !keep && !aliveTab) {
+        // сесія є, але «Не виходити» не відмічено і вкладку відкрито заново → вийти
+        await signOutCab();
+        if (active) { setReady(true); }
+        return;
+      }
+      sessionStorage.setItem(ALIVE_KEY, "1");
+      if (cab) {
+        await initAfterAuth();
+        if (active) { setSession(cab); if (keep) setRemembered(cab); }
+      }
+      if (active) setReady(true);
+    })();
+    return () => { active = false; };
+  }, []);
 
   const enter = (cab, remember) => {
     setSession(cab);
     setPending(null);
-    if (remember) { storeRemembered(cab); setRemembered(cab); }
-    else { forgetRemembered(); setRemembered(null); }
+    localStorage.setItem(KEEP_KEY, remember ? "1" : "0");
+    sessionStorage.setItem(ALIVE_KEY, "1");
+    setRemembered(remember ? cab : null);
   };
-  // «Назад» з кабінету — на головну, але збережений вхід НЕ скидається
-  const goHome = () => setSession(null);
-  // явний вихід — скидає збережений вхід
-  const logout = () => { setSession(null); forgetRemembered(); setRemembered(null); };
-  // вибір кабінету з головної: якщо цей кабінет уже запамʼятаний — заходимо без пароля
-  const pick = (cab) => {
-    if (remembered && remembered.key === cab.key && remembered.type === cab.type) setSession(cab);
+  const goHome = () => setSession(null);            // на головну, сесія Supabase лишається
+  const logout = async () => { await signOutCab(); localStorage.removeItem(KEEP_KEY); setSession(null); setRemembered(null); };
+  const pick = async (cab) => {
+    if (remembered && remembered.key === cab.key) { setSession(cab); return; }
+    const cur = await currentCabinet();
+    if (cur && cur.key === cab.key) setSession(cur);
     else setPending(cab);
   };
 
