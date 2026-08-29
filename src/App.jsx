@@ -1477,7 +1477,7 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
   const [mode, setMode] = useState("login"); // login | recover
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(true);
+  const [remember, setRemember] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
