@@ -8,6 +8,7 @@ import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
   Store, Calculator, LogIn, Wallet, User, Clock,
   LayoutGrid, FileText, Calendar, Package, BarChart3, CreditCard, CheckSquare, ListChecks, GraduationCap,
+  Bell, Star, Trash2, Plus,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -15,13 +16,20 @@ import {
   ADMIN_KEY, ADMIN_NAME, listRecoveryRequests, clearRecovery,
   listReassignments, addReassignment, removeReassignment,
   CAPABILITIES, getCapabilities, setCapabilities, listLog, ALL_CAB_KEYS,
+  cabType, PARTICIPANTS, canAssign,
 } from "./org.js";
+import { emptySmData, SM_FIELD_LABELS } from "./smCalc.js";
 import {
-  calcSmAll, emptySmData, SM_FIELD_LABELS, SM_CATEGORIES, PLAN_BRACKETS,
-  categoryOf, normDaysOff, MANAGER_COEFS,
-} from "./smCalc.js";
-import { TM_CONDITIONS, SM_CONDITIONS } from "./conditions.js";
-import { TASK_STATUS, listTasks, createTask, setTaskStatus, deleteTask, subscribeTasks } from "./lib/tasks.js";
+  calcTm, calcTmBatch, calcSm, calcSmBatch, useTmCalc, useSmCalc,
+  subscribeCalcBusy, calcBusyNow,
+} from "./lib/calc.js";
+import {
+  loadCalcRefs, tmCond, smCond, planBracketLabel, smCategoryOptions, managerCoefOptions,
+} from "./lib/calcRefs.js";
+import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, markSeen, subscribeTasks } from "./lib/tasks.js";
+import {
+  listNotifications, markRead, markAllRead, notify, subscribeNotifications,
+} from "./lib/notifications.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
@@ -30,7 +38,6 @@ const TM_LIST = TMS.map((t) => ({ key: t.key, name: t.name }));
 const MANAGER_NAME = MANAGER.name;
 const MONTH_NAMES = ["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"];
 const MONTH_GEN = ["січня","лютого","березня","квітня","травня","червня","липня","серпня","вересня","жовтня","листопада","грудня"];
-const GRADE_MIN = { 1: 60000, 2: 50000, 3: 45000 };
 
 const pad = (n) => String(n).padStart(2, "0");
 const nowYm = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
@@ -59,7 +66,6 @@ const recentMonths = (n = 12) => {
   });
 };
 const fmt = (n) => Math.round(n || 0).toLocaleString("uk-UA") + " грн";
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 /* ЗП за місяць M подають до 10-го числа наступного місяця (M+1) */
 function deadlineInfo(ym) {
@@ -75,7 +81,6 @@ function deadlineInfo(ym) {
   };
 }
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString("uk-UA") : "—");
-const selectOnFocus = (e) => e.target.select();
 
 function emptyData() {
   return {
@@ -129,137 +134,6 @@ const makeRemoveShot = (setData) => (key, i) => setData((prev) => {
   return _.set(_.cloneDeep(prev), ["screenshots", key], cur.filter((_x, j) => j !== i));
 });
 
-/* =========================================================
-   CALCULATION ENGINE (мотивація ТМ)
-========================================================= */
-function rowOf(v, edges) { return v < edges[0] ? 0 : v < edges[1] ? 1 : v <= edges[2] ? 2 : 3; }
-const GI = (grade) => clamp((grade || 2) - 1, 0, 2);
-
-const SALES_TABLE = [[15000, 10000, 5000], [20000, 15000, 10000], [25000, 20000, 15000], [30000, 25000, 20000]];
-const LFL_TABLE = [[4000, 3000, 2000], [10000, 8000, 6000], [20000, 16000, 12000], [25000, 20000, 15000]];
-const SM13_TABLE = [[3000, 2000, 1000], [10000, 8000, 6000], [16000, 14000, 12000], [20000, 18000, 16000]];
-
-/* 1.1 — План / Факт / ЕЗ → % = (Факт − ЕЗ) / План */
-function calcSales(b1, grade) {
-  const factNet = (b1.salesFact || 0) - (b1.salesEz || 0);
-  const pct = b1.salesPlan > 0 ? (factNet / b1.salesPlan) * 100 : 0;
-  const bonus = SALES_TABLE[rowOf(pct, [90, 100, 110])][GI(grade)];
-  return { factNet, pct, bonus };
-}
-/* 1.2 — Попередній / Поточний період → % приросту */
-function calcLfl(b1, grade) {
-  const growth = (b1.lflCurrent || 0) - (b1.lflPrev || 0);
-  const pct = b1.lflPrev > 0 ? (growth / b1.lflPrev) * 100 : 0;
-  const bonus = LFL_TABLE[rowOf(pct, [25, 35, 45])][GI(grade)];
-  return { growth, pct, bonus };
-}
-/* 1.3 — галочки по салонах ТМ → % = виконали / всього */
-function calcSm13(b1, grade, salonKeys) {
-  const total = salonKeys.length;
-  const met = salonKeys.filter((k) => b1.smPlanMet?.[k]).length;
-  const pct = total > 0 ? (met / total) * 100 : 0;
-  const bonus = SM13_TABLE[rowOf(pct, [50, 75, 100])][GI(grade)];
-  return { total, met, pct, bonus };
-}
-
-/* 2.1 — галочка «план виконано» + оборот + к-ть + норма вартості дзвінка */
-function calcCalls(b2) {
-  if (!b2.callsPlanMet || !b2.callsFact || !b2.callsCostNorm) return { avgCost: 0, ratio: 0, pct: 0, bonus: 0 };
-  const avgCost = (b2.callsRevenue || 0) / b2.callsFact;
-  const ratio = (avgCost / b2.callsCostNorm) * 100;
-  const pct = ratio < 90 ? 0.5 : ratio <= 110 ? 1 : 1.5;
-  return { avgCost, ratio, pct, bonus: (b2.callsRevenue || 0) * (pct / 100) };
-}
-/* 2.2 — рентабельність по кожному магазину → середнє по території */
-function calcRent(b2, salonKeys) {
-  const total = salonKeys.length;
-  const filled = salonKeys.filter((k) => {
-    const x = b2.rentabilityByStore?.[k];
-    return x !== undefined && x !== "" && x !== null;
-  });
-  const avg = total > 0
-    ? salonKeys.reduce((s, k) => s + (Number(b2.rentabilityByStore?.[k]) || 0), 0) / total
-    : 0;
-  const bonus = avg < 25 ? 0 : avg <= 27 ? 5000 : 10000;
-  return { avg, filled: filled.length, total, bonus };
-}
-/* 2.3 — без умови виконання плану */
-function calcPbi(b2) {
-  const total = b2.pbiTotalRevenue || 0;
-  const percent = total > 0 ? ((b2.pbiRevenue || 0) / total) * 100 : 0;
-  const bp = percent < 15 ? 0.2 : percent <= 20 ? 0.5 : 0.7;
-  return { percent, bonus: total * (bp / 100) };
-}
-/* 2.4 — прибутковість по кожному магазину → сума балів */
-function calcStores(b2, salonKeys) {
-  return salonKeys.reduce((sum, k) => {
-    const p = Number(b2.profitByStore?.[k]) || 0;
-    return sum + (p < 0 ? -2000 : p <= 5 ? 0 : p <= 10 ? 2000 : 5000);
-  }, 0);
-}
-
-/* 3.1 — планова / фактична к-ть співробітників → % */
-function calcStaff(b3) {
-  const pct = b3.staffPlan > 0 ? ((b3.staffFact || 0) / b3.staffPlan) * 100 : 0;
-  const bonus = pct < 75 ? 0 : pct <= 90 ? 2000 : pct <= 99 ? 4000 : 8000;
-  return { pct, bonus };
-}
-/* 3.2 — 0 порушень → +1000; ≥1 → штраф −200 за кожне (без +1000) */
-function calcViolations32(count) {
-  const c = count || 0;
-  return c === 0 ? 1000 : Math.max(-1000, -200 * c);
-}
-function calcCapped1000(count) { return clamp(1000 - 200 * (count || 0), -1000, 1000); }
-function calcSmState(smCount, found, unfixed) { return 500 * smCount - 100 * (found || 0) - 200 * (unfixed || 0); }
-function calcTraining(score) {
-  if (score < 90) return -1000;
-  if (score < 95) return 0;
-  if (score < 98) return 1000;
-  return 2000;
-}
-function calcBlock3(b3, salonCount) {
-  const staff = calcStaff(b3).bonus;
-  const violations = calcViolations32(b3.violationsCount);
-  const schedule = calcCapped1000(b3.scheduleViolationsCount);
-  const smState = calcSmState(salonCount, b3.smViolationsFound, b3.smViolationsUnfixed);
-  const merch = calcCapped1000(b3.merchViolationsCount);
-  const training = calcTraining(b3.trainingScore);
-  const rawSubtotal = staff + violations + schedule + smState + merch + training;
-  return { staff, violations, schedule, smState, merch, training, rawSubtotal, subtotal: Math.min(rawSubtotal, 15000) };
-}
-
-/* ЕЗ — додано «Податки» до відрахувань */
-function calcEz(ez) {
-  const netProfit = (ez.revenue || 0) * ((ez.profitabilityPercent || 0) / 100);
-  const ezValue = netProfit - (ez.och || 0) - (ez.np || 0) - (ez.acquiring || 0) - (ez.taxes || 0);
-  return { netProfit, ezValue, bonus: ezValue * 0.10 };
-}
-
-function calcAll(data, grade, tmKey, ym) {
-  const salonKeys = salonsOfTm(tmKey || TMS[0].key, ym).map((s) => s.key);
-  const salonCount = salonKeys.length;
-
-  const sales = calcSales(data.block1, grade);
-  const lfl = calcLfl(data.block1, grade);
-  const sm13 = calcSm13(data.block1, grade, salonKeys);
-  const b1 = { sales: sales.bonus, lfl: lfl.bonus, sm: sm13.bonus, subtotal: sales.bonus + lfl.bonus + sm13.bonus, d: { sales, lfl, sm13 } };
-
-  const calls = calcCalls(data.block2);
-  const rent = calcRent(data.block2, salonKeys);
-  const pbi = calcPbi(data.block2);
-  const stores = calcStores(data.block2, salonKeys);
-  const b2 = { calls: calls.bonus, rentability: rent.bonus, pbi: pbi.bonus, pbiPercent: pbi.percent, stores, subtotal: calls.bonus + rent.bonus + pbi.bonus + stores, d: { calls, rent, pbi } };
-
-  const b3 = calcBlock3(data.block3, salonCount);
-  const staff = calcStaff(data.block3);
-  b3.d = { staff };
-
-  const ez = calcEz(data.ez);
-  const beforeFloor = b1.subtotal + b2.subtotal + b3.subtotal + ez.bonus;
-  const min = GRADE_MIN[grade] || GRADE_MIN[2];
-  const floored = Math.max(beforeFloor, min);
-  return { b1, b2, b3, ez, beforeFloor, floored, floorApplied: beforeFloor < min, min, salonKeys, salonCount };
-}
 
 /* =========================================================
    STORAGE
@@ -345,6 +219,56 @@ function resizeImage(file) {
 /* =========================================================
    SMALL COMPONENTS
 ========================================================= */
+/* Числове поле: 0 не показуємо (плейсхолдер), під час набору тримаємо
+   «чернетку» рядком — курсор і Backspace працюють природно.
+   allowEmpty: порожнє значення повертає "" замість 0 (де важлива різниця
+   «не заповнено» vs «нуль», напр. рентабельність по магазинах). */
+/* Неконтрольований під час набору (DOM тримає текст) — курсор і Backspace
+   поводяться природно, немає гонки з ре-рендером. Значення комітиться на
+   blur / Enter. 0 показуємо як плейсхолдер, а не літерал. */
+const numStr = (v) => (v === "" || v == null || v === 0 ? "" : String(v));
+const parseNum = (s, allowEmpty) => {
+  const t = String(s).replace(/\s/g, "").replace(",", ".");
+  if (t === "" || t === "-" || t === "." || t === "-.") return allowEmpty ? "" : 0;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : (allowEmpty ? "" : 0);
+};
+function NumInput({ value, onChange, className, placeholder = "0", allowEmpty = false, ...rest }) {
+  const ref = React.useRef(null);
+  const editing = React.useRef(false);
+
+  useEffect(() => {
+    if (!editing.current && ref.current && ref.current.value !== numStr(value)) {
+      ref.current.value = numStr(value);
+    }
+  }, [value]);
+
+  const commit = () => {
+    editing.current = false;
+    onChange(parseNum(ref.current.value, allowEmpty));
+  };
+
+  return (
+    <input
+      ref={ref}
+      type="text"
+      inputMode="decimal"
+      className={className}
+      defaultValue={numStr(value)}
+      placeholder={placeholder}
+      onFocus={(e) => { editing.current = true; const el = e.target; requestAnimationFrame(() => el.select()); }}
+      onInput={(e) => {
+        const el = e.currentTarget;
+        const cleaned = el.value.replace(/[^\d.,-]/g, "");
+        if (cleaned !== el.value) el.value = cleaned;
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") { commit(); e.currentTarget.blur(); } }}
+      {...rest}
+    />
+  );
+}
+
 function Field({ label, value, onChange, suffix, full, readOnly }) {
   return (
     <label className={`field ${full ? "field-full" : ""}`}>
@@ -353,8 +277,7 @@ function Field({ label, value, onChange, suffix, full, readOnly }) {
         <div className="field-value">{value ?? 0}{suffix ? ` ${suffix}` : ""}</div>
       ) : (
         <div className="field-input-wrap">
-          <input type="number" className="field-input" value={value ?? 0} onFocus={selectOnFocus}
-            onChange={(e) => onChange(Number(e.target.value))} />
+          <NumInput className="field-input" value={value} onChange={onChange} />
           {suffix && <span className="field-suffix">{suffix}</span>}
         </div>
       )}
@@ -577,8 +500,8 @@ function Item({
     </div>
   );
 }
-const TmItem = (props) => <Item {...props} conditions={TM_CONDITIONS[props.num]} />;
-const SmItem = (props) => <Item {...props} conditions={SM_CONDITIONS[props.num]} />;
+const TmItem = (props) => <Item {...props} conditions={tmCond(props.num)} />;
+const SmItem = (props) => <Item {...props} conditions={smCond(props.num)} />;
 function BlockHeader({ n, title }) {
   return (
     <div className="block-header">
@@ -597,15 +520,131 @@ function ImageModal({ src, onClose }) {
     </div>
   );
 }
-function TopBar({ title, onBack, onLogout }) {
+function CalcBusyDot() {
+  const [busy, setBusy] = useState(calcBusyNow());
+  useEffect(() => subscribeCalcBusy(setBusy), []);
+  return <span className={`calc-busy-dot ${busy ? "on" : ""}`} title="Перерахунок мотивації…" aria-hidden={!busy} />;
+}
+
+function TopBar({ title, onBack, onLogout, cabKey }) {
   return (
     <div className="topbar">
       <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> Назад</button>
       <span className="topbar-title">{title}</span>
-      {onLogout && (
-        <button className="topbar-logout" onClick={onLogout}>Вийти</button>
-      )}
+      <div className="topbar-right">
+        <CalcBusyDot />
+        {cabKey && <NotificationCenter cabKey={cabKey} />}
+        {onLogout && (
+          <button className="topbar-logout" onClick={onLogout}>Вийти</button>
+        )}
+      </div>
     </div>
+  );
+}
+
+/* =========================================================
+   СПОВІЩЕННЯ — дзвіночок + випадна панель + тости-строки
+========================================================= */
+/* локальна шина тостів — щоб показати строку тому, хто сам виконав дію */
+const toastBus = typeof window !== "undefined" ? new EventTarget() : null;
+function pushToast(detail) {
+  toastBus?.dispatchEvent(new CustomEvent("toast", { detail }));
+}
+
+const notifIcon = (kind) => {
+  if (kind === "task_new") return <CheckSquare size={15} />;
+  if (kind === "task_status") return <Check size={15} />;
+  if (kind === "salary") return <Wallet size={15} />;
+  return <Bell size={15} />;
+};
+const relTime = (iso) => {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "щойно";
+  if (s < 3600) return `${Math.floor(s / 60)} хв тому`;
+  if (s < 86400) return `${Math.floor(s / 3600)} год тому`;
+  return `${Math.floor(s / 86400)} дн тому`;
+};
+
+function NotificationCenter({ cabKey }) {
+  const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [toasts, setToasts] = useState([]);
+
+  const reload = () => listNotifications(60).then(setItems).catch(() => {});
+  const showToast = (t) => {
+    const id = t.id || `l${Date.now()}${Math.random()}`;
+    setToasts((prev) => [...prev.slice(-3), { id, title: t.title, body: t.body }]);
+    setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 6000);
+  };
+  useEffect(() => {
+    reload();
+    const unsub = subscribeNotifications(cabKey, (n) => {
+      setItems((prev) => [n, ...prev.filter((x) => x.id !== n.id)]);
+      showToast(n);
+    });
+    const onLocal = (e) => showToast(e.detail || {});
+    toastBus?.addEventListener("toast", onLocal);
+    return () => { unsub(); toastBus?.removeEventListener("toast", onLocal); };
+  }, [cabKey]);
+
+  const unread = items.filter((n) => !n.read).length;
+  const onOpen = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && unread) {
+      await markAllRead().catch(() => {});
+      setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+    }
+  };
+
+  return (
+    <>
+      <div className="notif-wrap">
+        <button className="notif-bell" onClick={onOpen} aria-label="Сповіщення">
+          <Bell size={18} />
+          {unread > 0 && <span className="notif-dot">{unread > 9 ? "9+" : unread}</span>}
+        </button>
+        {open && (
+          <>
+            <div className="notif-backdrop" onClick={() => setOpen(false)} />
+            <div className="notif-panel">
+              <div className="notif-panel-head">
+                <span>Сповіщення</span>
+                {items.length > 0 && (
+                  <button className="notif-clear" onClick={async () => { await markAllRead().catch(() => {}); setItems((p) => p.map((n) => ({ ...n, read: true }))); }}>
+                    прочитати всі
+                  </button>
+                )}
+              </div>
+              <div className="notif-list">
+                {items.length === 0 && <div className="notif-empty">Поки що порожньо</div>}
+                {items.map((n) => (
+                  <div className={`notif-item ${n.read ? "" : "notif-unread"}`} key={n.id}>
+                    <span className="notif-ic">{notifIcon(n.kind)}</span>
+                    <div className="notif-body">
+                      <b>{n.title}</b>
+                      {n.body && <p>{n.body}</p>}
+                      <time>{relTime(n.created_at)}</time>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+      {createPortal(
+        <div className="toast-stack">
+          {toasts.map((t) => (
+            <div className="toast" key={t.id}>
+              <Bell size={16} />
+              <div><b>{t.title}</b>{t.body && <span>{t.body}</span>}</div>
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -637,8 +676,8 @@ function SalonPctRows({ salons, values, onSet, readOnly, suffix = "%" }) {
               <span className="salon-pct-val">{v ?? 0}{suffix}</span>
             ) : (
               <span className="salon-pct-inputwrap">
-                <input type="number" className="salon-pct-input" value={v ?? ""} onFocus={selectOnFocus}
-                  onChange={(e) => onSet(s.key, e.target.value === "" ? "" : Number(e.target.value))} />
+                <NumInput className="salon-pct-input" value={v} allowEmpty placeholder="—"
+                  onChange={(nv) => onSet(s.key, nv)} />
                 <span className="salon-pct-suffix">{suffix}</span>
               </span>
             )}
@@ -649,9 +688,8 @@ function SalonPctRows({ salons, values, onSet, readOnly, suffix = "%" }) {
   );
 }
 
-function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, tmKey, ym, managerMode, onFlag }) {
+function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, tmKey, ym, managerMode, onFlag, calc }) {
   const salons = salonsOfTm(tmKey, ym);
-  const calc = calcAll(data, grade, tmKey, ym);
   const setMap = (block, field, key, val) => update([block, field, key], val);
   const shot = { screenshots: data.screenshots, onAddShot, onRemoveShot, onPreview, readOnly, managerMode, onFlag };
   const flg = (num) => data.managerFlags?.[num];
@@ -806,8 +844,7 @@ function SummaryBlock({ id, title, note, total, items, expanded, onToggle }) {
   );
 }
 
-function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
-  const calc = useMemo(() => calcAll(data, grade, tmKey, ym), [data, grade, tmKey, ym]);
+function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl, calc }) {
   const advance = adj.advance || 0;
   const grandTotal = calc.floored + (isLastMonthOfQuarter ? (qbonus.bonus41 + qbonus.bonus42) : 0) + (adj.amount || 0) - advance;
 
@@ -856,12 +893,12 @@ function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuart
           <div className="adj-row">
             <span>Додатково (керівник)</span>
             <input className="adj-comment" placeholder="напр. премія за ініціативу" value={adj.comment} onChange={(e) => onAdjChange({ ...adj, comment: e.target.value })} />
-            <input className="adj-amount" type="number" value={adj.amount} onFocus={selectOnFocus} onChange={(e) => onAdjChange({ ...adj, amount: Number(e.target.value) })} />
+            <NumInput className="adj-amount" value={adj.amount} onChange={(v) => onAdjChange({ ...adj, amount: v })} />
             <span>грн</span>
           </div>
           <div className="adj-row">
             <span>Аванс (вирахувати)</span>
-            <input className="adj-amount" type="number" value={adj.advance || 0} onFocus={selectOnFocus} onChange={(e) => onAdjChange({ ...adj, advance: Number(e.target.value) })} />
+            <NumInput className="adj-amount" value={adj.advance} onChange={(v) => onAdjChange({ ...adj, advance: v })} />
             <span>грн</span>
             <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>
           </div>
@@ -968,6 +1005,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   const qKey = ymToQuarter(ym);
   const qMonths = quarterMonths(qKey);
   const isLastMonthOfQuarter = ym === qMonths[2];
+  const { calc } = useTmCalc(data, grade, tmKey, ym);
 
   useEffect(() => {
     let active = true;
@@ -1071,13 +1109,13 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
         </button>
       </div>
 
-      {loading ? <div className="loading">Завантаження…</div> : tab === "form" ? (
+      {loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
         <>
-          <CriteriaForm data={data} update={update} grade={grade} tmKey={tmKey} ym={ym} showAmounts
+          <CriteriaForm data={data} update={update} grade={grade} tmKey={tmKey} ym={ym} showAmounts calc={calc}
             onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} />
           <SalarySummary
             data={data} grade={grade} tmKey={tmKey} ym={ym} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
-            expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)}
+            expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)} calc={calc}
           />
           <div className="save-bar">
             <span className="save-hint">
@@ -1114,10 +1152,11 @@ function QuarterPanel({ qKey, onDone }) {
       for (const t of TM_LIST) {
         const grade = await loadGrade(t.key, qKey);
         const monthsData = await Promise.all(qMonths.map((m) => loadData(t.key, m)));
-        const salesPct = (d) => calcSales(d.block1, grade).pct;
-        const allMet = monthsData.every((d) => salesPct(d) >= 100);
-        const avgOver = monthsData.reduce((s, d) => s + Math.max(0, salesPct(d) - 100), 0) / 3;
-        const sumFloored = monthsData.reduce((s, d, i) => s + calcAll(d, grade, t.key, qMonths[i]).floored, 0);
+        const calcs = await calcTmBatch(monthsData.map((d, i) => ({ data: d, grade, tmKey: t.key, ym: qMonths[i] })));
+        const pcts = calcs.map((c) => c.b1.d.sales.pct);
+        const allMet = pcts.every((p) => p >= 100);
+        const avgOver = pcts.reduce((s, p) => s + Math.max(0, p - 100), 0) / 3;
+        const sumFloored = calcs.reduce((s, c) => s + c.floored, 0);
         const existing = await loadQBonus(t.key, qKey);
         out[t.key] = { grade, allMet, avgOver: existing.overExecOverride || Math.round(avgOver * 10) / 10, sumFloored };
       }
@@ -1164,7 +1203,7 @@ function QuarterPanel({ qKey, onDone }) {
             </div>
             <label className="over-field">
               % перевиконання за квартал
-              <input type="number" value={r.avgOver} onFocus={selectOnFocus} onChange={(e) => setOverride(t.key, Number(e.target.value))} />
+              <NumInput value={r.avgOver} onChange={(v) => setOverride(t.key, v)} />
             </label>
             <div className="quarter-preview">
               <span>4.2 (5% від суми ЗП за квартал): {fmt(r.allMet ? r.sumFloored * 0.05 : 0)}</span>
@@ -1204,6 +1243,7 @@ function ManagerView({ onBack, embedded }) {
   const qKey = ymToQuarter(ym);
   const qMonths = quarterMonths(qKey);
   const isLastMonthOfQuarter = ym === qMonths[2];
+  const { calc } = useTmCalc(data, grade, tmKey, ym);
 
   useEffect(() => {
     let active = true;
@@ -1231,12 +1271,13 @@ function ManagerView({ onBack, embedded }) {
       const results = {};
       for (const t of TM_LIST) {
         const ms = (await listMonths(t.key)).sort();
-        const points = [];
+        const items = [];
         for (const m of ms) {
           const [d, g] = await Promise.all([loadData(t.key, m), loadGrade(t.key, ymToQuarter(m))]);
-          points.push({ month: m, total: Math.round(calcAll(d, g, t.key, m).floored) });
+          items.push({ data: d, grade: g, tmKey: t.key, ym: m });
         }
-        results[t.key] = points;
+        const calcs = items.length ? await calcTmBatch(items) : [];
+        results[t.key] = ms.map((m, i) => ({ month: m, total: Math.round(calcs[i].floored) }));
       }
       const allMonths = Array.from(new Set([...(results.andriy || []), ...(results.ivan || [])].map((p) => p.month))).sort();
       const merged = allMonths.map((m) => ({
@@ -1259,6 +1300,8 @@ function ManagerView({ onBack, embedded }) {
     const next = { ...data, paymentStatus: status, paymentStatusAt: new Date().toISOString() };
     setData(next);
     await saveData(tmKey, ym, next);
+    if (status === "to_pay") notify({ recipient: tmKey, kind: "salary", title: "ЗП призначено до виплати", body: monthLabel(ym), actor: "manager", link: "salary" });
+    if (status === "paid") notify({ recipient: tmKey, kind: "salary", title: "ЗП виплачено", body: monthLabel(ym), actor: "manager", link: "salary" });
   };
 
   const sendBack = async () => {
@@ -1268,6 +1311,7 @@ function ManagerView({ onBack, embedded }) {
     setData(next);
     setCorrectionComment("");
     setSavingCorr(false);
+    notify({ recipient: tmKey, kind: "salary", title: "Керівник повернув ЗП на доопрацювання", body: monthLabel(ym), actor: "manager", link: "salary" });
   };
   const approve = async () => {
     setSavingCorr(true);
@@ -1275,6 +1319,7 @@ function ManagerView({ onBack, embedded }) {
     await saveData(tmKey, ym, next);
     setData(next);
     setSavingCorr(false);
+    notify({ recipient: tmKey, kind: "salary", title: "Керівник погодив вашу ЗП", body: monthLabel(ym), actor: "manager", link: "salary" });
   };
 
   return (
@@ -1305,7 +1350,7 @@ function ManagerView({ onBack, embedded }) {
             </div>
           </div>
 
-          {loading ? <div className="loading">Завантаження…</div> : (
+          {loading || !calc ? <div className="loading">Завантаження…</div> : (
             <>
               <div className="status-line">
                 Статус: {
@@ -1342,14 +1387,14 @@ function ManagerView({ onBack, embedded }) {
               )}
 
               <CriteriaForm
-                data={data} grade={grade} tmKey={tmKey} ym={ym} showAmounts readOnly
+                data={data} grade={grade} tmKey={tmKey} ym={ym} showAmounts readOnly calc={calc}
                 managerMode={data.status !== "draft"} onFlag={onFlag}
                 onPreview={setPreview}
               />
 
               <SalarySummary
                 data={data} grade={grade} tmKey={tmKey} ym={ym} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
-                expandedBlock={expandedBlock} onToggle={toggleBlock} editable
+                expandedBlock={expandedBlock} onToggle={toggleBlock} editable calc={calc}
                 onAdjChange={setAdj} onSaveAdj={saveAdjOnly} savingAdj={savingAdj}
                 onSetPaymentStatus={setPaymentStatus} monthLbl={monthLabel(ym)}
               />
@@ -1603,10 +1648,10 @@ function SelectField({ label, value, onChange, options, readOnly }) {
 function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, isQuarterEnd }) {
   const shot = { screenshots: data.screenshots, onAddShot, onRemoveShot, onPreview, readOnly };
   const catOptions = [
-    { value: "", label: `Авто (${categoryOf(data.base.avg3To)})` },
-    ...SM_CATEGORIES.map((c) => ({ value: c.key, label: `${c.key} · ${c.note}` })),
+    { value: "", label: `Авто${calc?.autoCategory ? ` (${calc.autoCategory})` : ""}` },
+    ...smCategoryOptions().map((c) => ({ value: c.key, label: `${c.key} · ${c.note}` })),
   ];
-  const coefOptions = MANAGER_COEFS.map((c) => ({ value: c.value, label: c.label }));
+  const coefOptions = managerCoefOptions().map((c) => ({ value: c.key, label: c.label }));
 
   return (
     <div className="criteria-form">
@@ -1619,9 +1664,9 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
         {showAmounts && (
           <div className="ez-sub">
             <span>Категорія: {calc.category}</span>
-            <span>Брекет: {PLAN_BRACKETS[calc.bracket]}</span>
+            <span>Брекет: {planBracketLabel(calc.bracket)}</span>
             <span>База: {fmt(calc.baseRaw)}</span>
-            <span>Відпрац. коеф: {calc.factor.toFixed(2)} (норма вихідних {normDaysOff(area)})</span>
+            <span>Відпрац. коеф: {calc.factor.toFixed(2)} (норма вихідних {area === "місто" ? 10 : 9})</span>
           </div>
         )}
       </SmItem>
@@ -1637,7 +1682,7 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
         <div className="hint">Штраф до −2 000 грн. Виявлене та виправлене зауваження не сумуються.</div>
       </SmItem>
       <SmItem num="2.3" title="Коефіцієнт керуючого" amount={showAmounts ? calc.mgr.coefBonus : undefined} screenshotKey="coef" {...shot}>
-        <SelectField readOnly={readOnly} label="Статус" value={data.manager.coef} onChange={(v) => update(["manager", "coef"], Number(v))} options={coefOptions} />
+        <SelectField readOnly={readOnly} label="Статус" value={String(data.manager.coef)} onChange={(v) => update(["manager", "coef"], v)} options={coefOptions} />
         <div className="hint">Додатковий бонус = ставка за категорією ({fmt(calc.baseRaw)}) × (коеф − 1). Умова переходу на «Керуючий»: 2 з 3 планів по СМ.</div>
       </SmItem>
 
@@ -1720,7 +1765,7 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange,
   const grand = calc.total;
 
   const baseItems = [
-    { label: `База (${calc.category} · ${PLAN_BRACKETS[calc.bracket]})`, amount: calc.baseRaw },
+    { label: `База (${calc.category} · ${planBracketLabel(calc.bracket)})`, amount: calc.baseRaw },
     { label: `Коеф. відпрацьованих змін ×${calc.factor.toFixed(2)}`, amount: calc.baseAdjusted - calc.baseRaw },
   ];
   const mgrItems = [
@@ -1755,12 +1800,12 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange,
           <div className="adj-row">
             <span>Додатково (ТМ)</span>
             <input className="adj-comment" placeholder="коментар" value={data.adj.comment} onChange={(e) => onAdjChange({ ...data.adj, comment: e.target.value })} />
-            <input className="adj-amount" type="number" value={data.adj.amount} onFocus={selectOnFocus} onChange={(e) => onAdjChange({ ...data.adj, amount: Number(e.target.value) })} />
+            <NumInput className="adj-amount" value={data.adj.amount} onChange={(v) => onAdjChange({ ...data.adj, amount: v })} />
             <span>грн</span>
           </div>
           <div className="adj-row">
             <span>Аванс (вирахувати)</span>
-            <input className="adj-amount" type="number" value={data.adj.advance || 0} onFocus={selectOnFocus} onChange={(e) => onAdjChange({ ...data.adj, advance: Number(e.target.value) })} />
+            <NumInput className="adj-amount" value={data.adj.advance} onChange={(v) => onAdjChange({ ...data.adj, advance: v })} />
             <span>грн</span>
             <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>
           </div>
@@ -1890,7 +1935,7 @@ function SmView({ salon, embedded }) {
     return () => clearTimeout(t);
   }, [data, loading, salon.key, ym]);
 
-  const calc = useMemo(() => calcSmAll(data, { ym, area: salon.area }), [data, ym, salon.area]);
+  const { calc } = useSmCalc(data, salon.key, ym);
 
   const months = useMemo(() => {
     return recentMonths(12);
@@ -1948,7 +1993,7 @@ function SmView({ salon, embedded }) {
         </button>
       </div>
 
-      {loading ? <div className="loading">Завантаження…</div> : tab === "form" ? (
+      {loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
         <>
           <SmCriteriaForm
             data={data} update={update} calc={calc} area={salon.area} showAmounts
@@ -2004,13 +2049,15 @@ function SalonDetail({ salon, reviewer, onBack }) {
   const onRemoveShot = makeRemoveShot(setData);
   const toggleBlock = (id) => setExpandedBlock((p) => (p === id ? null : id));
 
-  const calc = useMemo(() => calcSmAll(data, { ym, area: salon.area }), [data, ym, salon.area]);
+  const { calc } = useSmCalc(data, salon.key, ym);
 
   const saveAdjOnly = async () => { setSaving(true); await saveSmData(salon.key, ym, data); setSaving(false); };
   const setPaymentStatus = async (status) => {
     const next = { ...data, paymentStatus: status, paymentStatusAt: new Date().toISOString() };
     setData(next);
     await saveSmData(salon.key, ym, next);
+    if (status === "to_pay") notify({ recipient: salon.key, kind: "salary", title: "ЗП призначено до виплати", body: monthLabel(ym), actor: "manager", link: "salary" });
+    if (status === "paid") notify({ recipient: salon.key, kind: "salary", title: "ЗП виплачено", body: monthLabel(ym), actor: "manager", link: "salary" });
   };
   const cancelEdit = async () => {
     const d = await loadSmData(salon.key, ym);
@@ -2022,6 +2069,7 @@ function SalonDetail({ salon, reviewer, onBack }) {
     const next = { ...data, status: "corrected", correctedAt: new Date().toISOString(), tmComment: comment, correctionDiff: diff };
     await saveSmData(salon.key, ym, next);
     setData(next); setEditMode(false); setComment(""); setSaving(false);
+    notify({ recipient: salon.key, kind: "salary", title: "ТМ вніс корективи у вашу ЗП", body: monthLabel(ym), actor: "tm", link: "salary" });
   };
   const approveToManager = async () => {
     const next = { ...data, tmApproved: true, tmApprovedAt: new Date().toISOString() };
@@ -2042,7 +2090,7 @@ function SalonDetail({ salon, reviewer, onBack }) {
         </select>
       </div>
 
-      {loading ? <div className="loading">Завантаження…</div> : (
+      {loading || !calc ? <div className="loading">Завантаження…</div> : (
         <>
           <div className="status-line">
             Статус: {data.status === "submitted" ? "подано на погодження" : data.status === "corrected" ? "внесено корективи" : "салон ще не подав дані"}
@@ -2104,11 +2152,12 @@ function SalonReviewPanel({ tmKey, reviewer }) {
     let active = true;
     setRows(null);
     (async () => {
+      const datas = await Promise.all(salons.map((s) => loadSmData(s.key, ym)));
+      const calcs = salons.length
+        ? await calcSmBatch(salons.map((s, i) => ({ data: datas[i], salonKey: s.key, ym })))
+        : [];
       const out = {};
-      for (const s of salons) {
-        const d = await loadSmData(s.key, ym);
-        out[s.key] = { data: d, total: calcSmAll(d, { ym, area: s.area }).total };
-      }
+      salons.forEach((s, i) => { out[s.key] = { data: datas[i], total: calcs[i].total }; });
       if (active) setRows(out);
     })();
     return () => { active = false; };
@@ -2162,7 +2211,7 @@ async function tmGrandTotal(tmKey, ym) {
     loadData(tmKey, ym), loadAdj(tmKey, ym), loadGrade(tmKey, qKey),
     isLast ? loadQBonus(tmKey, qKey) : Promise.resolve({ bonus41: 0, bonus42: 0 }),
   ]);
-  const calc = calcAll(d, g, tmKey, ym);
+  const calc = await calcTm(d, g, tmKey, ym);
   const total = calc.floored + (isLast ? (qb.bonus41 + qb.bonus42) : 0) + (a.amount || 0) - (a.advance || 0);
   return { data: d, total, status: d.status, paymentStatus: d.paymentStatus };
 }
@@ -2185,15 +2234,13 @@ function ConsolidationPanel({ role }) {
         const r = await tmGrandTotal(t.key, ym);
         tmRows.push({ kind: "tm", key: t.key, name: t.name, tm: null, ...r });
       }
-      const smRows = [];
-      for (const s of SALONS) {
-        const d = await loadSmData(s.key, ym);
-        smRows.push({
-          kind: "sm", key: s.key, name: salonLabel(s), tm: salonTmOn(s.key, ym),
-          data: d, total: calcSmAll(d, { ym, area: s.area }).total,
-          status: d.status, paymentStatus: d.paymentStatus, tmApproved: d.tmApproved,
-        });
-      }
+      const smDatas = await Promise.all(SALONS.map((s) => loadSmData(s.key, ym)));
+      const smCalcs = await calcSmBatch(SALONS.map((s, i) => ({ data: smDatas[i], salonKey: s.key, ym })));
+      const smRows = SALONS.map((s, i) => ({
+        kind: "sm", key: s.key, name: salonLabel(s), tm: salonTmOn(s.key, ym),
+        data: smDatas[i], total: smCalcs[i].total,
+        status: smDatas[i].status, paymentStatus: smDatas[i].paymentStatus, tmApproved: smDatas[i].tmApproved,
+      }));
       if (active) setRows([...tmRows, ...smRows]);
     })();
     return () => { active = false; };
@@ -2206,6 +2253,13 @@ function ConsolidationPanel({ role }) {
     } else {
       const d = await loadSmData(row.key, ym);
       await saveSmData(row.key, ym, { ...d, paymentStatus: status, paymentStatusAt: new Date().toISOString() });
+    }
+    if (status === "to_pay" || status === "paid") {
+      notify({
+        recipient: row.key, kind: "salary",
+        title: status === "to_pay" ? "ЗП призначено до виплати" : "ЗП виплачено",
+        body: monthLabel(ym), actor: role === "accountant" ? "accountant" : "manager", link: "salary",
+      });
     }
     setReload((n) => n + 1);
   };
@@ -2521,118 +2575,261 @@ function useMyTasks() {
   return [tasks, reload];
 }
 
+/* стан індикатора-кружечка праворуч на картці */
+function dotState(t) {
+  if (t.status === "done") return "dot-done";                 // суцільний зелений
+  const seenByAssignee = !!(t.seen || {})[t.assignee];
+  if (!seenByAssignee) return "dot-unseen";                   // червоний — не переглянуто
+  if (t.status === "in_progress") return "dot-progress";      // блимає — в роботі
+  return "dot-open";                                          // сірий — очікує
+}
+const dotTitle = {
+  "dot-done": "Виконано",
+  "dot-unseen": "Виконавець ще не переглянув",
+  "dot-progress": "В роботі",
+  "dot-open": "Очікує",
+};
+
 function TaskCard({ t, cabKey, onStatus, onDelete }) {
   const mine = t.assignee === cabKey;
   const owner = t.created_by === cabKey;
+  const [open, setOpen] = useState(false);
+  const [doneMode, setDoneMode] = useState(false);
+  const [comment, setComment] = useState("");
+  const ds = dotState(t);
+
+  const finish = async () => {
+    await onStatus(t.id, "done", comment.trim() || undefined);
+    setDoneMode(false); setComment("");
+  };
+
   return (
-    <div className={`task-card ${isOverdue(t) ? "task-overdue" : ""} ${t.status === "done" ? "task-card-done" : ""}`}>
-      <div className="task-top">
-        <span className={`badge task-badge task-${t.status}`}>{TASK_STATUS[t.status]}</span>
+    <div className={`task-card ${isOverdue(t) ? "task-overdue" : ""} ${t.status === "done" ? "task-card-done" : ""} ${open ? "task-card-open" : ""}`}>
+      <button className="task-card-main" onClick={() => setOpen((v) => !v)}>
+        {t.priority && <Star size={13} className="task-star" fill="currentColor" />}
         <span className="task-title">{t.title}</span>
-      </div>
-      {t.description && <p className="task-desc">{t.description}</p>}
-      <div className="task-meta">
-        <span>Кому: <b>{cabName(t.assignee)}</b></span>
-        <span>Від: {cabName(t.created_by)}</span>
-        {t.due_date && <span className={isOverdue(t) ? "task-due-over" : ""}>до {dueLabel(t.due_date)}</span>}
-      </div>
-      <div className="task-actions">
-        {mine && t.status === "open" && (
-          <button className="btn-secondary small" onClick={() => onStatus(t.id, "in_progress")}>Взяти в роботу</button>
-        )}
-        {mine && t.status !== "done" && (
-          <button className="btn-primary small" onClick={() => onStatus(t.id, "done")}>Виконано</button>
-        )}
-        {(owner || mine) && t.status === "done" && (
-          <button className="btn-secondary small" onClick={() => onStatus(t.id, "open")}>Повернути</button>
-        )}
-        {owner && (
-          <button className="btn-secondary small" onClick={() => onDelete(t.id)}>Видалити</button>
-        )}
-      </div>
+        <span className="task-card-sub">
+          {mine ? `від ${cabName(t.created_by)}` : `кому ${cabName(t.assignee)}`}
+          {t.due_date && <> · <span className={isOverdue(t) ? "task-due-over" : ""}>до {dueLabel(t.due_date)}</span></>}
+        </span>
+        <span className={`task-dot ${ds}`} title={dotTitle[ds]} />
+      </button>
+
+      {open && (
+        <div className="task-card-detail">
+          {t.description && <p className="task-desc">{t.description}</p>}
+          <div className="task-meta">
+            <span>Кому: <b>{cabName(t.assignee)}</b></span>
+            <span>Від: {cabName(t.created_by)}</span>
+            <span className={`task-dot-legend ${ds}`}>{dotTitle[ds]}</span>
+          </div>
+          {t.comment && <p className="task-comment">💬 {t.comment}</p>}
+
+          {doneMode ? (
+            <div className="task-done-form">
+              <textarea rows={2} placeholder="Коментар до виконання (необовʼязково)"
+                value={comment} onChange={(e) => setComment(e.target.value)} />
+              <div className="task-actions">
+                <button className="btn-primary small" onClick={finish}>Підтвердити</button>
+                <button className="btn-secondary small" onClick={() => setDoneMode(false)}>Скасувати</button>
+              </div>
+            </div>
+          ) : (
+            <div className="task-actions">
+              {mine && t.status === "open" && (
+                <button className="btn-secondary small" onClick={() => onStatus(t.id, "in_progress")}>Взяти в роботу</button>
+              )}
+              {mine && t.status !== "done" && (
+                <button className="btn-primary small" onClick={() => setDoneMode(true)}>Виконано</button>
+              )}
+              {(owner || mine) && t.status === "done" && (
+                <button className="btn-secondary small" onClick={() => onStatus(t.id, "open")}>Повернути</button>
+              )}
+              {owner && (
+                <button className="btn-danger small" onClick={() => { if (confirm("Видалити задачу?")) onDelete(t.id); }}>
+                  <Trash2 size={13} /> Видалити
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+/* ієрархічний вибір «кому» через галочки */
+const TIER_LABEL = { head: "Керівництво", tm: "Територіальні менеджери", sm: "Салони", office: "Офіс" };
+function AssigneePicker({ cab, selected, setSelected }) {
+  const allowed = useMemo(
+    () => PARTICIPANTS.filter((p) => p.key !== cab.key && canAssign(cab.type, cab.key, p.key)),
+    [cab],
+  );
+  const allowSelf = canAssign(cab.type, cab.key, cab.key);
+  const rows = allowSelf
+    ? [{ key: cab.key, label: "Собі", tier: "self" }, ...allowed]
+    : allowed;
+
+  const toggle = (key) => setSelected((s) => (s.includes(key) ? s.filter((k) => k !== key) : [...s, key]));
+  const groupKeys = (tier) => rows.filter((r) => r.tier === tier).map((r) => r.key);
+  const setGroup = (tier, on) => {
+    const g = groupKeys(tier);
+    setSelected((s) => (on ? [...new Set([...s, ...g])] : s.filter((k) => !g.includes(k))));
+  };
+  const allKeys = rows.map((r) => r.key);
+  const allOn = allKeys.length > 0 && allKeys.every((k) => selected.includes(k));
+
+  const tiers = ["self", "head", "tm", "sm", "office"].filter((tr) => rows.some((r) => r.tier === tr));
+
+  return (
+    <div className="assignee-picker">
+      <label className="assignee-all">
+        <input type="checkbox" checked={allOn}
+          onChange={(e) => setSelected(e.target.checked ? allKeys : [])} />
+        <b>Поставити для всіх</b>
+      </label>
+      {tiers.map((tier) => {
+        const g = groupKeys(tier);
+        const gOn = g.length > 0 && g.every((k) => selected.includes(k));
+        return (
+          <div className="assignee-group" key={tier}>
+            {tier !== "self" && (
+              <label className="assignee-group-head">
+                <input type="checkbox" checked={gOn} onChange={(e) => setGroup(tier, e.target.checked)} />
+                <span>{TIER_LABEL[tier]}</span>
+              </label>
+            )}
+            {rows.filter((r) => r.tier === tier).map((r) => (
+              <label className="assignee-row" key={r.key}>
+                <input type="checkbox" checked={selected.includes(r.key)} onChange={() => toggle(r.key)} />
+                <span>{r.label}</span>
+              </label>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskCreateModal({ cab, onClose, onCreated }) {
+  const [title, setTitle] = useState("");
+  const [desc, setDesc] = useState("");
+  const [due, setDue] = useState("");
+  const [priority, setPriority] = useState(false);
+  const [selected, setSelected] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    if (!title.trim() || selected.length === 0) return;
+    setBusy(true); setErr("");
+    try {
+      await createTasks({
+        title, description: desc, assignees: selected,
+        due_date: due, priority, created_by: cab.key,
+      });
+      pushToast({
+        title: selected.length === 1 ? `Задачу призначено: ${cabName(selected[0])}` : `Задачу призначено (${selected.length})`,
+        body: title.trim(),
+      });
+      onCreated();
+      onClose();
+    } catch (e) {
+      setErr(e.message || "Не вдалося створити задачу");
+      setBusy(false);
+    }
+  };
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Нова задача</h3>
+          <button className="modal-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <input className="task-input" placeholder="Що потрібно зробити" value={title}
+            onChange={(e) => setTitle(e.target.value)} autoFocus />
+          <textarea className="task-input" rows={3} placeholder="Деталі (необовʼязково)"
+            value={desc} onChange={(e) => setDesc(e.target.value)} />
+          <div className="task-modal-row">
+            <label className="over-field"><span>Дедлайн</span>
+              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+            </label>
+            <label className="task-priority-toggle">
+              <input type="checkbox" checked={priority} onChange={(e) => setPriority(e.target.checked)} />
+              <Star size={14} /> Пріоритетна
+            </label>
+          </div>
+          <div className="task-modal-label">Кому поставити</div>
+          <AssigneePicker cab={cab} selected={selected} setSelected={setSelected} />
+          {err && <p className="form-err">{err}</p>}
+        </div>
+        <div className="modal-foot">
+          <span className="task-modal-count">{selected.length ? `Обрано: ${selected.length}` : "Нікого не обрано"}</span>
+          <button className="btn-primary" onClick={submit} disabled={busy || !title.trim() || !selected.length}>
+            {busy ? "…" : "Поставити задачу"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
 function TasksModule({ cab }) {
   const [tasks, reload] = useMyTasks();
-  const [showForm, setShowForm] = useState(false);
-  const [title, setTitle] = useState("");
-  const [desc, setDesc] = useState("");
-  const [assignee, setAssignee] = useState("");
-  const [due, setDue] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const [showDone, setShowDone] = useState(false);
+  const [onlyPriority, setOnlyPriority] = useState(false);
 
-  const canCreate = cab.type === "manager" || cab.type === "tm";
-  const assigneeOptions = useMemo(() => {
-    if (cab.type === "manager") {
-      return [
-        ...TMS.map((t) => ({ value: t.key, label: `ТМ ${t.name}` })),
-        ...SALONS.map((s) => ({ value: s.key, label: salonLabel(s) })),
-      ];
-    }
-    if (cab.type === "tm") {
-      return [
-        { value: cab.key, label: "Собі" },
-        ...salonsOfTm(cab.tmKey).map((s) => ({ value: s.key, label: salonLabel(s) })),
-      ];
-    }
-    return [];
-  }, [cab]);
+  useEffect(() => {
+    if (tasks && tasks.length) markSeen(tasks, cab.key).catch(() => {});
+  }, [tasks, cab.key]);
 
-  useEffect(() => { if (!assignee && assigneeOptions.length) setAssignee(assigneeOptions[0].value); }, [assigneeOptions, assignee]);
-
-  const submit = async () => {
-    if (!title.trim() || !assignee) return;
-    setBusy(true);
-    try {
-      await createTask({ title, description: desc, assignee, due_date: due, created_by: cab.key });
-      setTitle(""); setDesc(""); setDue(""); setShowForm(false);
-      reload();
-    } catch (e) { console.error(e); }
-    setBusy(false);
+  const onStatus = async (id, s, comment) => {
+    const t = tasks?.find((x) => x.id === id);
+    await setTaskStatus(id, s, comment);
+    const msg = s === "in_progress" ? "Взято в роботу" : s === "done" ? "Задачу виконано" : "Задачу повернено";
+    pushToast({ title: msg, body: t?.title });
+    reload();
   };
-  const onStatus = async (id, s) => { await setTaskStatus(id, s); reload(); };
-  const onDelete = async (id) => { await deleteTask(id); reload(); };
+  const onDelete = async (id) => {
+    try { await deleteTask(id); reload(); }
+    catch (e) { alert("Не вдалося видалити: " + (e.message || e)); }
+  };
 
   if (tasks === null) return <div className="loading">Завантаження…</div>;
-  const active = tasks.filter((t) => t.status !== "done");
-  const done = tasks.filter((t) => t.status === "done");
+
+  const visible = onlyPriority ? tasks.filter((t) => t.priority) : tasks;
+  const active = visible.filter((t) => t.status !== "done");
+  const done = visible.filter((t) => t.status === "done");
+
+  const inWork = tasks.filter((t) => t.status === "in_progress").length;
+  const unfinished = tasks.filter((t) => t.status !== "done").length;
+  const unseen = tasks.filter((t) => t.assignee === cab.key && t.status !== "done" && !(t.seen || {})[cab.key]).length;
 
   return (
     <div className="tasks-mod">
       <div className="tasks-head">
         <h3 className="ov-h">Задачі</h3>
-        {canCreate && (
-          <button className="btn-primary small" onClick={() => setShowForm((v) => !v)}>
-            {showForm ? "Згорнути" : "Нова задача"}
-          </button>
-        )}
+        <button className="btn-primary small" onClick={() => setShowModal(true)}>
+          <Plus size={14} /> Нова задача
+        </button>
       </div>
 
-      {showForm && canCreate && (
-        <div className="task-form">
-          <input className="task-input" placeholder="Що зробити" value={title} onChange={(e) => setTitle(e.target.value)} />
-          <textarea className="task-input" rows={2} placeholder="Деталі (необовʼязково)" value={desc} onChange={(e) => setDesc(e.target.value)} />
-          <div className="task-form-row">
-            <label className="over-field"><span>Кому</span>
-              <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
-                {assigneeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </label>
-            <label className="over-field"><span>Дедлайн</span>
-              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
-            </label>
-          </div>
-          <button className="btn-primary" onClick={submit} disabled={busy || !title.trim()}>
-            {busy ? "…" : "Поставити задачу"}
-          </button>
-        </div>
-      )}
+      <div className="tasks-dash">
+        <span><b>{inWork}</b> в роботі</span>
+        <span><b>{unfinished}</b> невиконані</span>
+        {unseen > 0 && <span className="tasks-dash-alert"><b>{unseen}</b> нових для вас</span>}
+        <button className={`tasks-filter ${onlyPriority ? "on" : ""}`} onClick={() => setOnlyPriority((v) => !v)}>
+          <Star size={13} /> Тільки пріоритетні
+        </button>
+      </div>
 
       {active.length === 0 ? (
-        <div className="admin-empty">Активних задач немає.</div>
+        <div className="admin-empty">{onlyPriority ? "Пріоритетних задач немає." : "Активних задач немає."}</div>
       ) : (
         <div className="task-list">
           {active.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} />)}
@@ -2651,17 +2848,19 @@ function TasksModule({ cab }) {
           )}
         </>
       )}
+
+      {showModal && <TaskCreateModal cab={cab} onClose={() => setShowModal(false)} onCreated={reload} />}
     </div>
   );
 }
 
-function CabinetShell({ title, onExit, onLogout, modules }) {
+function CabinetShell({ title, onExit, onLogout, modules, cabKey }) {
   const items = modules.filter(Boolean);
   const [active, setActive] = useState(items[0].key);
   const mod = items.find((m) => m.key === active) || items[0];
   return (
     <div className="view cab-shell">
-      <TopBar title={title} onBack={onExit} onLogout={onLogout} />
+      <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} />
       <div className="cab-layout">
         <nav className="cab-side">
           {items.map((m) => (
@@ -2694,7 +2893,7 @@ function TmOverview({ tmKey }) {
         const sd = await loadSmData(sl.key, ym);
         if (sd.status === "submitted" || sd.status === "corrected") submitted += 1;
       }
-      const calc = calcAll(d, g, tmKey, ym);
+      const calc = await calcTm(d, g, tmKey, ym);
       if (active) setS({ status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct, submitted, salonTotal: salons.length, dl: deadlineInfo(ym) });
     })();
     return () => { active = false; };
@@ -2726,9 +2925,9 @@ function SmOverview({ salon }) {
   useEffect(() => {
     let active = true;
     const ym = nowYm();
-    loadSmData(salon.key, ym).then((d) => {
+    loadSmData(salon.key, ym).then(async (d) => {
+      const calc = await calcSm(d, salon.key, ym);
       if (!active) return;
-      const calc = calcSmAll(d, { ym, area: salon.area });
       setS({ status: d.status, total: calc.total, category: calc.category, dl: deadlineInfo(ym) });
     });
     return () => { active = false; };
@@ -2768,14 +2967,14 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <ModuleStub name="Безнальні рахунки" /> },
     isAdmin ? { key: "admin", label: "Адміністрування", icon: <User size={16} />, divider: true, render: () => <AdminPanel /> } : null,
   ];
-  return <CabinetShell title={`ТМ · ${tm.name}`} onExit={onExit} onLogout={onLogout} modules={modules} />;
+  return <CabinetShell title={`ТМ · ${tm.name}`} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={tmKey} />;
 }
 
 function ManagerCabinet({ onExit, onLogout }) {
   const [tab, setTab] = useState("byTm");
   return (
     <div className="view">
-      <TopBar title={MANAGER.name} onBack={onExit} onLogout={onLogout} />
+      <TopBar title={MANAGER.name} onBack={onExit} onLogout={onLogout} cabKey="manager" />
       <div className="cab-nav">
         <button className={tab === "byTm" ? "active" : ""} onClick={() => setTab("byTm")}><Users size={14} /> По ТМ</button>
         <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
@@ -2791,7 +2990,7 @@ function ManagerCabinet({ onExit, onLogout }) {
 function AccountantCabinet({ onExit, onLogout }) {
   return (
     <div className="view">
-      <TopBar title={ACCOUNTANT.name} onBack={onExit} onLogout={onLogout} />
+      <TopBar title={ACCOUNTANT.name} onBack={onExit} onLogout={onLogout} cabKey="accountant" />
       <div className="cab-nav"><button className="active"><Wallet size={14} /> Зведення ЗП</button></div>
       <ConsolidationPanel role="accountant" />
     </div>
@@ -2803,14 +3002,14 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
   const modules = [
     { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
     { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
-    { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm" }} /> },
+    { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ModuleStub name="Графік змін" /> },
     { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
     { key: "reports", label: "Звіти", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
     { key: "standards", label: "Стандарти й навчання", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <ModuleStub name="Безнальні рахунки" /> },
   ];
-  return <CabinetShell title={`Салон · ${salonLabel(salon)}`} onExit={onExit} onLogout={onLogout} modules={modules} />;
+  return <CabinetShell title={`Салон · ${salonLabel(salon)}`} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={salonKey} />;
 }
 
 function OfficeCabinet({ cabKey, onExit, onLogout }) {
@@ -2821,7 +3020,7 @@ function OfficeCabinet({ cabKey, onExit, onLogout }) {
   if (!caps) {
     return (
       <div className="view">
-        <TopBar title={person?.name || "Офіс"} onBack={onExit} onLogout={onLogout} />
+        <TopBar title={person?.name || "Офіс"} onBack={onExit} onLogout={onLogout} cabKey={cabKey} />
         <div className="loading">Завантаження…</div>
       </div>
     );
@@ -2839,7 +3038,7 @@ function OfficeCabinet({ cabKey, onExit, onLogout }) {
       : null,
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <ModuleStub name="Безнальні рахунки" /> },
   ];
-  return <CabinetShell title={person?.name || "Офіс"} onExit={onExit} onLogout={onLogout} modules={modules} />;
+  return <CabinetShell title={person?.name || "Офіс"} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={cabKey} />;
 }
 
 function CabinetRouter({ cabinet, onExit, onLogout }) {
@@ -2970,6 +3169,7 @@ const CSS = `
 .field-input-wrap{display:flex;align-items:center;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;padding:7px 11px;transition:border-color .14s var(--ease),box-shadow .14s var(--ease);}
 .field-input-wrap:focus-within{border-color:var(--gold);box-shadow:0 0 0 3px rgba(190,138,46,.16);}
 .field-input{border:none;background:none;font-family:'IBM Plex Mono',monospace;font-size:13.5px;color:var(--ink);width:100%;outline:none;}
+.field-input::placeholder,.salon-pct-input::placeholder,.adj-amount::placeholder{color:var(--muted);opacity:.4;}
 .field-value{border:1px solid var(--line);border-radius:var(--radius-sm);padding:7px 11px;font-family:'IBM Plex Mono',monospace;font-size:13.5px;color:var(--ink-soft);background:var(--surface-alt);}
 .field-suffix{font-size:11px;color:var(--muted);margin-left:6px;font-family:'IBM Plex Mono',monospace;}
 .check-field{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink);cursor:pointer;}
@@ -3284,8 +3484,35 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .resume-bar b{color:var(--gold-bright);}
 .resume-actions{display:flex;gap:8px;}
 .resume-bar .btn-primary.small,.resume-bar .btn-secondary.small{padding:7px 14px;font-size:12px;}
-.topbar-logout{margin-left:auto;background:rgba(247,244,234,.06);border:1px solid var(--line-dark);color:var(--on-dark-2);font-size:12px;padding:7px 13px;border-radius:999px;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease);}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+.topbar-logout{background:rgba(247,244,234,.06);border:1px solid var(--line-dark);color:var(--on-dark-2);font-size:12px;padding:7px 13px;border-radius:999px;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease);}
 .topbar-logout:hover{color:var(--negative-bright);border-color:rgba(224,145,127,.4);}
+
+/* ---------- сповіщення ---------- */
+.notif-wrap{position:relative;}
+.notif-bell{position:relative;background:rgba(247,244,234,.05);border:1px solid var(--line-dark);color:var(--on-dark-2);width:36px;height:36px;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease);}
+.notif-bell:hover{color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.notif-dot{position:absolute;top:-3px;right:-3px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--negative-bright);color:#1a0f0d;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg-2);}
+.notif-backdrop{position:fixed;inset:0;z-index:60;}
+.notif-panel{position:absolute;top:46px;right:0;width:min(340px,86vw);max-height:70vh;overflow:auto;z-index:61;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 24px 60px -18px rgba(0,0,0,.55);}
+.notif-panel-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--line);font-family:'Fraunces',serif;font-size:15px;color:var(--ink);font-weight:600;}
+.notif-clear{background:none;border:none;color:var(--gold);font-size:12px;cursor:pointer;font-family:inherit;}
+.notif-list{display:flex;flex-direction:column;}
+.notif-empty{padding:26px 15px;text-align:center;color:var(--muted);font-size:13px;}
+.notif-item{display:flex;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line);align-items:flex-start;}
+.notif-item:last-child{border-bottom:none;}
+.notif-item.notif-unread{background:rgba(190,138,46,.07);}
+.notif-ic{color:var(--gold);flex-shrink:0;margin-top:1px;}
+.notif-body{min-width:0;}
+.notif-body b{display:block;font-size:13px;color:var(--ink);font-weight:600;}
+.notif-body p{margin:2px 0 0;font-size:12.5px;color:var(--ink-soft);}
+.notif-body time{font-size:11px;color:var(--muted);}
+.toast-stack{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:10px;align-items:center;pointer-events:none;width:max-content;max-width:92vw;}
+.toast{display:flex;align-items:center;gap:11px;background:#1b2530;color:#f4f1ea;border:1px solid rgba(220,169,74,.45);border-left:3px solid var(--gold-bright);border-radius:12px;padding:13px 20px;font-size:13.5px;line-height:1.35;box-shadow:0 20px 44px -12px rgba(0,0,0,.55);animation:toastIn .34s cubic-bezier(.2,.9,.3,1) both;}
+.toast b{font-weight:700;display:block;}
+.toast span{color:#c9c2b2;font-size:12.5px;}
+.toast svg{color:var(--gold-bright);flex-shrink:0;}
+@keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(.96);}to{opacity:1;transform:translateY(0) scale(1);}}
 
 /* ---------- адміністрування ---------- */
 .admin-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--sh-2);}
@@ -3321,33 +3548,86 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .admin-log-detail{color:var(--muted);}
 
 /* ---------- модуль «Задачі» ---------- */
+/* індикатор перерахунку — у шапці біля дзвіночка, завжди в потоці (без стрибків) */
+.calc-busy-dot{width:14px;height:14px;flex:0 0 14px;border-radius:50%;border:2px solid var(--line-dark);border-top-color:var(--gold-bright);opacity:0;transition:opacity .2s var(--ease);}
+.calc-busy-dot.on{opacity:1;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
 .tasks-mod{animation:fadeIn .28s ease both;}
 .tasks-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;}
 .tasks-head .ov-h{margin:0;}
 .btn-primary.small,.btn-secondary.small{padding:7px 13px;font-size:12px;}
-.task-form{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px;box-shadow:var(--sh-2);display:flex;flex-direction:column;gap:10px;}
 .task-input{width:100%;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:13px;background:#fff;resize:vertical;}
-.task-form-row{display:flex;flex-wrap:wrap;gap:12px;}
-.task-form-row .over-field{max-width:none;flex:1 1 160px;margin-bottom:0;}
-.task-form-row select,.task-form-row input{width:100%;}
-.task-list{display:flex;flex-direction:column;gap:10px;}
-.task-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:14px 16px;box-shadow:var(--sh-1);}
-.task-card.task-overdue{border-color:rgba(160,58,42,.5);box-shadow:0 0 0 2px rgba(160,58,42,.08);}
-.task-card.task-card-done{opacity:.66;}
-.task-top{display:flex;align-items:baseline;gap:10px;}
-.task-title{font-weight:600;font-size:13.5px;color:var(--ink);}
-.task-badge{flex-shrink:0;}
-.task-open{background:rgba(220,169,74,.16);color:var(--gold-ink);}
-.task-in_progress{background:rgba(120,150,200,.16);color:#3a5a8a;}
-.task-done{background:rgba(60,107,73,.16);color:var(--positive);}
-.task-desc{font-size:12px;color:var(--ink-soft);margin:7px 0 0;line-height:1.45;}
-.task-meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:9px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
-.task-meta b{color:var(--ink-soft);font-weight:600;}
+
+/* міні-дашборд + фільтр */
+.tasks-dash{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-bottom:14px;padding:10px 14px;background:rgba(247,244,234,.03);border:1px solid var(--line-dark);border-radius:var(--radius-md);font-size:12px;color:var(--on-dark-2);}
+.tasks-dash b{color:var(--on-dark);font-size:14px;font-weight:700;margin-right:3px;}
+.tasks-dash-alert{color:var(--gold-bright);}
+.tasks-filter{margin-left:auto;display:flex;align-items:center;gap:5px;background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:6px 12px;font-size:11.5px;font-family:inherit;cursor:pointer;transition:all .14s var(--ease);}
+.tasks-filter.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+
+/* компактні картки */
+.task-list{display:flex;flex-direction:column;gap:7px;}
+.task-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:var(--sh-1);overflow:hidden;color:var(--ink);}
+.task-card.task-overdue{border-color:rgba(160,58,42,.5);}
+.task-card.task-card-done{opacity:.6;}
+.task-card-main{width:100%;display:flex;align-items:center;gap:10px;padding:11px 14px;background:none;border:none;font-family:inherit;text-align:left;cursor:pointer;}
+.task-card-main:hover{background:rgba(190,138,46,.05);}
+.task-star{color:var(--gold);flex-shrink:0;}
+.task-card-main .task-title{font-weight:600;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;}
+.task-card-sub{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;white-space:nowrap;margin-left:auto;flex-shrink:0;}
 .task-due-over{color:var(--negative);font-weight:600;}
-.task-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px;}
-.task-done-toggle{background:none;border:none;color:var(--on-dark-2);font-size:12px;font-weight:600;cursor:pointer;padding:12px 2px 6px;font-family:inherit;}
+.task-dot{width:10px;height:10px;border-radius:999px;flex-shrink:0;background:var(--muted);}
+.task-dot.dot-open{background:#b9b1a0;}
+.task-dot.dot-progress{background:var(--gold-bright);animation:dotPulse 1.4s ease-in-out infinite;}
+.task-dot.dot-done{background:var(--positive);}
+.task-dot.dot-unseen{background:var(--negative-bright);animation:dotPulse 1s ease-in-out infinite;}
+@keyframes dotPulse{0%,100%{box-shadow:0 0 0 0 currentColor;opacity:1;}50%{box-shadow:0 0 0 4px transparent;opacity:.55;}}
+.task-card-detail{padding:2px 14px 13px;border-top:1px solid var(--line);}
+.task-desc{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.5;}
+.task-meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;align-items:center;}
+.task-meta b{color:var(--ink-soft);font-weight:600;}
+.task-dot-legend{padding-left:14px;position:relative;}
+.task-dot-legend::before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:999px;}
+.task-dot-legend.dot-open::before{background:#b9b1a0;}
+.task-dot-legend.dot-progress::before{background:var(--gold-bright);}
+.task-dot-legend.dot-done::before{background:var(--positive);}
+.task-dot-legend.dot-unseen::before{background:var(--negative-bright);}
+.task-comment{margin:9px 0 0;font-size:12px;color:var(--ink-soft);background:rgba(190,138,46,.07);border-radius:var(--radius-sm);padding:7px 10px;}
+.task-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px;}
+.task-done-form{margin-top:12px;display:flex;flex-direction:column;gap:8px;}
+.task-done-form textarea{width:100%;padding:9px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:12.5px;resize:vertical;}
+.task-done-toggle{background:none;border:none;color:var(--on-dark-2);font-size:12px;font-weight:600;cursor:pointer;padding:14px 2px 6px;font-family:inherit;}
 .task-done-toggle:hover{color:var(--on-dark);}
-.cab-content .task-card,.cab-content .task-form{color:var(--ink);}
+.btn-danger.small{background:rgba(160,58,42,.12);border:1px solid rgba(224,145,127,.3);color:var(--negative);border-radius:var(--radius-sm);padding:7px 13px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .14s var(--ease);}
+.btn-danger.small:hover{background:rgba(160,58,42,.2);}
+
+/* модалка створення задачі */
+.modal-overlay{position:fixed;inset:0;z-index:200;background:rgba(12,10,7,.55);display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px;overflow:auto;backdrop-filter:blur(2px);}
+.modal{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 40px 100px -24px rgba(0,0,0,.6);width:min(520px,100%);color:var(--ink);animation:fadeIn .22s ease both;}
+.task-modal{display:flex;flex-direction:column;max-height:90vh;}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line);}
+.modal-head h3{margin:0;font-family:'Fraunces',serif;font-size:18px;font-weight:600;color:var(--ink);}
+.modal-x{background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;border-radius:var(--radius-sm);}
+.modal-x:hover{color:var(--ink);background:rgba(0,0,0,.05);}
+.modal-body{padding:18px 20px;overflow:auto;display:flex;flex-direction:column;gap:12px;}
+.modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-top:1px solid var(--line);}
+.task-modal-row{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;}
+.task-modal-row .over-field{max-width:none;flex:1 1 150px;margin-bottom:0;}
+.task-modal-row .over-field input{width:100%;}
+.task-priority-toggle{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);cursor:pointer;padding-bottom:9px;}
+.task-priority-toggle svg{color:var(--gold);}
+.task-modal-label{font-size:12px;font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.04em;margin-top:2px;}
+.task-modal-count{font-size:12px;color:var(--muted);}
+.form-err{color:var(--negative);font-size:12.5px;margin:0;}
+
+/* ієрархічний вибір «кому» */
+.assignee-picker{border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:10px 12px;max-height:280px;overflow:auto;display:flex;flex-direction:column;gap:4px;background:#fff;}
+.assignee-all{display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid var(--line);margin-bottom:4px;font-size:13px;color:var(--ink);cursor:pointer;}
+.assignee-group{display:flex;flex-direction:column;gap:2px;}
+.assignee-group-head{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);cursor:pointer;margin-top:4px;}
+.assignee-row{display:flex;align-items:center;gap:8px;padding:5px 4px 5px 18px;font-size:13px;color:var(--ink-soft);cursor:pointer;border-radius:var(--radius-sm);}
+.assignee-row:hover{background:rgba(190,138,46,.06);}
+.assignee-picker input[type=checkbox]{width:15px;height:15px;accent-color:var(--gold);cursor:pointer;}
 
 /* ---------- навігація кабінету (вкладки — керівник/бухгалтер) ---------- */
 .cab-nav{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line-dark);}
@@ -3427,6 +3707,7 @@ export default function App() {
       sessionStorage.setItem(ALIVE_KEY, "1");
       if (cab) {
         await initAfterAuth();
+        loadCalcRefs();
         if (active) { setSession(cab); if (keep) setRemembered(cab); }
       }
       if (active) setReady(true);
@@ -3440,6 +3721,7 @@ export default function App() {
     localStorage.setItem(KEEP_KEY, remember ? "1" : "0");
     sessionStorage.setItem(ALIVE_KEY, "1");
     setRemembered(remember ? cab : null);
+    loadCalcRefs();
   };
   const goHome = () => setSession(null);            // на головну, сесія Supabase лишається
   const logout = async () => { await signOutCab(); localStorage.removeItem(KEEP_KEY); setSession(null); setRemembered(null); };

@@ -102,12 +102,25 @@ export const ADMIN_KEY = "andriy";
 export const ADMIN_NAME = "Шах Андрій";
 export const isAdminCab = (cabKey) => cabKey === ADMIN_KEY;
 
-/* вхід: логін + пароль → сесія Supabase. Логін має відповідати кабінету. */
+/* Ідентичність кабінету беремо з таблиці cab_map (RLS: лише свій рядок,
+   запис — тільки service_role). НЕ з user_metadata — його користувач може
+   переписати сам через auth.updateUser і підмінити тип кабінету. */
+async function cabMapSelf() {
+  const { data, error } = await supabase
+    .from("cab_map")
+    .select("cabinet_key,cabinet_type,tm_key")
+    .maybeSingle();
+  if (error || !data) return null;
+  return data;
+}
+
+/* вхід: логін + пароль → сесія Supabase. Кабінет звіряємо з cab_map. */
 export async function verifyLogin(cabKey, login, password) {
   const email = `${String(login).trim().toLowerCase()}@${EMAIL_DOMAIN}`;
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error || !data?.user) return false;
-  if ((data.user.user_metadata || {}).cabinet_key !== cabKey) {
+  const self = await cabMapSelf();
+  if (!self || self.cabinet_key !== cabKey) {
     await supabase.auth.signOut();
     return false;
   }
@@ -118,10 +131,10 @@ export async function verifyLogin(cabKey, login, password) {
 /* поточний кабінет із активної сесії Supabase (або null) */
 export async function currentCabinet() {
   const { data } = await supabase.auth.getSession();
-  const u = data?.session?.user;
-  const m = u?.user_metadata || {};
-  if (!m.cabinet_key) return null;
-  return { key: m.cabinet_key, type: m.cabinet_type, tmKey: m.tm_key || null, label: cabName(m.cabinet_key) };
+  if (!data?.session?.user) return null;
+  const self = await cabMapSelf();
+  if (!self) return null;
+  return { key: self.cabinet_key, type: self.cabinet_type, tmKey: self.tm_key || null, label: cabName(self.cabinet_key) };
 }
 export async function signOutCab() { await supabase.auth.signOut(); }
 export function onAuthChange(cb) { return supabase.auth.onAuthStateChange((_e, s) => cb(s)); }
@@ -214,4 +227,37 @@ export function cabName(key) {
   const s = salonByKey(key);
   if (s) return salonLabel(s);
   return key;
+}
+
+export function cabType(key) {
+  if (key === "manager") return "manager";
+  if (key === "accountant") return "accountant";
+  if (OFFICE.some((o) => o.key === key)) return "office";
+  if (tmByKey(key)) return "tm";
+  if (salonByKey(key)) return "sm";
+  return "";
+}
+
+/* усі учасники проєкту, згори донизу (для вибору «кому») */
+export const PARTICIPANTS = [
+  { key: "manager", label: MANAGER.name, tier: "head" },
+  { key: "andriy", label: "Шах Андрій", tier: "tm" },
+  { key: "ivan", label: "Паньків Іван", tier: "tm" },
+  ...SALONS.map((s) => ({ key: s.key, label: salonLabel(s), tier: "sm" })),
+  { key: "accountant", label: "Бухгалтер Юлія", tier: "office" },
+  { key: "maryana", label: "Мар'яна", tier: "office" },
+  { key: "olha", label: "Ольга", tier: "office" },
+];
+
+/* чи може myKey (тип myType) поставити задачу на targetKey (клієнтське дзеркало RLS) */
+export function canAssign(myType, myKey, targetKey, ym) {
+  if (targetKey === myKey) return true;
+  const tt = cabType(targetKey);
+  if (myType === "manager" || myType === "office" || myType === "accountant") return true;
+  if (myType === "tm") return tt !== "sm" || salonTmOn(targetKey, ym) === myKey;
+  if (myType === "sm") {
+    if (["sm", "office", "accountant"].includes(tt)) return true;
+    return targetKey === salonTmOn(myKey, ym);
+  }
+  return false;
 }
