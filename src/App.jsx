@@ -60,6 +60,22 @@ const quarterMonths = (qKey) => {
   return [0, 1, 2].map((i) => `${y}-${pad(start + i)}`);
 };
 const monthLabel = (ym) => { const [y, m] = ym.split("-").map(Number); return `${MONTH_NAMES[m - 1]} ${y}`; };
+const plural = (n, one, few, many) => {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+};
+const salonWord = (n) => plural(n, "салон", "салони", "салонів");
+const recentMonths = (n = 12) => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  return Array.from({ length: n }, (_, i) => {
+    const d = new Date(y, m - i, 1);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  });
+};
 const fmt = (n) => Math.round(n || 0).toLocaleString("uk-UA") + " грн";
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString("uk-UA") : "—");
@@ -732,9 +748,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   const hasCorrections = !!data.managerComment || (data.correctionDiff && data.correctionDiff.length > 0);
 
   const months = useMemo(() => {
-    const arr = []; const d = new Date();
-    for (let i = 0; i < 12; i++) { arr.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`); d.setMonth(d.getMonth() - 1); }
-    return arr;
+    return recentMonths(12);
   }, []);
 
   return (
@@ -1127,7 +1141,7 @@ function HierarchyHome({ onPick }) {
           <div className="cab-branch" key={tm.key}>
             <CabinetCard
               tone="cab-tm" icon={<ClipboardList size={20} />}
-              name={tm.name} sub={`Територіальний менеджер · ${salonsOfTm(tm.key).length} салони`}
+              name={tm.name} sub={`Територіальний менеджер · ${salonsOfTm(tm.key).length} ${salonWord(salonsOfTm(tm.key).length)}`}
               onClick={() => onPick({ type: "tm", key: tm.key, label: tm.name })}
             />
             <div className="cab-children">
@@ -1501,9 +1515,7 @@ function SmView({ salon, embedded }) {
   const calc = useMemo(() => calcSmAll(data, { ym, area: salon.area }), [data, ym, salon.area]);
 
   const months = useMemo(() => {
-    const arr = []; const d = new Date();
-    for (let i = 0; i < 12; i++) { arr.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`); d.setMonth(d.getMonth() - 1); }
-    return arr;
+    return recentMonths(12);
   }, []);
 
   const submit = async () => {
@@ -1704,9 +1716,7 @@ function SalonReviewPanel({ tmKey, reviewer }) {
   const [openKey, setOpenKey] = useState(null);
 
   const months = useMemo(() => {
-    const arr = []; const d = new Date();
-    for (let i = 0; i < 12; i++) { arr.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`); d.setMonth(d.getMonth() - 1); }
-    return arr;
+    return recentMonths(12);
   }, []);
 
   useEffect(() => {
@@ -1782,9 +1792,7 @@ function ConsolidationPanel({ role }) {
   const [reload, setReload] = useState(0);
 
   const months = useMemo(() => {
-    const arr = []; const d = new Date();
-    for (let i = 0; i < 12; i++) { arr.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`); d.setMonth(d.getMonth() - 1); }
-    return arr;
+    return recentMonths(12);
   }, []);
 
   useEffect(() => {
