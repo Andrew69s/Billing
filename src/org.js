@@ -116,3 +116,61 @@ export async function setCredential(cabKey, next) {
   const cur = await getCredential(cabKey);
   await window.storage.set(CRED_KEY(cabKey), JSON.stringify({ ...cur, ...next }));
 }
+
+/* =========================================================
+   ВІДНОВЛЕННЯ ПАРОЛЮ
+   Адміністратор — Шах Андрій. Коли хтось запитує відновлення, генерується
+   код, який зʼявляється в кабінеті адміністратора. Адмін передає код особі,
+   вона вводить його разом із новим паролем.
+   Сам адмін відновлює свій пароль єдиним майстер-кодом.
+========================================================= */
+export const ADMIN_KEY = "andriy";
+export const ADMIN_NAME = "Шах Андрій";
+const ADMIN_MASTER_CODE = "100%23022002100%";
+const REC_KEY = (k) => `recovery:${k}`;
+
+export const isAdminCab = (cabKey) => cabKey === ADMIN_KEY;
+
+export async function requestRecovery(cabKey) {
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  await window.storage.set(REC_KEY(cabKey), JSON.stringify({ code, at: new Date().toISOString() }));
+  return code;
+}
+
+export async function getRecovery(cabKey) {
+  try {
+    const r = await window.storage.get(REC_KEY(cabKey));
+    return JSON.parse(r.value);
+  } catch { return null; }
+}
+
+export async function clearRecovery(cabKey) {
+  try { await window.storage.delete(REC_KEY(cabKey)); } catch (e) { console.error(e); }
+}
+
+export async function listRecoveryRequests() {
+  try {
+    const r = await window.storage.list("recovery:");
+    const out = [];
+    for (const key of r?.keys || []) {
+      const cabKey = key.replace("recovery:", "");
+      const rec = await getRecovery(cabKey);
+      if (rec) out.push({ cabKey, ...rec });
+    }
+    return out.sort((a, b) => (a.at < b.at ? 1 : -1));
+  } catch { return []; }
+}
+
+export async function confirmRecovery(cabKey, code, newPassword) {
+  const pass = String(newPassword || "");
+  if (pass.length < 3) return { ok: false, error: "Пароль має бути не коротшим за 3 символи" };
+  if (isAdminCab(cabKey)) {
+    if (String(code) !== ADMIN_MASTER_CODE) return { ok: false, error: "Невірний майстер-код відновлення" };
+  } else {
+    const rec = await getRecovery(cabKey);
+    if (!rec || String(code).trim() !== String(rec.code)) return { ok: false, error: "Невірний код відновлення" };
+  }
+  await setCredential(cabKey, { password: pass });
+  await clearRecovery(cabKey);
+  return { ok: true };
+}

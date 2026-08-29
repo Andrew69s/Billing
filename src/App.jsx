@@ -11,6 +11,7 @@ import {
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, tmByKey,
   ensureCredentialsSeeded, verifyLogin,
+  ADMIN_KEY, ADMIN_NAME, isAdminCab, requestRecovery, listRecoveryRequests, clearRecovery, confirmRecovery,
 } from "./org.js";
 import {
   calcSmAll, emptySmData, SM_FIELD_LABELS, SM_CATEGORIES, PLAN_BRACKETS,
@@ -1472,19 +1473,48 @@ function HierarchyHome({ onPick }) {
 /* =========================================================
    ВХІД (логін + пароль)
 ========================================================= */
-function LoginGate({ title, subtitle, onCancel, onSuccess, verify }) {
+function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
+  const [mode, setMode] = useState("login"); // login | recover
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const admin = isAdminCab(cabKey);
+  const [reqSent, setReqSent] = useState(false);
+  const [code, setCode] = useState("");
+  const [newPass, setNewPass] = useState("");
+  const [recOk, setRecOk] = useState("");
 
   const submit = async () => {
     if (!login || !password) return;
     setBusy(true);
     const ok = await verify(login, password);
     setBusy(false);
-    if (ok) onSuccess();
+    if (ok) onSuccess(remember);
     else { setError("Невірний логін або пароль"); setPassword(""); }
+  };
+
+  const doRequest = async () => {
+    setBusy(true);
+    await requestRecovery(cabKey);
+    setBusy(false);
+    setReqSent(true);
+    setRecOk("");
+  };
+  const doConfirm = async () => {
+    setBusy(true);
+    const r = await confirmRecovery(cabKey, code, newPass);
+    setBusy(false);
+    if (r.ok) {
+      setError("");
+      setRecOk("Пароль змінено. Увійдіть новим паролем.");
+      setCode(""); setNewPass("");
+      setTimeout(() => { setMode("login"); setReqSent(false); setRecOk(""); }, 1600);
+    } else {
+      setError(r.error);
+    }
   };
 
   return (
@@ -1493,31 +1523,75 @@ function LoginGate({ title, subtitle, onCancel, onSuccess, verify }) {
         <div className="pin-avatar"><LogIn size={22} /></div>
         <h1>{title}</h1>
         {subtitle && <p>{subtitle}</p>}
-        <div className="login-fields">
-          <label className="login-field">
-            <span>Логін</span>
-            <input
-              autoFocus autoComplete="username" value={login}
-              onChange={(e) => { setLogin(e.target.value); setError(""); }}
-              onKeyDown={(e) => { if (e.key === "Enter") document.getElementById("lg-pass")?.focus(); }}
-            />
-          </label>
-          <label className="login-field">
-            <span>Пароль</span>
-            <input
-              id="lg-pass" type="password" inputMode="numeric" autoComplete="current-password" value={password}
-              onChange={(e) => { setPassword(e.target.value); setError(""); }}
-              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-            />
-          </label>
-        </div>
-        <p className={`pin-error ${error ? "visible" : ""}`}>{error || " "}</p>
-        <div className="pin-actions">
-          <button className="btn-secondary" onClick={onCancel}>Назад</button>
-          <button className="btn-primary" onClick={submit} disabled={!login || !password || busy}>
-            {busy ? "Перевірка…" : "Увійти"}
-          </button>
-        </div>
+
+        {mode === "login" ? (
+          <>
+            <div className="login-fields">
+              <label className="login-field">
+                <span>Логін</span>
+                <input
+                  autoFocus autoComplete="username" value={login}
+                  onChange={(e) => { setLogin(e.target.value); setError(""); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") document.getElementById("lg-pass")?.focus(); }}
+                />
+              </label>
+              <label className="login-field">
+                <span>Пароль</span>
+                <input
+                  id="lg-pass" type="password" autoComplete="current-password" value={password}
+                  onChange={(e) => { setPassword(e.target.value); setError(""); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+                />
+              </label>
+              <label className="login-remember">
+                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+                <span>Не виходити на цьому пристрої</span>
+              </label>
+            </div>
+            <p className={`pin-error ${error || recOk ? "visible" : ""}`}>{error || recOk || " "}</p>
+            <div className="pin-actions">
+              <button className="btn-secondary" onClick={onCancel}>Назад</button>
+              <button className="btn-primary" onClick={submit} disabled={!login || !password || busy}>
+                {busy ? "Перевірка…" : "Увійти"}
+              </button>
+            </div>
+            <button className="pin-forgot" onClick={() => { setMode("recover"); setError(""); }}>Забули пароль?</button>
+          </>
+        ) : (
+          <>
+            <p className="recover-lead">
+              {admin
+                ? "Введіть майстер-код відновлення адміністратора та новий пароль."
+                : `Запросіть код — він зʼявиться в кабінеті адміністратора (${ADMIN_NAME}). Отримайте його й введіть нижче разом із новим паролем.`}
+            </p>
+            <div className="login-fields">
+              {!admin && (
+                <button className="btn-secondary" onClick={doRequest} disabled={busy || reqSent}>
+                  {reqSent ? "Код надіслано адміністратору" : busy ? "…" : "Запросити код"}
+                </button>
+              )}
+              <label className="login-field">
+                <span>{admin ? "Майстер-код" : "Код відновлення"}</span>
+                <input value={code} onChange={(e) => { setCode(e.target.value); setError(""); }} />
+              </label>
+              <label className="login-field">
+                <span>Новий пароль</span>
+                <input
+                  type="password" value={newPass}
+                  onChange={(e) => { setNewPass(e.target.value); setError(""); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") doConfirm(); }}
+                />
+              </label>
+            </div>
+            <p className={`pin-error ${error || recOk ? "visible" : ""}`}>{error || recOk || " "}</p>
+            <div className="pin-actions">
+              <button className="btn-secondary" onClick={() => { setMode("login"); setError(""); setReqSent(false); }}>До входу</button>
+              <button className="btn-primary" onClick={doConfirm} disabled={!code || !newPass || busy}>
+                {busy ? "…" : "Змінити пароль"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -2199,20 +2273,79 @@ function ConsolidationPanel({ role }) {
 }
 
 /* =========================================================
+   АДМІНІСТРУВАННЯ (кабінет Шаха Андрія) — запити на відновлення паролю
+========================================================= */
+function cabName(key) {
+  if (key === "manager") return MANAGER.name;
+  const o = OFFICE.find((x) => x.key === key);
+  if (o) return o.name;
+  const t = tmByKey(key);
+  if (t) return `ТМ ${t.name}`;
+  const s = salonByKey(key);
+  if (s) return salonLabel(s);
+  return key;
+}
+
+function AdminPanel() {
+  const [reqs, setReqs] = useState(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    listRecoveryRequests().then((r) => { if (active) setReqs(r); });
+    return () => { active = false; };
+  }, [reload]);
+
+  const dismiss = async (k) => { await clearRecovery(k); setReload((n) => n + 1); };
+
+  return (
+    <div className="embedded">
+      <div className="admin-panel">
+        <h3>Запити на відновлення паролю</h3>
+        <p className="hint">Передайте код відповідній особі. Вона введе його разом із новим паролем на екрані входу. Після зміни паролю запит зникає.</p>
+        {reqs === null ? (
+          <div className="loading">Завантаження…</div>
+        ) : reqs.length === 0 ? (
+          <div className="admin-empty">Активних запитів немає.</div>
+        ) : (
+          <div className="admin-list">
+            {reqs.map((r) => (
+              <div className="admin-req" key={r.cabKey}>
+                <div className="admin-req-info">
+                  <span className="admin-req-name">{cabName(r.cabKey)}</span>
+                  <span className="admin-req-time">запит {fmtDate(r.at)}</span>
+                </div>
+                <span className="admin-req-code">{r.code}</span>
+                <button className="btn-secondary small" onClick={() => dismiss(r.cabKey)}>Готово</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
    КАБІНЕТИ (обгортки з навігацією)
 ========================================================= */
 function TmCabinet({ tmKey, onExit }) {
   const tm = tmByKey(tmKey);
   const [tab, setTab] = useState("salary");
+  const isAdmin = tmKey === ADMIN_KEY;
   return (
     <div className="view">
       <TopBar title={`ТМ · ${tm.name}`} onBack={onExit} />
       <div className="cab-nav">
         <button className={tab === "salary" ? "active" : ""} onClick={() => setTab("salary")}><Calculator size={14} /> Розрахунок ЗП</button>
         <button className={tab === "salons" ? "active" : ""} onClick={() => setTab("salons")}><Store size={14} /> ЗП салонів</button>
+        {isAdmin && (
+          <button className={tab === "admin" ? "active" : ""} onClick={() => setTab("admin")}><User size={14} /> Адміністрування</button>
+        )}
       </div>
       {tab === "salary" && <TmView tmKey={tmKey} tmName={tm.name} embedded />}
       {tab === "salons" && <SalonReviewPanel tmKey={tmKey} reviewer="tm" />}
+      {tab === "admin" && isAdmin && <AdminPanel />}
     </div>
   );
 }
@@ -2697,6 +2830,20 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .login-field{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--on-dark-2);}
 .login-field input{padding:11px 13px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--ink);font-family:'IBM Plex Mono',monospace;font-size:14px;}
 .login-field input:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(190,138,46,.2);}
+.login-remember{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--on-dark-2);cursor:pointer;padding:2px 0;}
+.login-remember input[type=checkbox]{width:16px;height:16px;accent-color:var(--gold);cursor:pointer;flex-shrink:0;}
+.recover-lead{color:var(--on-dark-2);font-size:12.5px;line-height:1.5;margin:0 0 4px;text-align:left;}
+
+/* ---------- адміністрування ---------- */
+.admin-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--sh-2);}
+.admin-panel h3{font-family:'Fraunces',serif;font-size:18px;color:var(--ink);margin:0 0 6px;font-weight:600;}
+.admin-empty{color:var(--muted);font-size:13px;padding:20px 0;text-align:center;}
+.admin-list{display:flex;flex-direction:column;gap:9px;margin-top:14px;}
+.admin-req{display:flex;align-items:center;gap:14px;background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 15px;}
+.admin-req-info{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;}
+.admin-req-name{font-weight:700;font-size:13.5px;color:var(--ink);}
+.admin-req-time{font-size:10.5px;color:var(--muted);}
+.admin-req-code{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;letter-spacing:.12em;color:var(--gold-ink);background:linear-gradient(180deg,var(--gold-bright),var(--gold));padding:6px 14px;border-radius:8px;}
 
 /* ---------- навігація кабінету ---------- */
 .cab-nav{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line-dark);}
@@ -2729,12 +2876,30 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .consol-total-row .consol-total{font-size:15px;color:var(--gold);}
 `;
 
+const SESSION_KEY = "tmapp:session";
+const loadSession = () => {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch { return null; }
+};
+
 export default function App() {
-  const [session, setSession] = useState(null);
+  const [session, setSession] = useState(() => loadSession());
   const [pending, setPending] = useState(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => { ensureCredentialsSeeded().then(() => setReady(true)); }, []);
+
+  const enter = (cab, remember) => {
+    setSession(cab);
+    setPending(null);
+    try {
+      if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(cab));
+      else localStorage.removeItem(SESSION_KEY);
+    } catch { /* ignore */ }
+  };
+  const exit = () => {
+    setSession(null);
+    try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+  };
 
   return (
     <div className="app-root">
@@ -2746,12 +2911,13 @@ export default function App() {
         <LoginGate
           title={pending.label}
           subtitle={SUBTITLE[pending.type]}
+          cabKey={pending.key}
           onCancel={() => setPending(null)}
-          onSuccess={() => { setSession(pending); setPending(null); }}
+          onSuccess={(remember) => enter(pending, remember)}
           verify={(login, password) => verifyLogin(pending.key, login, password)}
         />
       )}
-      {ready && session && <CabinetRouter cabinet={session} onExit={() => setSession(null)} />}
+      {ready && session && <CabinetRouter cabinet={session} onExit={exit} />}
     </div>
   );
 }
