@@ -169,8 +169,15 @@ drop trigger if exists trg_notify_task_status on public.tasks;
 create trigger trg_notify_task_status after update on public.tasks
   for each row execute function public.notify_task_status();
 
--- realtime
-alter publication supabase_realtime add table public.notifications;
+-- realtime (ідемпотентно)
+do $$ begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'notifications'
+  ) then
+    alter publication supabase_realtime add table public.notifications;
+  end if;
+end $$;
 
 -- =========================================================
 --  kv_select: видимість smdata за поточним ТМ (перепризначення)
