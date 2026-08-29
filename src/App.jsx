@@ -21,6 +21,7 @@ import {
   categoryOf, normDaysOff, MANAGER_COEFS,
 } from "./smCalc.js";
 import { TM_CONDITIONS, SM_CONDITIONS } from "./conditions.js";
+import { TASK_STATUS, listTasks, createTask, setTaskStatus, deleteTask, subscribeTasks } from "./lib/tasks.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
@@ -2503,6 +2504,157 @@ function ModuleStub({ name, note }) {
   );
 }
 
+/* =========================================================
+   МОДУЛЬ «ЗАДАЧІ»
+========================================================= */
+const isOverdue = (t) => t.due_date && t.status !== "done" && new Date(t.due_date) < new Date(new Date().toDateString());
+const dueLabel = (d) => { const [, m, day] = d.split("-").map(Number); return `${day} ${MONTH_GEN[m - 1]}`; };
+
+function useMyTasks() {
+  const [tasks, setTasks] = useState(null);
+  const reload = () => listTasks().then(setTasks).catch(() => setTasks([]));
+  useEffect(() => {
+    reload();
+    const unsub = subscribeTasks(() => reload());
+    return unsub;
+  }, []);
+  return [tasks, reload];
+}
+
+function TaskCard({ t, cabKey, onStatus, onDelete }) {
+  const mine = t.assignee === cabKey;
+  const owner = t.created_by === cabKey;
+  return (
+    <div className={`task-card ${isOverdue(t) ? "task-overdue" : ""} ${t.status === "done" ? "task-card-done" : ""}`}>
+      <div className="task-top">
+        <span className={`badge task-badge task-${t.status}`}>{TASK_STATUS[t.status]}</span>
+        <span className="task-title">{t.title}</span>
+      </div>
+      {t.description && <p className="task-desc">{t.description}</p>}
+      <div className="task-meta">
+        <span>Кому: <b>{cabName(t.assignee)}</b></span>
+        <span>Від: {cabName(t.created_by)}</span>
+        {t.due_date && <span className={isOverdue(t) ? "task-due-over" : ""}>до {dueLabel(t.due_date)}</span>}
+      </div>
+      <div className="task-actions">
+        {mine && t.status === "open" && (
+          <button className="btn-secondary small" onClick={() => onStatus(t.id, "in_progress")}>Взяти в роботу</button>
+        )}
+        {mine && t.status !== "done" && (
+          <button className="btn-primary small" onClick={() => onStatus(t.id, "done")}>Виконано</button>
+        )}
+        {(owner || mine) && t.status === "done" && (
+          <button className="btn-secondary small" onClick={() => onStatus(t.id, "open")}>Повернути</button>
+        )}
+        {owner && (
+          <button className="btn-secondary small" onClick={() => onDelete(t.id)}>Видалити</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TasksModule({ cab }) {
+  const [tasks, reload] = useMyTasks();
+  const [showForm, setShowForm] = useState(false);
+  const [title, setTitle] = useState("");
+  const [desc, setDesc] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [due, setDue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+
+  const canCreate = cab.type === "manager" || cab.type === "tm";
+  const assigneeOptions = useMemo(() => {
+    if (cab.type === "manager") {
+      return [
+        ...TMS.map((t) => ({ value: t.key, label: `ТМ ${t.name}` })),
+        ...SALONS.map((s) => ({ value: s.key, label: salonLabel(s) })),
+      ];
+    }
+    if (cab.type === "tm") {
+      return [
+        { value: cab.key, label: "Собі" },
+        ...salonsOfTm(cab.tmKey).map((s) => ({ value: s.key, label: salonLabel(s) })),
+      ];
+    }
+    return [];
+  }, [cab]);
+
+  useEffect(() => { if (!assignee && assigneeOptions.length) setAssignee(assigneeOptions[0].value); }, [assigneeOptions, assignee]);
+
+  const submit = async () => {
+    if (!title.trim() || !assignee) return;
+    setBusy(true);
+    try {
+      await createTask({ title, description: desc, assignee, due_date: due, created_by: cab.key });
+      setTitle(""); setDesc(""); setDue(""); setShowForm(false);
+      reload();
+    } catch (e) { console.error(e); }
+    setBusy(false);
+  };
+  const onStatus = async (id, s) => { await setTaskStatus(id, s); reload(); };
+  const onDelete = async (id) => { await deleteTask(id); reload(); };
+
+  if (tasks === null) return <div className="loading">Завантаження…</div>;
+  const active = tasks.filter((t) => t.status !== "done");
+  const done = tasks.filter((t) => t.status === "done");
+
+  return (
+    <div className="tasks-mod">
+      <div className="tasks-head">
+        <h3 className="ov-h">Задачі</h3>
+        {canCreate && (
+          <button className="btn-primary small" onClick={() => setShowForm((v) => !v)}>
+            {showForm ? "Згорнути" : "Нова задача"}
+          </button>
+        )}
+      </div>
+
+      {showForm && canCreate && (
+        <div className="task-form">
+          <input className="task-input" placeholder="Що зробити" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <textarea className="task-input" rows={2} placeholder="Деталі (необовʼязково)" value={desc} onChange={(e) => setDesc(e.target.value)} />
+          <div className="task-form-row">
+            <label className="over-field"><span>Кому</span>
+              <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+                {assigneeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </label>
+            <label className="over-field"><span>Дедлайн</span>
+              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+            </label>
+          </div>
+          <button className="btn-primary" onClick={submit} disabled={busy || !title.trim()}>
+            {busy ? "…" : "Поставити задачу"}
+          </button>
+        </div>
+      )}
+
+      {active.length === 0 ? (
+        <div className="admin-empty">Активних задач немає.</div>
+      ) : (
+        <div className="task-list">
+          {active.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} />)}
+        </div>
+      )}
+
+      {done.length > 0 && (
+        <>
+          <button className="task-done-toggle" onClick={() => setShowDone((v) => !v)}>
+            Виконані ({done.length}) {showDone ? "▾" : "▸"}
+          </button>
+          {showDone && (
+            <div className="task-list">
+              {done.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} />)}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function CabinetShell({ title, onExit, onLogout, modules }) {
   const items = modules.filter(Boolean);
   const [active, setActive] = useState(items[0].key);
@@ -2609,7 +2761,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
     { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
     { key: "salons", label: "ЗП салонів", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
-    { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, render: () => <ModuleStub name="Задачі" /> },
+    { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <ModuleStub name="Показники території" /> },
     { key: "docs", label: "Документи й стандарти", icon: <FileText size={16} />, divider: true, render: () => <ModuleStub name="Документи й стандарти" /> },
     { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <ModuleStub name="Команда" /> },
@@ -2627,9 +2779,11 @@ function ManagerCabinet({ onExit, onLogout }) {
       <div className="cab-nav">
         <button className={tab === "byTm" ? "active" : ""} onClick={() => setTab("byTm")}><Users size={14} /> По ТМ</button>
         <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
+        <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}><CheckSquare size={14} /> Задачі</button>
       </div>
       {tab === "byTm" && <ManagerView embedded />}
       {tab === "consol" && <ConsolidationPanel role="manager" />}
+      {tab === "tasks" && <TasksModule cab={{ key: "manager", type: "manager" }} />}
     </div>
   );
 }
@@ -2649,7 +2803,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
   const modules = [
     { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
     { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
-    { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <ModuleStub name="Задачі й чек-листи" /> },
+    { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm" }} /> },
     { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ModuleStub name="Графік змін" /> },
     { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
     { key: "reports", label: "Звіти", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
@@ -3165,6 +3319,35 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .admin-log-time{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
 .admin-log-act{color:var(--ink-soft);font-weight:600;}
 .admin-log-detail{color:var(--muted);}
+
+/* ---------- модуль «Задачі» ---------- */
+.tasks-mod{animation:fadeIn .28s ease both;}
+.tasks-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;}
+.tasks-head .ov-h{margin:0;}
+.btn-primary.small,.btn-secondary.small{padding:7px 13px;font-size:12px;}
+.task-form{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px;box-shadow:var(--sh-2);display:flex;flex-direction:column;gap:10px;}
+.task-input{width:100%;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:13px;background:#fff;resize:vertical;}
+.task-form-row{display:flex;flex-wrap:wrap;gap:12px;}
+.task-form-row .over-field{max-width:none;flex:1 1 160px;margin-bottom:0;}
+.task-form-row select,.task-form-row input{width:100%;}
+.task-list{display:flex;flex-direction:column;gap:10px;}
+.task-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:14px 16px;box-shadow:var(--sh-1);}
+.task-card.task-overdue{border-color:rgba(160,58,42,.5);box-shadow:0 0 0 2px rgba(160,58,42,.08);}
+.task-card.task-card-done{opacity:.66;}
+.task-top{display:flex;align-items:baseline;gap:10px;}
+.task-title{font-weight:600;font-size:13.5px;color:var(--ink);}
+.task-badge{flex-shrink:0;}
+.task-open{background:rgba(220,169,74,.16);color:var(--gold-ink);}
+.task-in_progress{background:rgba(120,150,200,.16);color:#3a5a8a;}
+.task-done{background:rgba(60,107,73,.16);color:var(--positive);}
+.task-desc{font-size:12px;color:var(--ink-soft);margin:7px 0 0;line-height:1.45;}
+.task-meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:9px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.task-meta b{color:var(--ink-soft);font-weight:600;}
+.task-due-over{color:var(--negative);font-weight:600;}
+.task-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px;}
+.task-done-toggle{background:none;border:none;color:var(--on-dark-2);font-size:12px;font-weight:600;cursor:pointer;padding:12px 2px 6px;font-family:inherit;}
+.task-done-toggle:hover{color:var(--on-dark);}
+.cab-content .task-card,.cab-content .task-form{color:var(--ink);}
 
 /* ---------- навігація кабінету (вкладки — керівник/бухгалтер) ---------- */
 .cab-nav{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line-dark);}
