@@ -16,8 +16,16 @@ export const MANAGER = {
 export const ACCOUNTANT = {
   key: "accountant",
   name: "Бухгалтер Юлія",
-  role: "Бухгалтер",
+  role: "Зведення · виплати",
 };
+
+/* Блок «Офіс» — бухгалтер + офісні співробітники.
+   Мар'яна / Ольга: вміст кабінетів визначимо згодом. */
+export const OFFICE = [
+  ACCOUNTANT,
+  { key: "maryana", name: "Мар'яна", role: "Офіс" },
+  { key: "olha", name: "Ольга", role: "Офіс" },
+];
 
 export const TMS = [
   { key: "andriy", name: "Шах Андрій", role: "Територіальний менеджер" },
@@ -55,6 +63,8 @@ export const ALL_SUBMITTERS = [
 export const CREDENTIAL_DEFAULTS = {
   manager:    { login: "kavetskyy", password: "4739" },
   accountant: { login: "yulia",     password: "2025" },
+  maryana:    { login: "maryana",   password: "3001" },
+  olha:       { login: "olha",      password: "3002" },
   andriy:     { login: "shah",      password: "5417" },
   ivan:       { login: "pankiv",    password: "8206" },
 

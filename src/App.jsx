@@ -5,10 +5,10 @@ import {
 } from "recharts";
 import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
-  Store, Calculator, LogIn, Wallet,
+  Store, Calculator, LogIn, Wallet, User, Clock,
 } from "lucide-react";
 import {
-  MANAGER, ACCOUNTANT, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, tmByKey,
+  MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, tmByKey,
   ensureCredentialsSeeded, verifyLogin,
 } from "./org.js";
 import {
@@ -1104,57 +1104,89 @@ function LivingBackground() {
 /* =========================================================
    ІЄРАРХІЯ КАБІНЕТІВ (початковий екран)
 ========================================================= */
-function CabinetCard({ icon, name, sub, tone, onClick }) {
-  return (
-    <button className={`cab-card ${tone || ""}`} onClick={onClick}>
-      <span className="cab-card-icon">{icon}</span>
-      <span className="cab-card-text">
-        <span className="cab-card-name">{name}</span>
-        <span className="cab-card-sub">{sub}</span>
-      </span>
-    </button>
-  );
+function useMonthStats() {
+  const [stats, setStats] = useState(null);
+  useEffect(() => {
+    let active = true;
+    const ym = nowYm();
+    (async () => {
+      let submitted = 0;
+      let toPay = 0;
+      const bump = (d) => {
+        if (d.status === "submitted" || d.status === "corrected") submitted += 1;
+        if (d.paymentStatus === "to_pay") toPay += 1;
+      };
+      for (const t of TMS) bump(await loadData(t.key, ym));
+      for (const s of SALONS) bump(await loadSmData(s.key, ym));
+      if (active) setStats({ submitted, toPay, total: TMS.length + SALONS.length });
+    })();
+    return () => { active = false; };
+  }, []);
+  return stats;
 }
 
+const shortAddr = (addr) => addr.replace(/^(вул\.|пл\.|просп\.)\s+/, "");
+
 function HierarchyHome({ onPick }) {
+  const stats = useMonthStats();
   return (
-    <div className="role-select">
-      <div className="hierarchy-inner fade-in">
-        <span className="role-eyebrow">Робочий простір</span>
-        <h1>Мотивація команди</h1>
+    <div className="role-select deck-screen">
+      <div className="deck-inner fade-in">
+        <span className="role-eyebrow">Dnipro-M</span>
+        <h1>Ваш робочий простір</h1>
         <p>Оберіть кабінет — вхід за логіном і паролем</p>
 
-        <div className="cab-top">
-          <CabinetCard
-            tone="cab-manager" icon={<Users size={20} />}
-            name={MANAGER.name} sub="Керівник"
-            onClick={() => onPick({ type: "manager", key: "manager", label: MANAGER.name })}
-          />
-          <CabinetCard
-            tone="cab-acct" icon={<Wallet size={20} />}
-            name={ACCOUNTANT.name} sub="Бухгалтер · зведення й виплати"
-            onClick={() => onPick({ type: "accountant", key: "accountant", label: ACCOUNTANT.name })}
-          />
-        </div>
+        <div className="deck-grid">
+          <button className="deck-tile deck-lead" onClick={() => onPick({ type: "manager", key: "manager", label: MANAGER.name })}>
+            <span className="deck-lead-top">
+              <span className="deck-ic deck-ic-gold"><Users size={22} /></span>
+              <span className="deck-name deck-name-lg">{MANAGER.name}</span>
+              <span className="deck-role deck-role-gold">Керівник</span>
+            </span>
+            <span className="deck-stat">
+              <span className="deck-stat-cell"><b>{stats ? stats.submitted : "—"}</b><span>{`подало з ${stats ? stats.total : TMS.length + SALONS.length}`}</span></span>
+              <span className="deck-stat-cell"><b>{stats ? stats.toPay : "—"}</b><span>до виплати</span></span>
+            </span>
+          </button>
 
-        {TMS.map((tm) => (
-          <div className="cab-branch" key={tm.key}>
-            <CabinetCard
-              tone="cab-tm" icon={<ClipboardList size={20} />}
-              name={tm.name} sub={`Територіальний менеджер · ${salonsOfTm(tm.key).length} ${salonWord(salonsOfTm(tm.key).length)}`}
-              onClick={() => onPick({ type: "tm", key: tm.key, label: tm.name })}
-            />
-            <div className="cab-children">
-              {salonsOfTm(tm.key).map((s) => (
-                <CabinetCard
-                  key={s.key} tone="cab-sm" icon={<Store size={17} />}
-                  name={salonLabel(s)} sub={`Салон майстерності · ${s.area}`}
-                  onClick={() => onPick({ type: "sm", key: s.key, label: salonLabel(s) })}
-                />
-              ))}
-            </div>
+          <div className="deck-tile deck-office">
+            <span className="deck-hd">Офіс</span>
+            {OFFICE.map((o) => (
+              <button
+                className="deck-orow" key={o.key}
+                onClick={() => onPick({ type: o.key === "accountant" ? "accountant" : "office", key: o.key, label: o.name })}
+              >
+                <span className="deck-ic deck-ic-sm">{o.key === "accountant" ? <Wallet size={15} /> : <User size={15} />}</span>
+                <span className="deck-orow-body">
+                  <span className="deck-name">{o.name}</span>
+                  <span className="deck-role">{o.role}</span>
+                </span>
+              </button>
+            ))}
           </div>
-        ))}
+
+          {TMS.map((tm) => {
+            const salons = salonsOfTm(tm.key);
+            return (
+              <div className="deck-tile deck-tm" key={tm.key}>
+                <button className="deck-tm-top" onClick={() => onPick({ type: "tm", key: tm.key, label: tm.name })}>
+                  <span className="deck-ic"><ClipboardList size={17} /></span>
+                  <span className="deck-orow-body">
+                    <span className="deck-name">{tm.name}</span>
+                    <span className="deck-role">{`Тер. менеджер · ${salons.length} ${salonWord(salons.length)}`}</span>
+                  </span>
+                </button>
+                <div className="deck-chips">
+                  {salons.map((s) => (
+                    <button className="deck-chip" key={s.key} onClick={() => onPick({ type: "sm", key: s.key, label: salonLabel(s) })}>
+                      <b>{s.city}</b><span>{shortAddr(s.addr)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -1944,17 +1976,33 @@ function SmCabinet({ salonKey, onExit }) {
   );
 }
 
+function OfficeCabinet({ cabKey, onExit }) {
+  const person = OFFICE.find((o) => o.key === cabKey);
+  return (
+    <div className="view">
+      <TopBar title={person?.name || "Офіс"} onBack={onExit} />
+      <div className="cab-nav"><button className="active"><Clock size={14} /> Кабінет</button></div>
+      <div className="office-stub">
+        <span className="office-stub-ic"><Clock size={26} /></span>
+        <h3>Кабінет у розробці</h3>
+        <p>Вміст кабінету «{person?.name}» ще налаштовується. Логін уже працює — доступ буде відкрито найближчим часом.</p>
+      </div>
+    </div>
+  );
+}
+
 function CabinetRouter({ cabinet, onExit }) {
   switch (cabinet.type) {
     case "manager": return <ManagerCabinet onExit={onExit} />;
     case "accountant": return <AccountantCabinet onExit={onExit} />;
+    case "office": return <OfficeCabinet cabKey={cabinet.key} onExit={onExit} />;
     case "tm": return <TmCabinet tmKey={cabinet.key} onExit={onExit} />;
     case "sm": return <SmCabinet salonKey={cabinet.key} onExit={onExit} />;
     default: return null;
   }
 }
 
-const SUBTITLE = { manager: "Керівник", accountant: "Бухгалтер", tm: "Територіальний менеджер", sm: "Салон майстерності" };
+const SUBTITLE = { manager: "Керівник", accountant: "Зведення · виплати", office: "Офіс", tm: "Територіальний менеджер", sm: "Салон майстерності" };
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;450;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -2233,8 +2281,9 @@ const CSS = `
   .btn-primary,.btn-secondary{min-height:44px;}
   .save-bar .btn-primary{width:100%;justify-content:center;}
   .role-card{padding:14px;}
-  .cab-top{grid-template-columns:1fr;}
-  .cab-children{padding-left:12px;}
+  .deck-grid{grid-template-columns:1fr;}
+  .deck-lead,.deck-office,.deck-tm{grid-column:span 1;grid-row:auto;}
+  .deck-lead{min-height:0;}
   .consol-row{grid-template-columns:1fr auto;row-gap:6px;}
   .consol-row .consol-total{grid-column:2;}
   .consol-actions{grid-column:1 / -1;justify-content:flex-start;}
@@ -2257,25 +2306,63 @@ const CSS = `
 @media (prefers-reduced-motion:reduce){.living-bg .blob{animation:none;}}
 .role-select,.view,.embedded{position:relative;z-index:1;}
 
-/* ---------- ієрархія кабінетів ---------- */
-.hierarchy-inner{max-width:760px;width:100%;text-align:center;}
-.hierarchy-inner .role-eyebrow{margin-bottom:14px;}
-.hierarchy-inner h1{font-family:'Fraunces',serif;font-size:32px;line-height:1.1;color:var(--on-dark);margin:0 0 8px;font-weight:600;letter-spacing:-.015em;}
-.hierarchy-inner>p{color:var(--on-dark-2);margin:0 0 26px;font-size:13.5px;}
-.cab-top{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
-.cab-branch{margin-top:14px;padding-top:14px;border-top:1px solid var(--line-dark);}
-.cab-children{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:9px;margin-top:9px;padding-left:22px;position:relative;}
-.cab-children::before{content:"";position:absolute;left:9px;top:-6px;bottom:14px;width:1px;background:var(--line-dark);}
-.cab-card{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid transparent;border-radius:var(--radius-md);padding:13px 15px;cursor:pointer;color:var(--ink);text-align:left;box-shadow:var(--sh-2);transition:transform .16s var(--ease),box-shadow .16s var(--ease),border-color .16s var(--ease);}
-.cab-card:hover{transform:translateY(-2px);box-shadow:var(--sh-3);border-color:var(--gold);}
-.cab-card:active{transform:translateY(0);}
-.cab-card-icon{flex-shrink:0;width:38px;height:38px;border-radius:10px;background:linear-gradient(180deg,var(--surface-alt),var(--surface-sink));display:flex;align-items:center;justify-content:center;color:var(--gold);box-shadow:inset 0 0 0 1px rgba(0,0,0,.04);}
-.cab-card-text{display:flex;flex-direction:column;gap:2px;min-width:0;}
-.cab-card-name{font-size:13.5px;font-weight:700;letter-spacing:-.01em;line-height:1.3;}
-.cab-card-sub{font-size:10.5px;color:var(--muted);letter-spacing:.01em;}
-.cab-manager{background:linear-gradient(180deg,#FFFDF6,var(--surface-alt));}
-.cab-manager .cab-card-icon,.cab-acct .cab-card-icon{background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);}
-.cab-tm{background:linear-gradient(180deg,#FFFDF6,var(--surface-alt));}
+/* ---------- головна · командна панель ---------- */
+.deck-screen{align-items:flex-start;padding:clamp(24px,6vw,64px) clamp(16px,5vw,48px) 80px;}
+.deck-inner{max-width:1000px;width:100%;margin:0 auto;}
+.deck-inner .role-eyebrow{margin-bottom:14px;}
+.deck-inner h1{font-family:'Fraunces',serif;font-size:clamp(28px,4.4vw,40px);line-height:1.05;color:var(--on-dark);margin:0 0 8px;font-weight:600;letter-spacing:-.02em;}
+.deck-inner>p{color:var(--on-dark-2);margin:0 0 clamp(22px,4vw,34px);font-size:13.5px;}
+
+.deck-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;}
+.deck-tile{background:rgba(247,244,234,.035);border:1px solid var(--line-dark);border-radius:16px;padding:17px;display:flex;flex-direction:column;text-align:left;color:var(--on-dark);transition:transform .18s var(--ease),border-color .18s var(--ease),box-shadow .18s var(--ease);}
+button.deck-tile,.deck-tile button{cursor:pointer;font-family:inherit;}
+button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(-2px);border-color:var(--line-strong);}
+
+.deck-ic{flex-shrink:0;display:grid;place-items:center;width:38px;height:38px;border-radius:11px;background:linear-gradient(180deg,var(--surface-alt),var(--surface-sink));color:var(--gold-ink);}
+.deck-ic-sm{width:30px;height:30px;border-radius:9px;}
+.deck-ic-gold{width:50px;height:50px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);box-shadow:0 8px 22px -8px rgba(190,138,46,.5);}
+.deck-name{font-weight:700;font-size:13.5px;letter-spacing:-.01em;color:var(--on-dark);line-height:1.25;}
+.deck-name-lg{font-family:'Fraunces',serif;font-size:21px;font-weight:600;letter-spacing:-.015em;}
+.deck-role{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+.deck-role-gold{color:var(--gold-bright);}
+
+.deck-lead{grid-column:span 2;justify-content:space-between;gap:26px;min-height:190px;
+  background:radial-gradient(340px 210px at 100% 0%, rgba(220,169,74,.20), transparent 65%), linear-gradient(160deg,#233140,#1A2430);
+  border-color:rgba(220,169,74,.28);}
+.deck-lead-top{display:flex;flex-direction:column;}
+.deck-lead-top .deck-name-lg{margin-top:18px;}
+.deck-lead-top .deck-role-gold{margin-top:6px;}
+.deck-stat{display:flex;gap:10px;padding-top:16px;border-top:1px solid var(--line-dark);margin-top:auto;}
+.deck-stat-cell{display:flex;flex-direction:column;gap:2px;flex:1;}
+.deck-stat-cell b{font-family:'IBM Plex Mono',monospace;font-size:19px;color:var(--on-dark);font-variant-numeric:tabular-nums;}
+.deck-stat-cell span{font-size:10px;color:var(--muted);letter-spacing:.02em;}
+
+.deck-office{grid-column:span 2;gap:9px;justify-content:space-between;}
+.deck-hd{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--on-dark-2);margin-bottom:2px;}
+.deck-orow{display:flex;align-items:center;gap:11px;background:rgba(247,244,234,.03);border:1px solid var(--line-dark);border-radius:11px;padding:13px;transition:transform .16s var(--ease),border-color .16s var(--ease);}
+.deck-orow-body{display:flex;flex-direction:column;gap:2px;min-width:0;}
+
+.deck-tm{grid-column:span 4;gap:13px;}
+.deck-tm-top{display:flex;align-items:center;gap:12px;background:none;border:1px solid transparent;border-radius:11px;margin:-4px;padding:4px;transition:transform .16s var(--ease);}
+.deck-chips{display:flex;flex-wrap:wrap;gap:8px;}
+.deck-chip{display:inline-flex;align-items:baseline;gap:7px;font-size:12px;color:var(--on-dark);background:rgba(247,244,234,.04);border:1px solid var(--line-dark);border-radius:9px;padding:8px 12px;cursor:pointer;font-family:inherit;transition:border-color .15s var(--ease),background .15s var(--ease);}
+.deck-chip:hover{border-color:var(--gold);background:rgba(190,138,46,.1);}
+.deck-chip b{font-weight:600;}
+.deck-chip span{color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:10px;}
+
+/* ---------- заглушка кабінету офісу ---------- */
+.office-stub{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:44px 28px;text-align:center;box-shadow:var(--sh-2);}
+.office-stub-ic{display:inline-grid;place-items:center;width:56px;height:56px;border-radius:16px;background:linear-gradient(180deg,var(--surface-alt),var(--surface-sink));color:var(--gold);margin-bottom:16px;}
+.office-stub h3{font-family:'Fraunces',serif;font-size:19px;color:var(--ink);margin:0 0 8px;font-weight:600;}
+.office-stub p{color:var(--muted);font-size:13px;max-width:42ch;margin:0 auto;line-height:1.5;}
+@media (max-width:880px){
+  .deck-grid{grid-template-columns:repeat(2,1fr);}
+  .deck-lead,.deck-office{grid-column:span 2;grid-row:auto;}
+  .deck-tm{grid-column:span 2;}
+  .deck-office{flex-direction:row;flex-wrap:wrap;}
+  .deck-office .deck-hd{width:100%;}
+  .deck-orow{flex:1 1 180px;}
+}
 
 /* ---------- вхід ---------- */
 .login-fields{display:flex;flex-direction:column;gap:12px;margin:4px 0 2px;text-align:left;}
