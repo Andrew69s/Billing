@@ -10,9 +10,11 @@ import {
   LayoutGrid, FileText, Calendar, Package, BarChart3, CreditCard, CheckSquare, ListChecks, GraduationCap,
 } from "lucide-react";
 import {
-  MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, tmByKey,
-  ensureCredentialsSeeded, verifyLogin,
+  MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
+  ensureCredentialsSeeded, verifyLogin, getLogin, setPassword,
   ADMIN_KEY, ADMIN_NAME, isAdminCab, requestRecovery, listRecoveryRequests, clearRecovery, confirmRecovery,
+  listReassignments, addReassignment, removeReassignment,
+  CAPABILITIES, getCapabilities, setCapabilities, listLog, ALL_CAB_KEYS,
 } from "./org.js";
 import {
   calcSmAll, emptySmData, SM_FIELD_LABELS, SM_CATEGORIES, PLAN_BRACKETS,
@@ -232,8 +234,8 @@ function calcEz(ez) {
   return { netProfit, ezValue, bonus: ezValue * 0.10 };
 }
 
-function calcAll(data, grade, tmKey) {
-  const salonKeys = salonsOfTm(tmKey || TMS[0].key).map((s) => s.key);
+function calcAll(data, grade, tmKey, ym) {
+  const salonKeys = salonsOfTm(tmKey || TMS[0].key, ym).map((s) => s.key);
   const salonCount = salonKeys.length;
 
   const sales = calcSales(data.block1, grade);
@@ -646,9 +648,9 @@ function SalonPctRows({ salons, values, onSet, readOnly, suffix = "%" }) {
   );
 }
 
-function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, tmKey, managerMode, onFlag }) {
-  const salons = salonsOfTm(tmKey);
-  const calc = calcAll(data, grade, tmKey);
+function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, tmKey, ym, managerMode, onFlag }) {
+  const salons = salonsOfTm(tmKey, ym);
+  const calc = calcAll(data, grade, tmKey, ym);
   const setMap = (block, field, key, val) => update([block, field, key], val);
   const shot = { screenshots: data.screenshots, onAddShot, onRemoveShot, onPreview, readOnly, managerMode, onFlag };
   const flg = (num) => data.managerFlags?.[num];
@@ -803,8 +805,8 @@ function SummaryBlock({ id, title, note, total, items, expanded, onToggle }) {
   );
 }
 
-function SalarySummary({ data, grade, tmKey, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
-  const calc = useMemo(() => calcAll(data, grade, tmKey), [data, grade, tmKey]);
+function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
+  const calc = useMemo(() => calcAll(data, grade, tmKey, ym), [data, grade, tmKey, ym]);
   const advance = adj.advance || 0;
   const grandTotal = calc.floored + (isLastMonthOfQuarter ? (qbonus.bonus41 + qbonus.bonus42) : 0) + (adj.amount || 0) - advance;
 
@@ -956,9 +958,11 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   const [qbonus, setQbonus] = useState({ bonus41: 0, bonus42: 0 });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
   const [preview, setPreview] = useState(null);
   const [tab, setTab] = useState("form");
   const [expandedBlock, setExpandedBlock] = useState(null);
+  const skipSave = React.useRef(true);
 
   const qKey = ymToQuarter(ym);
   const qMonths = quarterMonths(qKey);
@@ -967,6 +971,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   useEffect(() => {
     let active = true;
     setLoading(true);
+    skipSave.current = true;
     setTab("form");
     Promise.all([
       loadData(tmKey, ym),
@@ -984,6 +989,20 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   const onRemoveShot = makeRemoveShot(setData);
   const toggleBlock = (id) => setExpandedBlock((prev) => (prev === id ? null : id));
   const persistGrade = async (g) => { setGrade(g); await saveGrade(tmKey, qKey, g); };
+
+  const saveDraft = async () => {
+    setSaving(true);
+    await saveData(tmKey, ym, data);
+    setSaving(false);
+    setSavedAt(new Date());
+  };
+  // автозбереження через 2,5 с після останньої зміни
+  useEffect(() => {
+    if (loading) return undefined;
+    if (skipSave.current) { skipSave.current = false; return undefined; }
+    const t = setTimeout(async () => { await saveData(tmKey, ym, data); setSavedAt(new Date()); }, 2500);
+    return () => clearTimeout(t);
+  }, [data, loading, tmKey, ym]);
 
   const submit = async () => {
     setSaving(true);
@@ -1053,13 +1072,17 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
 
       {loading ? <div className="loading">Завантаження…</div> : tab === "form" ? (
         <>
-          <CriteriaForm data={data} update={update} grade={grade} tmKey={tmKey} showAmounts
+          <CriteriaForm data={data} update={update} grade={grade} tmKey={tmKey} ym={ym} showAmounts
             onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} />
           <SalarySummary
-            data={data} grade={grade} tmKey={tmKey} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
+            data={data} grade={grade} tmKey={tmKey} ym={ym} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
             expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)}
           />
           <div className="save-bar">
+            <span className="save-hint">
+              {saving ? "Зберігаю…" : savedAt ? `Збережено о ${savedAt.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}` : "Зміни зберігаються автоматично"}
+            </span>
+            <button className="btn-secondary" onClick={saveDraft} disabled={saving}>Зберегти</button>
             <button className="btn-primary" onClick={submit} disabled={saving}>
               {saving ? "Надсилання…" : data.status === "corrected" ? "Подати виправлене" : "Подати на погодження"}
             </button>
@@ -1093,7 +1116,7 @@ function QuarterPanel({ qKey, onDone }) {
         const salesPct = (d) => calcSales(d.block1, grade).pct;
         const allMet = monthsData.every((d) => salesPct(d) >= 100);
         const avgOver = monthsData.reduce((s, d) => s + Math.max(0, salesPct(d) - 100), 0) / 3;
-        const sumFloored = monthsData.reduce((s, d) => s + calcAll(d, grade, t.key).floored, 0);
+        const sumFloored = monthsData.reduce((s, d, i) => s + calcAll(d, grade, t.key, qMonths[i]).floored, 0);
         const existing = await loadQBonus(t.key, qKey);
         out[t.key] = { grade, allMet, avgOver: existing.overExecOverride || Math.round(avgOver * 10) / 10, sumFloored };
       }
@@ -1210,7 +1233,7 @@ function ManagerView({ onBack, embedded }) {
         const points = [];
         for (const m of ms) {
           const [d, g] = await Promise.all([loadData(t.key, m), loadGrade(t.key, ymToQuarter(m))]);
-          points.push({ month: m, total: Math.round(calcAll(d, g, t.key).floored) });
+          points.push({ month: m, total: Math.round(calcAll(d, g, t.key, m).floored) });
         }
         results[t.key] = points;
       }
@@ -1318,13 +1341,13 @@ function ManagerView({ onBack, embedded }) {
               )}
 
               <CriteriaForm
-                data={data} grade={grade} tmKey={tmKey} showAmounts readOnly
+                data={data} grade={grade} tmKey={tmKey} ym={ym} showAmounts readOnly
                 managerMode={data.status !== "draft"} onFlag={onFlag}
                 onPreview={setPreview}
               />
 
               <SalarySummary
-                data={data} grade={grade} tmKey={tmKey} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
+                data={data} grade={grade} tmKey={tmKey} ym={ym} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
                 expandedBlock={expandedBlock} onToggle={toggleBlock} editable
                 onAdjChange={setAdj} onSaveAdj={saveAdjOnly} savingAdj={savingAdj}
                 onSetPaymentStatus={setPaymentStatus} monthLbl={monthLabel(ym)}
@@ -1495,6 +1518,12 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    let active = true;
+    getLogin(cabKey).then((l) => { if (active && l) setLogin(l); });
+    return () => { active = false; };
+  }, [cabKey]);
+
   const admin = isAdminCab(cabKey);
   const [reqSent, setReqSent] = useState(false);
   const [code, setCode] = useState("");
@@ -1544,7 +1573,7 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
               <label className="login-field">
                 <span>Логін</span>
                 <input
-                  autoFocus autoComplete="username" value={login}
+                  autoComplete="username" value={login}
                   onChange={(e) => { setLogin(e.target.value); setError(""); }}
                   onKeyDown={(e) => { if (e.key === "Enter") document.getElementById("lg-pass")?.focus(); }}
                 />
@@ -1552,7 +1581,7 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
               <label className="login-field">
                 <span>Пароль</span>
                 <input
-                  id="lg-pass" type="password" autoComplete="current-password" value={password}
+                  id="lg-pass" type="password" autoFocus autoComplete="current-password" value={password}
                   onChange={(e) => { setPassword(e.target.value); setError(""); }}
                   onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
                 />
@@ -1889,9 +1918,11 @@ function SmView({ salon, embedded }) {
   const [data, setData] = useState(emptySmData());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
   const [preview, setPreview] = useState(null);
   const [tab, setTab] = useState("form");
   const [expandedBlock, setExpandedBlock] = useState(null);
+  const skipSave = React.useRef(true);
 
   const qMonths = quarterMonths(ymToQuarter(ym));
   const isQuarterEnd = ym === qMonths[2];
@@ -1900,6 +1931,7 @@ function SmView({ salon, embedded }) {
     let active = true;
     setLoading(true);
     setTab("form");
+    skipSave.current = true;
     loadSmData(salon.key, ym).then((d) => { if (active) { setData(d); setLoading(false); } });
     return () => { active = false; };
   }, [salon.key, ym]);
@@ -1908,6 +1940,19 @@ function SmView({ salon, embedded }) {
   const onAddShot = makeAddShot(setData);
   const onRemoveShot = makeRemoveShot(setData);
   const toggleBlock = (id) => setExpandedBlock((p) => (p === id ? null : id));
+
+  const saveDraft = async () => {
+    setSaving(true);
+    await saveSmData(salon.key, ym, data);
+    setSaving(false);
+    setSavedAt(new Date());
+  };
+  useEffect(() => {
+    if (loading) return undefined;
+    if (skipSave.current) { skipSave.current = false; return undefined; }
+    const t = setTimeout(async () => { await saveSmData(salon.key, ym, data); setSavedAt(new Date()); }, 2500);
+    return () => clearTimeout(t);
+  }, [data, loading, salon.key, ym]);
 
   const calc = useMemo(() => calcSmAll(data, { ym, area: salon.area }), [data, ym, salon.area]);
 
@@ -1936,9 +1981,8 @@ function SmView({ salon, embedded }) {
     setData(next);
   };
 
-  const day = new Date().getDate();
-  const isCurrent = ym === nowYm();
-  const showBanner = isCurrent && data.status === "draft";
+  const dl = deadlineInfo(ym);
+  const showBanner = !dl.future && (data.status === "draft" || data.status === "corrected");
   const hasCorr = !!data.tmComment || (data.correctionDiff && data.correctionDiff.length > 0);
 
   return (
@@ -1953,11 +1997,11 @@ function SmView({ salon, embedded }) {
         {data.tmApproved && <span className="badge-warn">Передано керівнику</span>}
       </div>
       {showBanner && (
-        <div className={`banner ${day > 10 ? "banner-late" : "banner-warn"}`}>
+        <div className={`banner ${dl.overdue ? "banner-late" : "banner-warn"}`}>
           <AlertTriangle size={16} />
-          {day > 10
-            ? "Термін подачі (до 10 числа) минув — заповніть дані якнайшвидше."
-            : `Заповніть дані та скріншоти до 10 числа (сьогодні ${day}-е)`}
+          {dl.overdue
+            ? `Термін подачі ЗП за ${monthLabel(ym)} минув (був до ${dl.dueLabel}).`
+            : `Подайте ЗП за ${monthLabel(ym)} до ${dl.dueLabel}.`}
         </div>
       )}
 
@@ -1976,6 +2020,10 @@ function SmView({ salon, embedded }) {
           />
           <SmSummary data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)} />
           <div className="save-bar">
+            <span className="save-hint">
+              {saving ? "Зберігаю…" : savedAt ? `Збережено о ${savedAt.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}` : "Зміни зберігаються автоматично"}
+            </span>
+            <button className="btn-secondary" onClick={saveDraft} disabled={saving}>Зберегти</button>
             <button className="btn-primary" onClick={submit} disabled={saving}>
               {saving ? "Надсилання…" : "Подати ТМ на погодження"}
             </button>
@@ -2107,8 +2155,8 @@ function SalonDetail({ salon, reviewer, onBack }) {
    ТМ · ВКЛАДКА «ЗП САЛОНІВ» (лише свої салони)
 ========================================================= */
 function SalonReviewPanel({ tmKey, reviewer }) {
-  const salons = useMemo(() => salonsOfTm(tmKey), [tmKey]);
   const [ym, setYm] = useState(nowYm());
+  const salons = useMemo(() => salonsOfTm(tmKey, ym), [tmKey, ym]);
   const [rows, setRows] = useState(null);
   const [openKey, setOpenKey] = useState(null);
 
@@ -2178,7 +2226,7 @@ async function tmGrandTotal(tmKey, ym) {
     loadData(tmKey, ym), loadAdj(tmKey, ym), loadGrade(tmKey, qKey),
     isLast ? loadQBonus(tmKey, qKey) : Promise.resolve({ bonus41: 0, bonus42: 0 }),
   ]);
-  const calc = calcAll(d, g, tmKey);
+  const calc = calcAll(d, g, tmKey, ym);
   const total = calc.floored + (isLast ? (qb.bonus41 + qb.bonus42) : 0) + (a.amount || 0) - (a.advance || 0);
   return { data: d, total, status: d.status, paymentStatus: d.paymentStatus };
 }
@@ -2205,7 +2253,7 @@ function ConsolidationPanel({ role }) {
       for (const s of SALONS) {
         const d = await loadSmData(s.key, ym);
         smRows.push({
-          kind: "sm", key: s.key, name: salonLabel(s), tm: s.tm,
+          kind: "sm", key: s.key, name: salonLabel(s), tm: salonTmOn(s.key, ym),
           data: d, total: calcSmAll(d, { ym, area: s.area }).total,
           status: d.status, paymentStatus: d.paymentStatus, tmApproved: d.tmApproved,
         });
@@ -2287,41 +2335,32 @@ function ConsolidationPanel({ role }) {
 }
 
 /* =========================================================
-   АДМІНІСТРУВАННЯ (кабінет Шаха Андрія) — запити на відновлення паролю
+   АДМІНІСТРУВАННЯ (кабінет Шаха Андрія) — панель керування сайтом
 ========================================================= */
-function cabName(key) {
-  if (key === "manager") return MANAGER.name;
-  const o = OFFICE.find((x) => x.key === key);
-  if (o) return o.name;
-  const t = tmByKey(key);
-  if (t) return `ТМ ${t.name}`;
-  const s = salonByKey(key);
-  if (s) return salonLabel(s);
-  return key;
-}
+const reassignMonthOpts = () => {
+  const d = new Date(); const y = d.getFullYear(); const m = d.getMonth();
+  return Array.from({ length: 9 }, (_, i) => {
+    const x = new Date(y, m - 1 + i, 1);
+    return `${x.getFullYear()}-${pad(x.getMonth() + 1)}`;
+  });
+};
 
-function AdminPanel() {
+function AdminRecovery() {
   const [reqs, setReqs] = useState(null);
   const [reload, setReload] = useState(0);
-
   useEffect(() => {
     let active = true;
     listRecoveryRequests().then((r) => { if (active) setReqs(r); });
     return () => { active = false; };
   }, [reload]);
-
   const dismiss = async (k) => { await clearRecovery(k); setReload((n) => n + 1); };
-
   return (
-    <div className="embedded">
-      <div className="admin-panel">
-        <h3>Запити на відновлення паролю</h3>
-        <p className="hint">Передайте код відповідній особі. Вона введе його разом із новим паролем на екрані входу. Після зміни паролю запит зникає.</p>
-        {reqs === null ? (
-          <div className="loading">Завантаження…</div>
-        ) : reqs.length === 0 ? (
-          <div className="admin-empty">Активних запитів немає.</div>
-        ) : (
+    <div className="admin-panel">
+      <h3>Запити на відновлення паролю</h3>
+      <p className="hint">Передайте код відповідній особі — вона введе його з новим паролем на екрані входу.</p>
+      {reqs === null ? <div className="loading">Завантаження…</div>
+        : reqs.length === 0 ? <div className="admin-empty">Активних запитів немає.</div>
+        : (
           <div className="admin-list">
             {reqs.map((r) => (
               <div className="admin-req" key={r.cabKey}>
@@ -2335,7 +2374,206 @@ function AdminPanel() {
             ))}
           </div>
         )}
+    </div>
+  );
+}
+
+function AdminAccess() {
+  const [rows, setRows] = useState(null);
+  const [drafts, setDrafts] = useState({});
+  const [saved, setSaved] = useState("");
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const out = [];
+      for (const k of ALL_CAB_KEYS) out.push({ key: k, name: cabName(k), login: await getLogin(k) });
+      if (active) setRows(out);
+    })();
+    return () => { active = false; };
+  }, []);
+  const save = async (k) => {
+    const v = (drafts[k] || "").trim();
+    if (v.length < 3) return;
+    await setPassword(k, v);
+    setDrafts((d) => ({ ...d, [k]: "" }));
+    setSaved(k);
+    setTimeout(() => setSaved(""), 1500);
+  };
+  return (
+    <div className="admin-panel">
+      <h3>Доступи</h3>
+      <p className="hint">Логіни фіксовані. Тут можна задати новий пароль будь-якому кабінету напряму.</p>
+      {rows === null ? <div className="loading">Завантаження…</div> : (
+        <div className="admin-list">
+          {rows.map((r) => (
+            <div className="admin-access-row" key={r.key}>
+              <div className="admin-req-info">
+                <span className="admin-req-name">{r.name}</span>
+                <span className="admin-req-time">логін: {r.login}</span>
+              </div>
+              <input className="admin-pass-input" type="text" placeholder="новий пароль"
+                value={drafts[r.key] || ""} onChange={(e) => setDrafts((d) => ({ ...d, [r.key]: e.target.value }))} />
+              <button className="btn-secondary small" onClick={() => save(r.key)} disabled={(drafts[r.key] || "").trim().length < 3}>
+                {saved === r.key ? "✓" : "Зберегти"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminReassign() {
+  const [list, setList] = useState(null);
+  const [salonKey, setSalonKey] = useState(SALONS[0].key);
+  const [toTm, setToTm] = useState(TMS[0].key);
+  const [fromYm, setFromYm] = useState(nowYm());
+  const months = useMemo(reassignMonthOpts, []);
+  const load = () => listReassignments().then((l) => setList(l.sort((a, b) => (a.fromYm < b.fromYm ? 1 : -1))));
+  useEffect(() => { load(); }, []);
+  const add = async () => {
+    await addReassignment({ salonKey, toTm, fromYm });
+    load();
+  };
+  const del = async (id) => { await removeReassignment(id); load(); };
+  return (
+    <div className="admin-panel">
+      <h3>Магазини й ТМ</h3>
+      <p className="hint">Перепризначення діє від указаного місяця й далі — розрахунок ЗП, зведення та всі модулі це враховують.</p>
+      <div className="admin-reassign-form">
+        <label className="over-field"><span>Магазин</span>
+          <select value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
+            {SALONS.map((s) => <option key={s.key} value={s.key}>{salonLabel(s)} (зараз: {tmByKey(salonTmOn(s.key, fromYm))?.name})</option>)}
+          </select>
+        </label>
+        <label className="over-field"><span>Переходить до ТМ</span>
+          <select value={toTm} onChange={(e) => setToTm(e.target.value)}>
+            {TMS.map((t) => <option key={t.key} value={t.key}>{t.name}</option>)}
+          </select>
+        </label>
+        <label className="over-field"><span>Від місяця</span>
+          <select value={fromYm} onChange={(e) => setFromYm(e.target.value)}>
+            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          </select>
+        </label>
+        <button className="btn-primary" onClick={add}>Застосувати перехід</button>
       </div>
+      {list === null ? <div className="loading">Завантаження…</div>
+        : list.length === 0 ? <div className="admin-empty">Перепризначень немає — усі магазини за базовим підпорядкуванням.</div>
+        : (
+          <div className="admin-list">
+            {list.map((r) => (
+              <div className="admin-req" key={r.id}>
+                <div className="admin-req-info">
+                  <span className="admin-req-name">{salonLabel(salonByKey(r.salonKey))}</span>
+                  <span className="admin-req-time">→ {tmByKey(r.toTm)?.name} · від {monthLabel(r.fromYm)}</span>
+                </div>
+                <button className="btn-secondary small" onClick={() => del(r.id)}>Скасувати</button>
+              </div>
+            ))}
+          </div>
+        )}
+    </div>
+  );
+}
+
+function AdminRights() {
+  const people = OFFICE;
+  const [caps, setCaps] = useState(null);
+  const [saved, setSaved] = useState("");
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const out = {};
+      for (const p of people) out[p.key] = await getCapabilities(p.key);
+      if (active) setCaps(out);
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const toggle = async (personKey, capKey) => {
+    const cur = caps[personKey] || [];
+    const next = cur.includes(capKey) ? cur.filter((c) => c !== capKey) : [...cur, capKey];
+    setCaps((c) => ({ ...c, [personKey]: next }));
+    await setCapabilities(personKey, next);
+    setSaved(personKey + capKey);
+    setTimeout(() => setSaved(""), 1200);
+  };
+  return (
+    <div className="admin-panel">
+      <h3>Права користувачів</h3>
+      <p className="hint">Надання додаткових можливостей співробітникам офісу. Модулі зʼявляються в їхньому кабінеті.</p>
+      {caps === null ? <div className="loading">Завантаження…</div> : (
+        <div className="admin-rights">
+          {people.map((p) => (
+            <div className="admin-rights-person" key={p.key}>
+              <div className="admin-rights-name">{p.name}</div>
+              <div className="admin-rights-caps">
+                {CAPABILITIES.map((c) => (
+                  <label className="admin-cap" key={c.key}>
+                    <input type="checkbox" checked={(caps[p.key] || []).includes(c.key)}
+                      onChange={() => toggle(p.key, c.key)} />
+                    <span>{c.label}{saved === p.key + c.key ? " ✓" : ""}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminLog() {
+  const [log, setLog] = useState(null);
+  useEffect(() => { let a = true; listLog().then((l) => { if (a) setLog(l); }); return () => { a = false; }; }, []);
+  const label = {
+    login_master: "вхід за майстер-кодом", recovery_request: "запит відновлення", recovery_done: "змінено пароль",
+    reassign: "перепризначено магазин", caps: "змінено права",
+  };
+  return (
+    <div className="admin-panel">
+      <h3>Журнал дій</h3>
+      {log === null ? <div className="loading">Завантаження…</div>
+        : log.length === 0 ? <div className="admin-empty">Журнал порожній.</div>
+        : (
+          <div className="admin-logrows">
+            {log.map((e, i) => (
+              <div className="admin-logrow" key={i}>
+                <span className="admin-log-time">{fmtDate(e.at)}</span>
+                <span className="admin-log-act">{label[e.action] || e.action}</span>
+                <span className="admin-log-detail">{e.detail?.cabKey ? cabName(e.detail.cabKey) : e.detail?.salonKey ? salonLabel(salonByKey(e.detail.salonKey)) : ""}</span>
+              </div>
+            ))}
+          </div>
+        )}
+    </div>
+  );
+}
+
+function AdminPanel() {
+  const [tab, setTab] = useState("recovery");
+  const tabs = [
+    ["recovery", "Відновлення паролю"],
+    ["access", "Доступи"],
+    ["reassign", "Магазини й ТМ"],
+    ["rights", "Права"],
+    ["log", "Журнал"],
+  ];
+  return (
+    <div className="embedded">
+      <div className="admin-subnav">
+        {tabs.map(([k, l]) => (
+          <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>
+        ))}
+      </div>
+      {tab === "recovery" && <AdminRecovery />}
+      {tab === "access" && <AdminAccess />}
+      {tab === "reassign" && <AdminReassign />}
+      {tab === "rights" && <AdminRights />}
+      {tab === "log" && <AdminLog />}
     </div>
   );
 }
@@ -2386,13 +2624,13 @@ function TmOverview({ tmKey }) {
     const ym = nowYm();
     (async () => {
       const [d, g] = await Promise.all([loadData(tmKey, ym), loadGrade(tmKey, ymToQuarter(ym))]);
-      const salons = salonsOfTm(tmKey);
+      const salons = salonsOfTm(tmKey, ym);
       let submitted = 0;
       for (const sl of salons) {
         const sd = await loadSmData(sl.key, ym);
         if (sd.status === "submitted" || sd.status === "corrected") submitted += 1;
       }
-      const calc = calcAll(d, g, tmKey);
+      const calc = calcAll(d, g, tmKey, ym);
       if (active) setS({ status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct, submitted, salonTotal: salons.length, dl: deadlineInfo(ym) });
     })();
     return () => { active = false; };
@@ -2511,17 +2749,31 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
 
 function OfficeCabinet({ cabKey, onExit, onLogout }) {
   const person = OFFICE.find((o) => o.key === cabKey);
-  return (
-    <div className="view">
-      <TopBar title={person?.name || "Офіс"} onBack={onExit} onLogout={onLogout} />
-      <div className="cab-nav"><button className="active"><Clock size={14} /> Кабінет</button></div>
+  const [caps, setCaps] = useState(null);
+  useEffect(() => { let a = true; getCapabilities(cabKey).then((c) => { if (a) setCaps(c); }); return () => { a = false; }; }, [cabKey]);
+
+  if (!caps) {
+    return (
+      <div className="view">
+        <TopBar title={person?.name || "Офіс"} onBack={onExit} onLogout={onLogout} />
+        <div className="loading">Завантаження…</div>
+      </div>
+    );
+  }
+  const modules = [
+    { key: "home", label: "Кабінет", icon: <LayoutGrid size={16} />, render: () => (
       <div className="office-stub">
         <span className="office-stub-ic"><Clock size={26} /></span>
-        <h3>Кабінет у розробці</h3>
-        <p>Вміст кабінету «{person?.name}» ще налаштовується. Логін уже працює — доступ буде відкрито найближчим часом.</p>
+        <h3>{person?.name}</h3>
+        <p>{caps.length ? "Доступні модулі — у панелі зліва." : "Кабінет у розробці. Додаткові права надає адміністратор."}</p>
       </div>
-    </div>
-  );
+    ) },
+    caps.includes("view_consolidation")
+      ? { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role={caps.includes("manage_payments") ? "accountant" : "viewer"} /> }
+      : null,
+    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <ModuleStub name="Безнальні рахунки" /> },
+  ];
+  return <CabinetShell title={person?.name || "Офіс"} onExit={onExit} onLogout={onLogout} modules={modules} />;
 }
 
 function CabinetRouter({ cabinet, onExit, onLogout }) {
@@ -2710,7 +2962,8 @@ const CSS = `
 .ez-sub{display:flex;flex-wrap:wrap;gap:8px 18px;width:100%;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);border-top:1px dashed var(--line-strong);padding-top:10px;margin-top:6px;}
 
 /* ---------- buttons ---------- */
-.save-bar{display:flex;justify-content:flex-end;margin-top:24px;}
+.save-bar{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:24px;flex-wrap:wrap;}
+.save-hint{margin-right:auto;font-size:11.5px;color:var(--on-dark-3);font-family:'IBM Plex Mono',monospace;}
 .btn-primary{background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);border:none;border-radius:var(--radius-sm);padding:13px 26px;font-weight:700;font-size:13px;font-family:inherit;cursor:pointer;box-shadow:0 6px 18px -4px rgba(190,138,46,.5),inset 0 1px 0 rgba(255,255,255,.28);letter-spacing:.01em;transition:transform .14s var(--ease),box-shadow .16s var(--ease),filter .16s var(--ease);}
 .btn-primary:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 12px 26px -6px rgba(190,138,46,.55),inset 0 1px 0 rgba(255,255,255,.3);filter:brightness(1.03);}
 .btn-primary:active:not(:disabled){transform:translateY(0);}
@@ -2979,6 +3232,28 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .admin-req-time{font-size:10.5px;color:var(--muted);}
 .admin-req-code{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;letter-spacing:.12em;color:var(--gold-ink);background:linear-gradient(180deg,var(--gold-bright),var(--gold));padding:6px 14px;border-radius:8px;}
 
+.admin-subnav{display:flex;gap:4px;margin-bottom:16px;background:rgba(247,244,234,.05);border:1px solid var(--line-dark);border-radius:10px;padding:4px;width:fit-content;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.admin-subnav button{background:none;border:none;color:var(--on-dark-2);padding:8px 14px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .15s var(--ease),color .15s var(--ease);}
+.admin-subnav button:hover{color:var(--on-dark);}
+.admin-subnav button.active{background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);}
+.admin-panel + .admin-panel{margin-top:14px;}
+.admin-access-row{display:flex;align-items:center;gap:12px;background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);padding:11px 14px;flex-wrap:wrap;}
+.admin-pass-input{flex:1;min-width:140px;padding:8px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;font-family:'IBM Plex Mono',monospace;font-size:13px;}
+.admin-reassign-form{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin:14px 0;padding:14px;background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);}
+.admin-reassign-form .over-field{max-width:none;flex:1 1 200px;margin-bottom:0;}
+.admin-reassign-form select{width:100%;}
+.admin-rights{display:flex;flex-direction:column;gap:14px;margin-top:14px;}
+.admin-rights-person{background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);padding:14px 16px;}
+.admin-rights-name{font-weight:700;font-size:13.5px;color:var(--ink);margin-bottom:9px;}
+.admin-rights-caps{display:flex;flex-direction:column;gap:7px;}
+.admin-cap{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink-soft);cursor:pointer;}
+.admin-cap input[type=checkbox]{width:15px;height:15px;accent-color:var(--gold);cursor:pointer;flex-shrink:0;}
+.admin-logrows{display:flex;flex-direction:column;margin-top:10px;}
+.admin-logrow{display:grid;grid-template-columns:150px 1fr 1fr;gap:12px;padding:8px 0;border-bottom:1px dashed var(--line);font-size:11.5px;}
+.admin-log-time{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
+.admin-log-act{color:var(--ink-soft);font-weight:600;}
+.admin-log-detail{color:var(--muted);}
+
 /* ---------- навігація кабінету (вкладки — керівник/бухгалтер) ---------- */
 .cab-nav{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line-dark);}
 .cab-nav button{background:none;border:none;border-bottom:2px solid transparent;padding:11px 15px;font-size:13px;font-weight:600;color:var(--on-dark-2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;margin-bottom:-1px;transition:color .15s var(--ease),border-color .15s var(--ease);}
@@ -3084,11 +3359,7 @@ export default function App() {
         />
       )}
       {ready && session && (
-        <CabinetRouter
-          cabinet={session}
-          onExit={goHome}
-          onLogout={remembered && remembered.key === session.key ? logout : null}
-        />
+        <CabinetRouter cabinet={session} onExit={goHome} onLogout={logout} />
       )}
     </div>
   );
