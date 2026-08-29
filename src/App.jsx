@@ -7,6 +7,7 @@ import {
 import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
   Store, Calculator, LogIn, Wallet, User, Clock,
+  LayoutGrid, FileText, Calendar, Package, BarChart3, CreditCard, CheckSquare, ListChecks, GraduationCap,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, tmByKey,
@@ -2340,27 +2341,132 @@ function AdminPanel() {
 }
 
 /* =========================================================
-   КАБІНЕТИ (обгортки з навігацією)
+   КАБІНЕТИ — оболонка з лівою панеллю модулів
 ========================================================= */
-function TmCabinet({ tmKey, onExit, onLogout }) {
-  const tm = tmByKey(tmKey);
-  const [tab, setTab] = useState("salary");
-  const isAdmin = tmKey === ADMIN_KEY;
+function ModuleStub({ name, note }) {
   return (
-    <div className="view">
-      <TopBar title={`ТМ · ${tm.name}`} onBack={onExit} onLogout={onLogout} />
-      <div className="cab-nav">
-        <button className={tab === "salary" ? "active" : ""} onClick={() => setTab("salary")}><Calculator size={14} /> Розрахунок ЗП</button>
-        <button className={tab === "salons" ? "active" : ""} onClick={() => setTab("salons")}><Store size={14} /> ЗП салонів</button>
-        {isAdmin && (
-          <button className={tab === "admin" ? "active" : ""} onClick={() => setTab("admin")}><User size={14} /> Адміністрування</button>
-        )}
-      </div>
-      {tab === "salary" && <TmView tmKey={tmKey} tmName={tm.name} embedded />}
-      {tab === "salons" && <SalonReviewPanel tmKey={tmKey} reviewer="tm" />}
-      {tab === "admin" && isAdmin && <AdminPanel />}
+    <div className="office-stub">
+      <span className="office-stub-ic"><Clock size={26} /></span>
+      <h3>{name}</h3>
+      <p>{note || "Модуль у розробці — зʼявиться найближчим часом."}</p>
     </div>
   );
+}
+
+function CabinetShell({ title, onExit, onLogout, modules }) {
+  const items = modules.filter(Boolean);
+  const [active, setActive] = useState(items[0].key);
+  const mod = items.find((m) => m.key === active) || items[0];
+  return (
+    <div className="view cab-shell">
+      <TopBar title={title} onBack={onExit} onLogout={onLogout} />
+      <div className="cab-layout">
+        <nav className="cab-side">
+          {items.map((m) => (
+            <React.Fragment key={m.key}>
+              {m.divider && <span className="cab-side-sep" />}
+              <button className={`cab-side-item ${m.key === active ? "active" : ""}`} onClick={() => setActive(m.key)}>
+                {m.icon}
+                <span className="cab-side-label">{m.label}</span>
+                {m.badge != null && <span className={`badge ${m.badgeTone || "badge-warn"}`}>{m.badge}</span>}
+              </button>
+            </React.Fragment>
+          ))}
+        </nav>
+        <div className="cab-content">{mod.render()}</div>
+      </div>
+    </div>
+  );
+}
+
+function TmOverview({ tmKey }) {
+  const [s, setS] = useState(null);
+  useEffect(() => {
+    let active = true;
+    const ym = nowYm();
+    (async () => {
+      const [d, g] = await Promise.all([loadData(tmKey, ym), loadGrade(tmKey, ymToQuarter(ym))]);
+      const salons = salonsOfTm(tmKey);
+      let submitted = 0;
+      for (const sl of salons) {
+        const sd = await loadSmData(sl.key, ym);
+        if (sd.status === "submitted" || sd.status === "corrected") submitted += 1;
+      }
+      const calc = calcAll(d, g, tmKey);
+      if (active) setS({ status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct, submitted, salonTotal: salons.length, dl: deadlineInfo(ym) });
+    })();
+    return () => { active = false; };
+  }, [tmKey]);
+  if (!s) return <div className="loading">Завантаження…</div>;
+  const st = { draft: "чернетка", submitted: "на розгляді", corrected: "потребує коректив", approved: "погоджено" }[s.status] || "—";
+  const nagged = (s.status === "draft" || s.status === "corrected") && !s.dl.future;
+  return (
+    <div className="ov">
+      <h3 className="ov-h">Огляд</h3>
+      <p className="ov-sub">{monthLabel(nowYm())}</p>
+      <div className="ov-tiles">
+        <div className="ov-tile"><b>{fmt(s.total)}</b><span>моя ЗП · {st}</span></div>
+        <div className="ov-tile"><b>{s.submitted} / {s.salonTotal}</b><span>салони подали ЗП</span></div>
+        <div className="ov-tile"><b>{s.pct.toFixed(0)}%</b><span>план по ТО</span></div>
+      </div>
+      {nagged && (
+        <div className={`banner ${s.dl.overdue ? "banner-late" : "banner-warn"}`}>
+          <AlertTriangle size={16} />
+          {s.dl.overdue ? `Термін подачі ЗП минув (був до ${s.dl.dueLabel})` : `Подайте ЗП за ${monthLabel(nowYm())} до ${s.dl.dueLabel}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SmOverview({ salon }) {
+  const [s, setS] = useState(null);
+  useEffect(() => {
+    let active = true;
+    const ym = nowYm();
+    loadSmData(salon.key, ym).then((d) => {
+      if (!active) return;
+      const calc = calcSmAll(d, { ym, area: salon.area });
+      setS({ status: d.status, total: calc.total, category: calc.category, dl: deadlineInfo(ym) });
+    });
+    return () => { active = false; };
+  }, [salon.key]);
+  if (!s) return <div className="loading">Завантаження…</div>;
+  const st = { draft: "чернетка", submitted: "на розгляді в ТМ", corrected: "ТМ вніс корективи" }[s.status] || "—";
+  const nagged = (s.status === "draft" || s.status === "corrected") && !s.dl.future;
+  return (
+    <div className="ov">
+      <h3 className="ov-h">Огляд</h3>
+      <p className="ov-sub">{monthLabel(nowYm())}</p>
+      <div className="ov-tiles">
+        <div className="ov-tile"><b>{fmt(s.total)}</b><span>ЗП · {st}</span></div>
+        <div className="ov-tile"><b>{s.category}</b><span>категорія салону</span></div>
+      </div>
+      {nagged && (
+        <div className={`banner ${s.dl.overdue ? "banner-late" : "banner-warn"}`}>
+          <AlertTriangle size={16} />
+          {s.dl.overdue ? `Термін подачі минув (був до ${s.dl.dueLabel})` : `Подайте ЗП до ${s.dl.dueLabel}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TmCabinet({ tmKey, onExit, onLogout }) {
+  const tm = tmByKey(tmKey);
+  const isAdmin = tmKey === ADMIN_KEY;
+  const modules = [
+    { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
+    { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
+    { key: "salons", label: "ЗП салонів", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
+    { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, render: () => <ModuleStub name="Задачі" /> },
+    { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <ModuleStub name="Показники території" /> },
+    { key: "docs", label: "Документи й стандарти", icon: <FileText size={16} />, divider: true, render: () => <ModuleStub name="Документи й стандарти" /> },
+    { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <ModuleStub name="Команда" /> },
+    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <ModuleStub name="Безнальні рахунки" /> },
+    isAdmin ? { key: "admin", label: "Адміністрування", icon: <User size={16} />, divider: true, render: () => <AdminPanel /> } : null,
+  ];
+  return <CabinetShell title={`ТМ · ${tm.name}`} onExit={onExit} onLogout={onLogout} modules={modules} />;
 }
 
 function ManagerCabinet({ onExit, onLogout }) {
@@ -2390,13 +2496,17 @@ function AccountantCabinet({ onExit, onLogout }) {
 
 function SmCabinet({ salonKey, onExit, onLogout }) {
   const salon = salonByKey(salonKey);
-  return (
-    <div className="view">
-      <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={onExit} onLogout={onLogout} />
-      <div className="cab-nav"><button className="active"><Calculator size={14} /> Розрахунок ЗП</button></div>
-      <SmView salon={salon} embedded />
-    </div>
-  );
+  const modules = [
+    { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
+    { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
+    { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <ModuleStub name="Задачі й чек-листи" /> },
+    { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ModuleStub name="Графік змін" /> },
+    { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
+    { key: "reports", label: "Звіти", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
+    { key: "standards", label: "Стандарти й навчання", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
+    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <ModuleStub name="Безнальні рахунки" /> },
+  ];
+  return <CabinetShell title={`Салон · ${salonLabel(salon)}`} onExit={onExit} onLogout={onLogout} modules={modules} />;
 }
 
 function OfficeCabinet({ cabKey, onExit, onLogout }) {
@@ -2836,6 +2946,11 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
   .deck-office{flex-direction:row;flex-wrap:wrap;}
   .deck-office .deck-hd{width:100%;}
   .deck-orow{flex:1 1 180px;}
+  .cab-layout{grid-template-columns:1fr;gap:14px;}
+  .cab-side{position:static;flex-direction:row;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:6px;}
+  .cab-side-item{white-space:nowrap;flex-shrink:0;}
+  .cab-side-item .badge{margin-left:6px;}
+  .cab-side-sep{display:none;}
 }
 
 /* ---------- вхід ---------- */
@@ -2864,12 +2979,35 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .admin-req-time{font-size:10.5px;color:var(--muted);}
 .admin-req-code{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;letter-spacing:.12em;color:var(--gold-ink);background:linear-gradient(180deg,var(--gold-bright),var(--gold));padding:6px 14px;border-radius:8px;}
 
-/* ---------- навігація кабінету ---------- */
+/* ---------- навігація кабінету (вкладки — керівник/бухгалтер) ---------- */
 .cab-nav{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line-dark);}
 .cab-nav button{background:none;border:none;border-bottom:2px solid transparent;padding:11px 15px;font-size:13px;font-weight:600;color:var(--on-dark-2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;margin-bottom:-1px;transition:color .15s var(--ease),border-color .15s var(--ease);}
 .cab-nav button:hover{color:var(--on-dark);}
 .cab-nav button.active{color:var(--gold-bright);border-bottom-color:var(--gold);}
 .embedded{animation:fadeIn .28s ease both;}
+
+/* ---------- оболонка кабінету з лівою панеллю ---------- */
+.cab-shell{max-width:1120px;}
+.cab-layout{display:grid;grid-template-columns:232px 1fr;gap:22px;align-items:start;}
+.cab-side{position:sticky;top:78px;display:flex;flex-direction:column;gap:2px;padding:8px;background:rgba(247,244,234,.03);border:1px solid var(--line-dark);border-radius:var(--radius-md);}
+.cab-side-item{display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;border:none;border-radius:var(--radius-sm);background:none;color:var(--on-dark-2);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;text-align:left;transition:background .14s var(--ease),color .14s var(--ease);}
+.cab-side-item:hover{background:rgba(247,244,234,.05);color:var(--on-dark);}
+.cab-side-item.active{background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);font-weight:600;}
+.cab-side-item svg{flex-shrink:0;}
+.cab-side-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cab-side-item .badge{margin-left:auto;flex-shrink:0;}
+.cab-side-sep{height:1px;background:var(--line-dark);margin:7px 6px;}
+.cab-content{min-width:0;}
+.cab-content .embedded{animation:none;}
+
+/* ---------- огляд ---------- */
+.ov{animation:fadeIn .28s ease both;}
+.ov-h{font-family:'Fraunces',serif;font-size:20px;font-weight:600;color:var(--on-dark);margin:0 0 2px;}
+.ov-sub{font-size:12px;color:var(--on-dark-3);margin:0 0 18px;}
+.ov-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;}
+.ov-tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:16px;box-shadow:var(--sh-1);}
+.ov-tile b{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;color:var(--ink);display:block;font-variant-numeric:tabular-nums;}
+.ov-tile span{font-size:11px;color:var(--muted);}
 
 /* ---------- детальний перегляд салону ---------- */
 .detail-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
