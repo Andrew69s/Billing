@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import _ from "lodash";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -15,6 +16,7 @@ import {
   calcSmAll, emptySmData, SM_FIELD_LABELS, SM_CATEGORIES, PLAN_BRACKETS,
   categoryOf, normDaysOff, MANAGER_COEFS,
 } from "./smCalc.js";
+import { TM_CONDITIONS, SM_CONDITIONS } from "./conditions.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
@@ -351,7 +353,57 @@ function ScreenshotSlot({ value, onUpload, onRemove, onPreview, readOnly }) {
     </div>
   );
 }
-function Item({ num, title, amount, children, screenshotKey, screenshots, onUpload, onRemove, onPreview, readOnly }) {
+function ConditionsBlocks({ blocks }) {
+  return (
+    <div className="cond-blocks">
+      {blocks.map((b, i) => {
+        if (b.p) return <p key={i} className="cond-p">{b.p}</p>;
+        if (b.note) return <p key={i} className="cond-note">{b.note}</p>;
+        if (b.ul) return (
+          <ul key={i} className="cond-ul">{b.ul.map((li, j) => <li key={j}>{li}</li>)}</ul>
+        );
+        if (b.table) return (
+          <div key={i} className="cond-table-wrap">
+            <table className="cond-table">
+              <thead><tr>{b.table.head.map((h, j) => <th key={j}>{h}</th>)}</tr></thead>
+              <tbody>
+                {b.table.rows.map((r, j) => (
+                  <tr key={j}>{r.map((c, k) => <td key={k} className={k === 0 ? "cond-td-label" : ""}>{c}</td>)}</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+        return null;
+      })}
+    </div>
+  );
+}
+
+function InfoModal({ title, blocks, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="info-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="info-modal-head">
+          <span className="info-modal-title">{title}</span>
+          <button className="modal-close info-modal-close" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="info-modal-body">
+          <ConditionsBlocks blocks={blocks} />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function Item({ num, title, amount, children, screenshotKey, screenshots, onUpload, onRemove, onPreview, readOnly, conditions }) {
+  const [showCond, setShowCond] = useState(false);
   return (
     <div className="item">
       <div className="item-head">
@@ -360,7 +412,13 @@ function Item({ num, title, amount, children, screenshotKey, screenshots, onUplo
         {amount !== undefined && (
           <span className={`item-amount ${amount < 0 ? "neg" : amount > 0 ? "pos" : ""}`}>{fmt(amount)}</span>
         )}
+        {conditions && (
+          <button type="button" className="item-cond" onClick={() => setShowCond(true)}>Умови</button>
+        )}
       </div>
+      {showCond && conditions && (
+        <InfoModal title={conditions.title} blocks={conditions.blocks} onClose={() => setShowCond(false)} />
+      )}
       <div className="item-body">
         <div className="item-fields">{children}</div>
         <ScreenshotSlot
@@ -374,6 +432,8 @@ function Item({ num, title, amount, children, screenshotKey, screenshots, onUplo
     </div>
   );
 }
+const TmItem = (props) => <Item {...props} conditions={TM_CONDITIONS[props.num]} />;
+const SmItem = (props) => <Item {...props} conditions={SM_CONDITIONS[props.num]} />;
 function BlockHeader({ n, title }) {
   return (
     <div className="block-header">
@@ -453,60 +513,60 @@ function CriteriaForm({ data, update, grade, showAmounts, onUpload, onRemove, on
   return (
     <div className="criteria-form">
       <BlockHeader n="1" title="Фінансовий блок" />
-      <Item num="1.1" title="Виконання плану продажів" amount={b1.sales} screenshotKey="sales" {...shotProps}>
+      <TmItem num="1.1" title="Виконання плану продажів" amount={b1.sales} screenshotKey="sales" {...shotProps}>
         <Field readOnly={readOnly} label="% виконання плану" value={data.block1.salesPlanPercent} onChange={(v) => update(["block1", "salesPlanPercent"], v)} suffix="%" />
-      </Item>
-      <Item num="1.2" title="Зростання продажів (LFL)" amount={b1.lfl} screenshotKey="lfl" {...shotProps}>
+      </TmItem>
+      <TmItem num="1.2" title="Зростання продажів (LFL)" amount={b1.lfl} screenshotKey="lfl" {...shotProps}>
         <Field readOnly={readOnly} label="% LFL" value={data.block1.lflPercent} onChange={(v) => update(["block1", "lflPercent"], v)} suffix="%" />
-      </Item>
-      <Item num="1.3" title="% СМ, що виконали план на 100+%" amount={b1.sm} screenshotKey="smPlan" {...shotProps}>
+      </TmItem>
+      <TmItem num="1.3" title="% СМ, що виконали план на 100+%" amount={b1.sm} screenshotKey="smPlan" {...shotProps}>
         <Field readOnly={readOnly} label="% магазинів" value={data.block1.smPlanPercent} onChange={(v) => update(["block1", "smPlanPercent"], v)} suffix="%" />
-      </Item>
+      </TmItem>
 
       <BlockHeader n="2" title="Фокусні задачі" />
-      <Item num="2.1" title="Дзвінки" amount={callsAmt} screenshotKey="calls" {...shotProps}>
+      <TmItem num="2.1" title="Дзвінки" amount={callsAmt} screenshotKey="calls" {...shotProps}>
         <Field readOnly={readOnly} label="План додзвонів" value={data.block2.callsPlan} onChange={(v) => update(["block2", "callsPlan"], v)} />
         <Field readOnly={readOnly} label="Факт додзвонів" value={data.block2.callsFact} onChange={(v) => update(["block2", "callsFact"], v)} />
         <Field readOnly={readOnly} label="Оборот з дзвінків" value={data.block2.callsRevenue} onChange={(v) => update(["block2", "callsRevenue"], v)} suffix="грн" />
         <Field readOnly={readOnly} label="Норма вартості дзвінка" value={data.block2.callsCostNorm} onChange={(v) => update(["block2", "callsCostNorm"], v)} suffix="грн" />
-      </Item>
-      <Item num="2.2" title="Рентабельність" amount={rentAmt} screenshotKey="rentability" {...shotProps}>
+      </TmItem>
+      <TmItem num="2.2" title="Рентабельність" amount={rentAmt} screenshotKey="rentability" {...shotProps}>
         <Field readOnly={readOnly} label="% рентабельності" value={data.block2.rentabilityPercent} onChange={(v) => update(["block2", "rentabilityPercent"], v)} suffix="%" />
-      </Item>
-      <Item num="2.3" title="Продажі PBI" amount={pbiAmt} screenshotKey="pbi" {...shotProps}>
+      </TmItem>
+      <TmItem num="2.3" title="Продажі PBI" amount={pbiAmt} screenshotKey="pbi" {...shotProps}>
         <CheckField readOnly={readOnly} label="Виконано місячний план" checked={data.block2.pbiObligatory} onChange={(v) => update(["block2", "pbiObligatory"], v)} />
         <Field readOnly={readOnly} label="Загальний оборот" value={data.block2.pbiTotalRevenue} onChange={(v) => update(["block2", "pbiTotalRevenue"], v)} suffix="грн" />
         <Field readOnly={readOnly} label="Оборот PBI" value={data.block2.pbiRevenue} onChange={(v) => update(["block2", "pbiRevenue"], v)} suffix="грн" />
         {showAmounts && <div className="ez-sub"><span>% PBI від обороту: {pbiCalcResult.percent.toFixed(1)}%</span></div>}
-      </Item>
-      <Item num="2.4" title="Прибутковість магазинів" amount={storesAmt} screenshotKey="stores" {...shotProps}>
+      </TmItem>
+      <TmItem num="2.4" title="Прибутковість магазинів" amount={storesAmt} screenshotKey="stores" {...shotProps}>
         <StoresEditor readOnly={readOnly} stores={data.block2.stores} update={update} />
-      </Item>
+      </TmItem>
 
       <BlockHeader n="3" title="Стандарти" />
-      <Item num="3.1" title="Укомплектованість штату" amount={staffAmt} screenshotKey="staff" {...shotProps}>
+      <TmItem num="3.1" title="Укомплектованість штату" amount={staffAmt} screenshotKey="staff" {...shotProps}>
         <Field readOnly={readOnly} label="% укомплектованості" value={data.block3.staffPercent} onChange={(v) => update(["block3", "staffPercent"], v)} suffix="%" />
-      </Item>
-      <Item num="3.2" title="Неприпустимі ситуації" amount={violAmt} screenshotKey="violations" {...shotProps}>
+      </TmItem>
+      <TmItem num="3.2" title="Неприпустимі ситуації" amount={violAmt} screenshotKey="violations" {...shotProps}>
         <Field readOnly={readOnly} label="Кількість підтверджених" value={data.block3.violationsCount} onChange={(v) => update(["block3", "violationsCount"], v)} />
-      </Item>
-      <Item num="3.3" title="Дотримання графіків роботи" amount={schedAmt} screenshotKey="schedule" {...shotProps}>
+      </TmItem>
+      <TmItem num="3.3" title="Дотримання графіків роботи" amount={schedAmt} screenshotKey="schedule" {...shotProps}>
         <Field readOnly={readOnly} label="Кількість порушень" value={data.block3.scheduleViolationsCount} onChange={(v) => update(["block3", "scheduleViolationsCount"], v)} />
-      </Item>
-      <Item num="3.4" title="Стандарти внутрішнього стану СМ" amount={smStateAmt} screenshotKey="smState" {...shotProps}>
+      </TmItem>
+      <TmItem num="3.4" title="Стандарти внутрішнього стану СМ" amount={smStateAmt} screenshotKey="smState" {...shotProps}>
         <Field readOnly={readOnly} label="Порушень виявлено" value={data.block3.smViolationsFound} onChange={(v) => update(["block3", "smViolationsFound"], v)} />
         <Field readOnly={readOnly} label="Порушень не виправлено" value={data.block3.smViolationsUnfixed} onChange={(v) => update(["block3", "smViolationsUnfixed"], v)} />
         <div className="hint">Магазинів на території: {smCount} (за списком у п. 2.4)</div>
-      </Item>
-      <Item num="3.5" title="Стандарт мерчандайзингу" amount={merchAmt} screenshotKey="merch" {...shotProps}>
+      </TmItem>
+      <TmItem num="3.5" title="Стандарт мерчандайзингу" amount={merchAmt} screenshotKey="merch" {...shotProps}>
         <Field readOnly={readOnly} label="Кількість порушень" value={data.block3.merchViolationsCount} onChange={(v) => update(["block3", "merchViolationsCount"], v)} />
-      </Item>
-      <Item num="3.6" title="Проходження навчання (АКО)" amount={trainAmt} screenshotKey="training" {...shotProps}>
+      </TmItem>
+      <TmItem num="3.6" title="Проходження навчання (АКО)" amount={trainAmt} screenshotKey="training" {...shotProps}>
         <Field readOnly={readOnly} label="Середній бал, %" value={data.block3.trainingScore} onChange={(v) => update(["block3", "trainingScore"], v)} suffix="%" />
-      </Item>
+      </TmItem>
 
       <BlockHeader n="ЕЗ" title="Фінальний розрахунок" />
-      <Item num="2.5" title="Економічний ефект (ЕЗ)" amount={ez.bonus} screenshotKey="ez" {...shotProps}>
+      <TmItem num="2.5" title="Економічний ефект (ЕЗ)" amount={ez.bonus} screenshotKey="ez" {...shotProps}>
         <Field readOnly={readOnly} label="Сума продажів (оборот)" value={data.ez.revenue} onChange={(v) => update(["ez", "revenue"], v)} suffix="грн" />
         <Field readOnly={readOnly} label="Рентабельність" value={data.ez.profitabilityPercent} onChange={(v) => update(["ez", "profitabilityPercent"], v)} suffix="%" />
         <Field readOnly={readOnly} label="Витрати ОЧ (Оплата частинами)" value={data.ez.och} onChange={(v) => update(["ez", "och"], v)} suffix="грн" />
@@ -518,7 +578,7 @@ function CriteriaForm({ data, update, grade, showAmounts, onUpload, onRemove, on
             <span>ЕЗ: {fmt(ez.ezValue)}</span>
           </div>
         )}
-      </Item>
+      </TmItem>
     </div>
   );
 }
@@ -1281,7 +1341,7 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onUpload, onRem
   return (
     <div className="criteria-form">
       <BlockHeader n="1" title="Основна частина за виконання плану" />
-      <Item num="1.1" title="Категорія та база" amount={showAmounts ? calc.baseAdjusted : undefined} screenshotKey="base" {...shot}>
+      <SmItem num="1.1" title="Категорія та база" amount={showAmounts ? calc.baseAdjusted : undefined} screenshotKey="base" {...shot}>
         <Field readOnly={readOnly} label="Середній ТО за 3 міс" suffix="грн" value={data.base.avg3To} onChange={(v) => update(["base", "avg3To"], v)} />
         <SelectField readOnly={readOnly} label="Категорія салону" value={data.base.categoryOverride} onChange={(v) => update(["base", "categoryOverride"], v)} options={catOptions} />
         <Field readOnly={readOnly} label="% виконання плану ТО" suffix="%" value={data.base.planPercent} onChange={(v) => update(["base", "planPercent"], v)} />
@@ -1294,25 +1354,25 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onUpload, onRem
             <span>Відпрац. коеф: {calc.factor.toFixed(2)} (норма вихідних {normDaysOff(area)})</span>
           </div>
         )}
-      </Item>
+      </SmItem>
 
       <BlockHeader n="2" title="Мотивація керуючого" />
-      <Item num="2.1" title="Атестація співробітників ФМ" amount={showAmounts ? calc.mgr.attest : undefined} screenshotKey="attest" {...shot}>
+      <SmItem num="2.1" title="Атестація співробітників ФМ" amount={showAmounts ? calc.mgr.attest : undefined} screenshotKey="attest" {...shot}>
         <CheckField readOnly={readOnly} label="Атестація всіма співробітниками ≥ 98%" checked={data.manager.attestationAll} onChange={(v) => update(["manager", "attestationAll"], v)} />
-      </Item>
-      <Item num="2.2" title="Підтримання стандартів ФМ" amount={showAmounts ? calc.mgr.standards : undefined} screenshotKey="standards" {...shot}>
+      </SmItem>
+      <SmItem num="2.2" title="Підтримання стандартів ФМ" amount={showAmounts ? calc.mgr.standards : undefined} screenshotKey="standards" {...shot}>
         <CheckField readOnly={readOnly} label="Без зауважень (бонус 2 000)" checked={data.manager.noRemarks} onChange={(v) => update(["manager", "noRemarks"], v)} />
         <Field readOnly={readOnly} label="Виявлені зауваження (−200)" value={data.manager.remarksFound} onChange={(v) => update(["manager", "remarksFound"], v)} />
         <Field readOnly={readOnly} label="Невиправлені зауваження (−400)" value={data.manager.remarksUnfixed} onChange={(v) => update(["manager", "remarksUnfixed"], v)} />
         <div className="hint">Штраф до −2 000 грн. Виявлене та виправлене зауваження не сумуються.</div>
-      </Item>
-      <Item num="2.3" title="Коефіцієнт керуючого" amount={showAmounts ? calc.mgr.coefBonus : undefined} screenshotKey="coef" {...shot}>
+      </SmItem>
+      <SmItem num="2.3" title="Коефіцієнт керуючого" amount={showAmounts ? calc.mgr.coefBonus : undefined} screenshotKey="coef" {...shot}>
         <SelectField readOnly={readOnly} label="Статус" value={data.manager.coef} onChange={(v) => update(["manager", "coef"], Number(v))} options={coefOptions} />
         <div className="hint">Додатковий бонус = ставка за категорією ({fmt(calc.baseRaw)}) × (коеф − 1). Умова переходу на «Керуючий»: 2 з 3 планів по СМ.</div>
-      </Item>
+      </SmItem>
 
       <BlockHeader n="3" title="Бонусна частина" />
-      <Item num="3.1" title="Обіг з дзвінків" amount={showAmounts ? calc.bonus.calls : undefined} screenshotKey="calls" {...shot}>
+      <SmItem num="3.1" title="Обіг з дзвінків" amount={showAmounts ? calc.bonus.calls : undefined} screenshotKey="calls" {...shot}>
         <Field readOnly={readOnly} label="Загальний план ТО на місяць" suffix="грн" value={data.bonus.monthlyToPlan} onChange={(v) => update(["bonus", "monthlyToPlan"], v)} />
         <CheckField readOnly={readOnly} label="Виконано кількість дзвінків" checked={data.bonus.callsCountDone} onChange={(v) => update(["bonus", "callsCountDone"], v)} />
         <CheckField readOnly={readOnly} label="Виконано оборот з дзвінків" checked={data.bonus.callsRevenueDone} onChange={(v) => update(["bonus", "callsRevenueDone"], v)} />
@@ -1323,46 +1383,46 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onUpload, onRem
             <span>Ставка бонусу: {calc.bonus.callsPct}%</span>
           </div>
         )}
-      </Item>
-      <Item num="3.2" title="Заміна на іншому магазині" amount={showAmounts ? calc.bonus.replacement : undefined} screenshotKey="replace" {...shot}>
+      </SmItem>
+      <SmItem num="3.2" title="Заміна на іншому магазині" amount={showAmounts ? calc.bonus.replacement : undefined} screenshotKey="replace" {...shot}>
         <Field readOnly={readOnly} label="Днів заміни" value={data.bonus.replacementDays} onChange={(v) => update(["bonus", "replacementDays"], v)} />
         {showAmounts && <div className="hint">Денна ставка на своєму магазині: {fmt(calc.dailyRate)} · +20% за день заміни</div>}
-      </Item>
-      <Item num="3.3" title="Середній чек" amount={showAmounts ? calc.bonus.avgCheck : undefined} screenshotKey="sc" {...shot}>
+      </SmItem>
+      <SmItem num="3.3" title="Середній чек" amount={showAmounts ? calc.bonus.avgCheck : undefined} screenshotKey="sc" {...shot}>
         <Field readOnly={readOnly} label="Факт. середній чек" suffix="грн" value={data.bonus.avgCheckFact} onChange={(v) => update(["bonus", "avgCheckFact"], v)} />
         <Field readOnly={readOnly} label="Поріг 1 → 700 грн" value={data.bonus.scN1} onChange={(v) => update(["bonus", "scN1"], v)} />
         <Field readOnly={readOnly} label="Поріг 2 → 1 500 грн" value={data.bonus.scN2} onChange={(v) => update(["bonus", "scN2"], v)} />
         <Field readOnly={readOnly} label="Поріг 3 → 2 000 грн" value={data.bonus.scN3} onChange={(v) => update(["bonus", "scN3"], v)} />
         <div className="hint">Мінімальний середній чек на місяць надає ТМ.</div>
-      </Item>
-      <Item num="3.4" title="Довжина чека" amount={showAmounts ? calc.bonus.checkLen : undefined} screenshotKey="cl" {...shot}>
+      </SmItem>
+      <SmItem num="3.4" title="Довжина чека" amount={showAmounts ? calc.bonus.checkLen : undefined} screenshotKey="cl" {...shot}>
         <Field readOnly={readOnly} label="Факт. довжина чека" value={data.bonus.checkLenFact} onChange={(v) => update(["bonus", "checkLenFact"], v)} />
         <Field readOnly={readOnly} label="Поріг 1 → 700 грн" value={data.bonus.clN1} onChange={(v) => update(["bonus", "clN1"], v)} />
         <Field readOnly={readOnly} label="Поріг 2 → 1 500 грн" value={data.bonus.clN2} onChange={(v) => update(["bonus", "clN2"], v)} />
         <Field readOnly={readOnly} label="Поріг 3 → 2 000 грн" value={data.bonus.clN3} onChange={(v) => update(["bonus", "clN3"], v)} />
         <div className="hint">Мінімальну довжину чека на місяць надає ТМ.</div>
-      </Item>
-      <Item num="3.5" title="Атестація (курси)" amount={showAmounts ? calc.bonus.courses : undefined} screenshotKey="courses" {...shot}>
+      </SmItem>
+      <SmItem num="3.5" title="Атестація (курси)" amount={showAmounts ? calc.bonus.courses : undefined} screenshotKey="courses" {...shot}>
         <CheckField readOnly={readOnly} label="≥ 98% середньо-місячних курсів, без перепризначення" checked={data.bonus.coursesOk} onChange={(v) => update(["bonus", "coursesOk"], v)} />
-      </Item>
-      <Item num="3.6" title="Продажі із сайту через НП" amount={showAmounts ? calc.bonus.siteNp : undefined} screenshotKey="np" {...shot}>
+      </SmItem>
+      <SmItem num="3.6" title="Продажі із сайту через НП" amount={showAmounts ? calc.bonus.siteNp : undefined} screenshotKey="np" {...shot}>
         <Field readOnly={readOnly} label="Оборот продажів через НП" suffix="грн" value={data.bonus.siteNpRevenue} onChange={(v) => update(["bonus", "siteNpRevenue"], v)} />
         <div className="hint">4% на команду</div>
-      </Item>
-      <Item num="3.7" title="Продаж по БН" amount={showAmounts ? calc.bonus.bn : undefined} screenshotKey="bn" {...shot}>
+      </SmItem>
+      <SmItem num="3.7" title="Продаж по БН" amount={showAmounts ? calc.bonus.bn : undefined} screenshotKey="bn" {...shot}>
         <Field readOnly={readOnly} label="Оборот по БН" suffix="грн" value={data.bonus.bnRevenue} onChange={(v) => update(["bonus", "bnRevenue"], v)} />
         <div className="hint">4% на команду</div>
-      </Item>
+      </SmItem>
 
       <BlockHeader n="4" title="Додаткова мотивація за продаж PPI" />
-      <Item num="4.1" title="Продаж PPI" amount={showAmounts ? calc.ppi.bonus : undefined} screenshotKey="ppi" {...shot}>
+      <SmItem num="4.1" title="Продаж PPI" amount={showAmounts ? calc.ppi.bonus : undefined} screenshotKey="ppi" {...shot}>
         <Field readOnly={readOnly} label="Оборот по категорії PPI" suffix="грн" value={data.ppi.ppiRevenue} onChange={(v) => update(["ppi", "ppiRevenue"], v)} />
         <CheckField readOnly={readOnly} label="План PPI закрито" checked={data.ppi.planClosed} onChange={(v) => update(["ppi", "planClosed"], v)} />
         {showAmounts && <div className="hint">{calc.ppi.pct}% від обороту PPI ({data.ppi.planClosed ? "план закрито" : "план не закрито"})</div>}
-      </Item>
+      </SmItem>
 
       <BlockHeader n="5" title="Рекорд та квартальна премія" />
-      <Item num="5.1" title="Бонус за рекордні показники" amount={showAmounts ? calc.record.bonus : undefined} screenshotKey="record" {...shot}>
+      <SmItem num="5.1" title="Бонус за рекордні показники" amount={showAmounts ? calc.record.bonus : undefined} screenshotKey="record" {...shot}>
         <Field readOnly={readOnly} label="Оборот ТО за місяць (команда)" suffix="грн" value={data.record.monthlyTo} onChange={(v) => update(["record", "monthlyTo"], v)} />
         <Field readOnly={readOnly} label="Попередній рекорд ТО" suffix="грн" value={data.record.prevRecord} onChange={(v) => update(["record", "prevRecord"], v)} />
         {showAmounts && (
@@ -1371,13 +1431,13 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onUpload, onRem
             {calc.record.beaten ? " Рекорд перебито ✔" : ""}
           </div>
         )}
-      </Item>
+      </SmItem>
       {isQuarterEnd && (
-        <Item num="5.2" title="Квартальна премія" amount={showAmounts ? calc.quarterly : undefined} screenshotKey="quarter" {...shot}>
+        <SmItem num="5.2" title="Квартальна премія" amount={showAmounts ? calc.quarterly : undefined} screenshotKey="quarter" {...shot}>
           <CheckField readOnly={readOnly} label="3/3 місяці план по обороту закрито" checked={data.quarterly.threeOfThree} onChange={(v) => update(["quarterly", "threeOfThree"], v)} />
           <Field readOnly={readOnly} label="Сума 3 останніх ЗП" suffix="грн" value={data.quarterly.last3SalarySum} onChange={(v) => update(["quarterly", "last3SalarySum"], v)} />
           <div className="hint">Премія — 10% від суми трьох останніх заробітних плат.</div>
-        </Item>
+        </SmItem>
       )}
     </div>
   );
@@ -2102,12 +2162,14 @@ const CSS = `
 
 .item{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin-bottom:11px;box-shadow:var(--sh-2);transition:border-color .16s var(--ease),transform .16s var(--ease),box-shadow .16s var(--ease);}
 .item:focus-within{border-color:var(--gold);box-shadow:var(--sh-2),0 0 0 3px rgba(190,138,46,.14);}
-.item-head{display:flex;align-items:center;gap:11px;margin-bottom:12px;}
+.item-head{display:flex;align-items:center;gap:9px;margin-bottom:12px;flex-wrap:wrap;}
 .item-num{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;color:var(--muted);background:var(--surface-alt);padding:3px 7px;border-radius:6px;}
 .item-title{font-weight:600;font-size:14px;flex:1;letter-spacing:-.005em;color:var(--ink);}
 .item-amount{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:var(--muted);padding:3px 9px;border-radius:999px;background:var(--surface-alt);white-space:nowrap;}
 .item-amount.pos{color:var(--positive);background:rgba(60,107,73,.12);}
 .item-amount.neg{color:var(--negative);background:rgba(160,58,42,.12);}
+.item-cond{flex-shrink:0;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:none;border:1px solid var(--line-strong);border-radius:999px;padding:3px 9px;cursor:pointer;transition:color .14s var(--ease),border-color .14s var(--ease),background .14s var(--ease);}
+.item-cond:hover{color:var(--gold);border-color:var(--gold);background:rgba(190,138,46,.08);}
 .item-body{display:flex;align-items:flex-start;gap:16px;}
 .item-fields{display:flex;flex-wrap:wrap;gap:12px 18px;flex:1;}
 
@@ -2162,6 +2224,25 @@ const CSS = `
 .modal-content{position:relative;max-width:90vw;max-height:90vh;}
 .modal-content img{max-width:90vw;max-height:88vh;border-radius:var(--radius-md);box-shadow:var(--sh-3);}
 .modal-close{position:absolute;top:-15px;right:-15px;background:var(--surface);border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:var(--sh-2);}
+
+/* ---------- info / умови modal ---------- */
+.info-modal{position:relative;background:var(--surface);border-radius:var(--radius);max-width:520px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:var(--sh-3);overflow:hidden;animation:fadeIn .2s ease both;}
+.info-modal-head{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);background:var(--surface-alt);}
+.info-modal-title{font-family:'Fraunces',serif;font-size:15.5px;font-weight:600;color:var(--ink);flex:1;letter-spacing:-.01em;}
+.info-modal-close{position:static;top:auto;right:auto;width:28px;height:28px;box-shadow:none;background:var(--surface);border:1px solid var(--line-strong);flex-shrink:0;}
+.info-modal-body{padding:16px 18px;overflow-y:auto;}
+.cond-blocks{display:flex;flex-direction:column;gap:12px;}
+.cond-p{font-size:13px;line-height:1.55;color:var(--ink-soft);margin:0;}
+.cond-note{font-size:11.5px;line-height:1.5;color:var(--muted);margin:0;padding-left:11px;border-left:2px solid var(--line-strong);}
+.cond-ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;}
+.cond-ul li{font-size:12.5px;line-height:1.5;color:var(--ink-soft);}
+.cond-table-wrap{overflow-x:auto;}
+.cond-table{width:100%;border-collapse:collapse;font-size:12px;font-family:'IBM Plex Mono',monospace;}
+.cond-table th{text-align:right;font-weight:600;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line-strong);white-space:nowrap;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;}
+.cond-table th:first-child{text-align:left;}
+.cond-table td{text-align:right;padding:7px 8px;border-bottom:1px dashed var(--line);color:var(--ink);white-space:nowrap;font-variant-numeric:tabular-nums;}
+.cond-table td.cond-td-label{text-align:left;color:var(--ink-soft);font-family:'Inter',sans-serif;font-size:12px;}
+.cond-table tr:last-child td{border-bottom:none;}
 
 /* ---------- tabs ---------- */
 .tm-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--line-dark);}
