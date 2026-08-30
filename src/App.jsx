@@ -8,7 +8,7 @@ import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
   Store, Calculator, LogIn, Wallet, User, Clock,
   LayoutGrid, FileText, Calendar, Package, BarChart3, CreditCard, CheckSquare, ListChecks, GraduationCap,
-  Bell, Star, Trash2, Plus,
+  Bell, Star, Trash2, Plus, ChevronRight,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -38,6 +38,20 @@ const TM_LIST = TMS.map((t) => ({ key: t.key, name: t.name }));
 const MANAGER_NAME = MANAGER.name;
 const MONTH_NAMES = ["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"];
 const MONTH_GEN = ["січня","лютого","березня","квітня","травня","червня","липня","серпня","вересня","жовтня","листопада","грудня"];
+const MON_SHORT = ["січ","лют","бер","кві","тра","чер","лип","сер","вер","жов","лис","гру"];
+const WEEKDAYS_SHORT = ["Пн","Вт","Ср","Чт","Пт","Сб","Нд"];
+const pad2 = (n) => String(n).padStart(2, "0");
+/* людський підпис дедлайну; приймає ISO-таймстамп або "YYYY-MM-DD" */
+function fmtDeadline(v) {
+  if (!v) return "";
+  if (v.length <= 10) { const [y, m, d] = v.split("-").map(Number); return `${d} ${MON_SHORT[m - 1]}`; }
+  const dt = new Date(v);
+  if (isNaN(dt)) return "";
+  const now = new Date();
+  const yr = dt.getFullYear() === now.getFullYear() ? "" : ` ${dt.getFullYear()}`;
+  const time = (dt.getHours() || dt.getMinutes()) ? `, ${pad2(dt.getHours())}:${pad2(dt.getMinutes())}` : "";
+  return `${dt.getDate()} ${MON_SHORT[dt.getMonth()]}${yr}${time}`;
+}
 
 const pad = (n) => String(n).padStart(2, "0");
 const nowYm = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
@@ -2561,8 +2575,11 @@ function ModuleStub({ name, note }) {
 /* =========================================================
    МОДУЛЬ «ЗАДАЧІ»
 ========================================================= */
-const isOverdue = (t) => t.due_date && t.status !== "done" && new Date(t.due_date) < new Date(new Date().toDateString());
-const dueLabel = (d) => { const [, m, day] = d.split("-").map(Number); return `${day} ${MONTH_GEN[m - 1]}`; };
+const taskDue = (t) => t.due_at || t.due_date || null;
+const isOverdue = (t) => {
+  const d = taskDue(t);
+  return d && t.status !== "done" && new Date(d.length <= 10 ? `${d}T23:59` : d) < new Date();
+};
 
 function useMyTasks() {
   const [tasks, setTasks] = useState(null);
@@ -2610,7 +2627,7 @@ function TaskCard({ t, cabKey, onStatus, onDelete }) {
         <span className="task-title">{t.title}</span>
         <span className="task-card-sub">
           {mine ? `від ${cabName(t.created_by)}` : `кому ${cabName(t.assignee)}`}
-          {t.due_date && <> · <span className={isOverdue(t) ? "task-due-over" : ""}>до {dueLabel(t.due_date)}</span></>}
+          {taskDue(t) && <> · <span className={isOverdue(t) ? "task-due-over" : ""}>до {fmtDeadline(taskDue(t))}</span></>}
         </span>
         <span className={`task-dot ${ds}`} title={dotTitle[ds]} />
       </button>
@@ -2712,6 +2729,95 @@ function AssigneePicker({ cab, selected, setSelected }) {
   );
 }
 
+/* Сучасний вибір дати+часу — власний календар, однаковий у всіх кабінетах.
+   value: ISO-таймстамп або ""; onChange(iso|""). */
+function DateTimeField({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ left: 0 });
+  const btnRef = React.useRef(null);
+  const sel = value ? new Date(value) : null;
+  const [view, setView] = useState(() => {
+    const b = sel || new Date();
+    return new Date(b.getFullYear(), b.getMonth(), 1);
+  });
+  const h = sel ? sel.getHours() : 18;
+  const m = sel ? sel.getMinutes() : 0;
+
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    const r = btnRef.current.getBoundingClientRect();
+    const flip = r.bottom + 350 > window.innerHeight;
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - 296)),
+      top: flip ? undefined : r.bottom + 6,
+      bottom: flip ? window.innerHeight - r.top + 6 : undefined,
+    });
+    setView(new Date((sel || new Date()).getFullYear(), (sel || new Date()).getMonth(), 1));
+    setOpen(true);
+  };
+  const emit = (y, mo, d, hh, mm) => onChange(new Date(y, mo, d, hh, mm, 0, 0).toISOString());
+  const pickDay = (d) => emit(view.getFullYear(), view.getMonth(), d, h, m);
+  const pickTime = (hh, mm) => {
+    const base = sel || new Date();
+    emit(base.getFullYear(), base.getMonth(), base.getDate(), hh, mm);
+  };
+  const quick = (addDays, hh) => { const d = new Date(); d.setDate(d.getDate() + addDays); emit(d.getFullYear(), d.getMonth(), d.getDate(), hh, 0); setOpen(false); };
+
+  const first = new Date(view.getFullYear(), view.getMonth(), 1);
+  const offset = (first.getDay() + 6) % 7;
+  const dim = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+  const cells = [...Array(offset).fill(null), ...Array.from({ length: dim }, (_, i) => i + 1)];
+  const now = new Date();
+  const sameMonth = (dt) => dt && dt.getFullYear() === view.getFullYear() && dt.getMonth() === view.getMonth();
+
+  return (
+    <div className="dtf">
+      <button type="button" ref={btnRef} className={`dtf-trigger ${value ? "has" : ""}`} onClick={toggle}>
+        <Calendar size={14} />
+        <span>{value ? fmtDeadline(value) : "Без дедлайну"}</span>
+        {value && <span className="dtf-clear" onClick={(e) => { e.stopPropagation(); onChange(""); setOpen(false); }}><X size={13} /></span>}
+      </button>
+      {open && createPortal(
+        <>
+          <div className="dtf-backdrop" onClick={() => setOpen(false)} />
+          <div className="dtf-pop" style={{ top: pos.top, bottom: pos.bottom, left: pos.left }}>
+            <div className="dtf-quick">
+              <button type="button" onClick={() => quick(0, 18)}>Сьогодні</button>
+              <button type="button" onClick={() => quick(1, 10)}>Завтра</button>
+              <button type="button" onClick={() => quick(7, 10)}>+7 днів</button>
+            </div>
+            <div className="dtf-calhead">
+              <button type="button" onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}><ChevronLeft size={16} /></button>
+              <span>{MONTH_NAMES[view.getMonth()]} {view.getFullYear()}</span>
+              <button type="button" onClick={() => setView(new Date(view.getFullYear(), view.getMonth() + 1, 1))}><ChevronRight size={16} /></button>
+            </div>
+            <div className="dtf-grid">
+              {WEEKDAYS_SHORT.map((w) => <span key={w} className="dtf-wd">{w}</span>)}
+              {cells.map((d, i) => d == null ? <span key={i} /> : (
+                <button type="button" key={i}
+                  className={`dtf-day ${sameMonth(sel) && sel.getDate() === d ? "sel" : ""} ${now.getFullYear() === view.getFullYear() && now.getMonth() === view.getMonth() && now.getDate() === d ? "today" : ""}`}
+                  onClick={() => pickDay(d)}>{d}</button>
+              ))}
+            </div>
+            <div className="dtf-time">
+              <Clock size={13} />
+              <select value={h} onChange={(e) => pickTime(Number(e.target.value), m)}>
+                {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{pad2(i)}</option>)}
+              </select>
+              <span>:</span>
+              <select value={m} onChange={(e) => pickTime(h, Number(e.target.value))}>
+                {[0, 15, 30, 45].map((mm) => <option key={mm} value={mm}>{pad2(mm)}</option>)}
+              </select>
+              <button type="button" className="dtf-ok" onClick={() => setOpen(false)}>Готово</button>
+            </div>
+          </div>
+        </>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 function TaskCreateModal({ cab, onClose, onCreated }) {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
@@ -2727,7 +2833,7 @@ function TaskCreateModal({ cab, onClose, onCreated }) {
     try {
       await createTasks({
         title, description: desc, assignees: selected,
-        due_date: due, priority, created_by: cab.key,
+        due_at: due, priority, created_by: cab.key,
       });
       pushToast({
         title: selected.length === 1 ? `Задачу призначено: ${cabName(selected[0])}` : `Задачу призначено (${selected.length})`,
@@ -2755,7 +2861,7 @@ function TaskCreateModal({ cab, onClose, onCreated }) {
             value={desc} onChange={(e) => setDesc(e.target.value)} />
           <div className="task-modal-row">
             <label className="over-field"><span>Дедлайн</span>
-              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
+              <DateTimeField value={due} onChange={setDue} />
             </label>
             <label className="task-priority-toggle">
               <input type="checkbox" checked={priority} onChange={(e) => setPriority(e.target.checked)} />
@@ -3612,8 +3718,39 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .modal-body{padding:18px 20px;overflow:auto;display:flex;flex-direction:column;gap:12px;}
 .modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-top:1px solid var(--line);}
 .task-modal-row{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;}
-.task-modal-row .over-field{max-width:none;flex:1 1 150px;margin-bottom:0;}
-.task-modal-row .over-field input{width:100%;}
+.task-modal-row .over-field{max-width:none;flex:1 1 190px;margin-bottom:0;}
+.task-modal-row .over-field>input{width:100%;}
+
+/* ---------- вибір дати й часу (DateTimeField) ---------- */
+.dtf{width:100%;}
+.dtf-trigger{width:100%;display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;font-family:inherit;font-size:13px;color:var(--muted);cursor:pointer;transition:border-color .14s var(--ease),box-shadow .14s var(--ease);text-align:left;}
+.dtf-trigger:hover{border-color:var(--gold);}
+.dtf-trigger:focus-visible{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(190,138,46,.16);}
+.dtf-trigger.has{color:var(--ink);font-weight:600;}
+.dtf-trigger svg{color:var(--gold);flex-shrink:0;}
+.dtf-trigger>span:first-of-type{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.dtf-clear{display:inline-flex;align-items:center;color:var(--muted);border-radius:999px;padding:2px;}
+.dtf-clear:hover{color:var(--negative);background:rgba(160,58,42,.1);}
+
+.dtf-backdrop{position:fixed;inset:0;z-index:300;}
+.dtf-pop{position:fixed;z-index:301;width:280px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 24px 60px -16px rgba(0,0,0,.5);padding:12px;animation:fadeIn .16s ease both;}
+.dtf-quick{display:flex;gap:6px;margin-bottom:10px;}
+.dtf-quick button{flex:1;padding:6px 4px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:rgba(190,138,46,.06);color:var(--ink-soft);font-family:inherit;font-size:11.5px;cursor:pointer;transition:all .12s var(--ease);}
+.dtf-quick button:hover{background:rgba(190,138,46,.16);color:var(--ink);border-color:var(--gold);}
+.dtf-calhead{display:flex;align-items:center;justify-content:space-between;padding:2px 2px 8px;font-family:'Fraunces',serif;font-size:14px;font-weight:600;color:var(--ink);}
+.dtf-calhead button{width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:none;background:none;color:var(--on-dark-2);border-radius:var(--radius-sm);cursor:pointer;}
+.dtf-calhead button:hover{background:rgba(190,138,46,.12);color:var(--ink);}
+.dtf-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
+.dtf-wd{text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted);padding:3px 0 5px;}
+.dtf-day{height:30px;border:none;background:none;border-radius:var(--radius-sm);font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-soft);cursor:pointer;transition:background .1s var(--ease);}
+.dtf-day:hover{background:rgba(190,138,46,.12);color:var(--ink);}
+.dtf-day.today{color:var(--gold);font-weight:700;}
+.dtf-day.sel{background:var(--gold);color:var(--gold-ink);font-weight:700;}
+.dtf-time{display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);}
+.dtf-time svg{color:var(--gold);}
+.dtf-time select{appearance:none;-webkit-appearance:none;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);cursor:pointer;}
+.dtf-time select:focus{outline:none;border-color:var(--gold);}
+.dtf-ok{margin-left:auto;padding:6px 14px;border:none;border-radius:var(--radius-sm);background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);font-family:inherit;font-weight:700;font-size:12px;cursor:pointer;}
 .task-priority-toggle{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);cursor:pointer;padding-bottom:9px;}
 .task-priority-toggle svg{color:var(--gold);}
 .task-modal-label{font-size:12px;font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.04em;margin-top:2px;}

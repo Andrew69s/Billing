@@ -9,14 +9,14 @@ export async function listTasks() {
 }
 
 /* створити задачу для кожного з assignees (масив cabinet_key) */
-export async function createTasks({ title, description, assignees, due_date, priority, created_by }) {
+export async function createTasks({ title, description, assignees, due_at, priority, created_by }) {
   const rows = assignees.map((assignee) => ({
     title: title.trim(),
     description: (description || "").trim(),
     assignee,
     created_by,
     priority: !!priority,
-    due_date: due_date || null,
+    due_at: due_at || null,
   }));
   const { error } = await supabase.from("tasks").insert(rows);
   if (error) throw error;

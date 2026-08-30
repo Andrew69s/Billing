@@ -49,6 +49,7 @@ $$;
 -- ---------- tasks: нові колонки ----------
 alter table public.tasks add column if not exists priority boolean not null default false;
 alter table public.tasks add column if not exists seen     jsonb   not null default '{}'::jsonb;
+alter table public.tasks add column if not exists due_at   timestamptz; -- дедлайн з часом (заміна due_date)
 
 -- ---------- tasks: RLS v2 ----------
 -- бачити задачу можуть ЛИШЕ постановник і виконавець
