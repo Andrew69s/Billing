@@ -8,7 +8,7 @@ import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
   Store, Calculator, LogIn, Wallet, User, Clock,
   LayoutGrid, FileText, Calendar, Package, BarChart3, CreditCard, CheckSquare, ListChecks, GraduationCap,
-  Bell, Star, Trash2, Plus, ChevronRight,
+  Bell, Star, Trash2, Plus, ChevronRight, Sparkles,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -27,6 +27,10 @@ import {
   loadCalcRefs, tmCond, smCond, planBracketLabel, smCategoryOptions, managerCoefOptions,
 } from "./lib/calcRefs.js";
 import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, markSeen, subscribeTasks } from "./lib/tasks.js";
+import {
+  INVOICE_STATUS, INVOICE_FLOW, nextStatus,
+  listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice,
+} from "./lib/invoices.js";
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
 } from "./lib/notifications.js";
@@ -569,6 +573,7 @@ const notifIcon = (kind) => {
   if (kind === "task_new") return <CheckSquare size={15} />;
   if (kind === "task_status") return <Check size={15} />;
   if (kind === "salary") return <Wallet size={15} />;
+  if (kind === "invoice") return <CreditCard size={15} />;
   return <Bell size={15} />;
 };
 const relTime = (iso) => {
@@ -2960,6 +2965,279 @@ function TasksModule({ cab }) {
   );
 }
 
+/* =========================================================
+   МОДУЛЬ «БЕЗНАЛЬНІ РАХУНКИ»
+========================================================= */
+const invMoney = (n) => (Number(n) || 0).toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " грн";
+const INV_TONE = { issued: "badge-warn", paid: "badge-ok", shipped: "badge-ok", documented: "badge-ok", cancelled: "badge-off" };
+
+function useInvoices() {
+  const [rows, setRows] = useState(null);
+  const reload = () => listInvoices().then(setRows).catch(() => setRows([]));
+  useEffect(() => {
+    reload();
+    const unsub = subscribeInvoices(() => reload());
+    return unsub;
+  }, []);
+  return [rows, reload];
+}
+
+function InvoicePasteZone({ onImage, busy, compact }) {
+  const inputRef = React.useRef(null);
+  const take = async (file) => {
+    if (!file || !file.type?.startsWith("image/")) return;
+    const url = await resizeImage(file);
+    onImage(url);
+  };
+  useEffect(() => {
+    const onPaste = (e) => {
+      for (const it of e.clipboardData?.items || []) {
+        if (it.type?.startsWith("image/")) { e.preventDefault(); take(it.getAsFile()); return; }
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <button type="button" className={`inv-paste ${compact ? "compact" : ""}`}
+      onClick={() => inputRef.current?.click()}
+      onDrop={(e) => { e.preventDefault(); take(e.dataTransfer.files?.[0]); }}
+      onDragOver={(e) => e.preventDefault()}>
+      {busy ? <span>Обробка…</span> : (
+        <>
+          <Camera size={compact ? 16 : 22} />
+          <b>{compact ? "Замінити скрін" : "Вставте скрін з 1С — Ctrl+V (⌘V)"}</b>
+          {!compact && <span>або перетягніть / натисніть, щоб вибрати файл</span>}
+        </>
+      )}
+      <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }}
+        onChange={(e) => { take(e.target.files?.[0]); e.target.value = ""; }} />
+    </button>
+  );
+}
+
+function InvoiceCreateModal({ cab, onClose, onCreated }) {
+  const [shot, setShot] = useState("");
+  const [counterparty, setCounterparty] = useState("");
+  const [amount, setAmount] = useState(0);
+  const [invNo, setInvNo] = useState("");
+  const [comment, setComment] = useState("");
+  const [ai, setAi] = useState("");        // "" | "run" | "ok" | "fail"
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const onImage = async (url) => {
+    setShot(url); setAi("run"); setErr("");
+    try {
+      const r = await extractInvoice(url);
+      setCounterparty((c) => c || r.counterparty || "");
+      setAmount((a) => a || r.amount || 0);
+      setInvNo((n) => n || r.invoice_no || "");
+      setAi(r.counterparty || r.amount ? "ok" : "fail");
+    } catch { setAi("fail"); }
+  };
+
+  const submit = async () => {
+    if (!shot || (!amount && !counterparty.trim())) return;
+    setBusy(true); setErr("");
+    try {
+      await createInvoice({ counterparty, amount, invoice_no: invNo, screenshot: shot, comment, created_by: cab.key });
+      pushToast({ title: "Рахунок виставлено", body: `${counterparty || "рахунок"} · ${invMoney(amount)}` });
+      onCreated(); onClose();
+    } catch (e) { setErr(e.message || "Не вдалося зберегти"); setBusy(false); }
+  };
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Новий безнальний рахунок</h3>
+          <button className="modal-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {!shot ? (
+            <InvoicePasteZone onImage={onImage} busy={ai === "run"} />
+          ) : (
+            <div className="inv-shot-preview">
+              <img src={shot} alt="скрін рахунку" onClick={() => window.open("", "_blank")?.document.write(`<img src="${shot}" style="max-width:100%">`)} />
+              <InvoicePasteZone onImage={onImage} busy={ai === "run"} compact />
+            </div>
+          )}
+          {ai === "run" && <p className="inv-ai inv-ai-run"><Sparkles size={13} /> Розпізнаю рахунок…</p>}
+          {ai === "ok" && <p className="inv-ai inv-ai-ok"><Sparkles size={13} /> Розпізнано — перевірте поля</p>}
+          {ai === "fail" && <p className="inv-ai inv-ai-fail"><Sparkles size={13} /> Не вдалося розпізнати — заповніть вручну</p>}
+
+          <label className="over-field"><span>Контрагент</span>
+            <input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="Постачальник" />
+          </label>
+          <div className="task-modal-row">
+            <label className="over-field"><span>Сума</span>
+              <NumInput value={amount} onChange={setAmount} placeholder="0.00" />
+            </label>
+            <label className="over-field"><span>№ рахунку</span>
+              <input value={invNo} onChange={(e) => setInvNo(e.target.value)} placeholder="—" />
+            </label>
+          </div>
+          <label className="over-field"><span>Коментар (необовʼязково)</span>
+            <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
+          </label>
+          {err && <p className="form-err">{err}</p>}
+        </div>
+        <div className="modal-foot">
+          <span className="task-modal-count">{shot ? "Скрін додано" : "Додайте скрін рахунку"}</span>
+          <button className="btn-primary" onClick={submit} disabled={busy || !shot || (!amount && !counterparty.trim())}>
+            {busy ? "…" : "Виставити рахунок"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
+  const [open, setOpen] = useState(false);
+  const [cmt, setCmt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const owner = inv.created_by === cab.key;
+  const nx = nextStatus(inv.status);
+  const prevIdx = INVOICE_FLOW.indexOf(inv.status) - 1;
+  const prev = prevIdx >= 0 ? INVOICE_FLOW[prevIdx] : null;
+  const active = inv.status !== "cancelled" && inv.status !== "documented";
+
+  const move = async (st, note) => {
+    setBusy(true);
+    try { await setInvoiceStatus(inv, st, cab.key, note); onChanged(); }
+    catch (e) { alert("Не вдалося: " + (e.message || e)); }
+    setBusy(false); setCmt("");
+  };
+  const addComment = async () => {
+    if (!cmt.trim()) return;
+    setBusy(true);
+    try { await updateInvoice(inv.id, { comment: cmt.trim(), history: [...(inv.history || []), { status: inv.status, at: new Date().toISOString(), by: cab.key, note: cmt.trim() }] }); onChanged(); setCmt(""); }
+    catch (e) { alert(e.message || e); }
+    setBusy(false);
+  };
+
+  return (
+    <div className={`inv-card ${inv.status === "cancelled" ? "inv-cancelled" : ""} ${open ? "inv-open" : ""}`}>
+      <button className="inv-card-main" onClick={() => setOpen((v) => !v)}>
+        <span className={`inv-dot inv-${inv.status}`} />
+        <span className="inv-cp">{inv.counterparty || "рахунок без назви"}</span>
+        <span className="inv-amount">{invMoney(inv.amount)}</span>
+        <span className={`badge ${INV_TONE[inv.status]} inv-badge`}>{INVOICE_STATUS[inv.status]}</span>
+      </button>
+      {open && (
+        <div className="inv-detail">
+          <div className="inv-meta">
+            {inv.created_by !== cab.key && <span>Салон: <b>{cabName(inv.created_by)}</b></span>}
+            {inv.invoice_no && <span>№ {inv.invoice_no}</span>}
+            <span>{fmtDeadline(inv.created_at)}</span>
+          </div>
+          {inv.screenshot && (
+            <img className="inv-thumb" src={inv.screenshot} alt="скрін рахунку" onClick={() => onPreview(inv.screenshot)} />
+          )}
+          {inv.comment && <p className="task-comment">💬 {inv.comment}</p>}
+
+          {(inv.history || []).length > 1 && (
+            <div className="inv-history">
+              {inv.history.map((h, i) => (
+                <div key={i} className="inv-hist-row">
+                  <span className="inv-hist-st">{INVOICE_STATUS[h.status] || h.status}</span>
+                  <span>{cabName(h.by)}</span>
+                  <span className="inv-hist-at">{fmtDeadline(h.at)}</span>
+                  {h.note && <span className="inv-hist-note">— {h.note}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="inv-actions">
+            {canManage && nx && (
+              <button className="btn-primary small" disabled={busy} onClick={() => move(nx)}>
+                Позначити: {INVOICE_STATUS[nx]}
+              </button>
+            )}
+            {canManage && prev && active && (
+              <button className="btn-secondary small" disabled={busy} onClick={() => move(prev)}>↩ {INVOICE_STATUS[prev]}</button>
+            )}
+            {(canManage || (owner && inv.status === "issued")) && inv.status !== "cancelled" && (
+              <button className="btn-secondary small" disabled={busy} onClick={() => move("cancelled")}>Скасувати</button>
+            )}
+            {owner && inv.status === "issued" && (
+              <button className="btn-danger small" disabled={busy} onClick={() => { if (confirm("Видалити рахунок?")) deleteInvoice(inv.id).then(onChanged); }}>
+                <Trash2 size={13} /> Видалити
+              </button>
+            )}
+          </div>
+
+          <div className="inv-comment-add">
+            <input placeholder="Додати коментар…" value={cmt} onChange={(e) => setCmt(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addComment(); }} />
+            <button className="btn-secondary small" disabled={busy || !cmt.trim()} onClick={addComment}>Додати</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InvoicesModule({ cab }) {
+  const [rows, reload] = useInvoices();
+  const [showModal, setShowModal] = useState(false);
+  const [filter, setFilter] = useState("open"); // open | all | <status>
+  const [preview, setPreview] = useState(null);
+
+  const canCreate = cab.type === "sm";
+  const canManage = cab.type === "accountant" || cab.type === "manager" || cab.type === "tm";
+
+  if (rows === null) return <div className="loading">Завантаження…</div>;
+
+  const counts = INVOICE_FLOW.reduce((a, s) => ({ ...a, [s]: rows.filter((r) => r.status === s).length }), {});
+  const openList = rows.filter((r) => r.status !== "documented" && r.status !== "cancelled");
+  const shown =
+    filter === "all" ? rows :
+    filter === "open" ? openList :
+    rows.filter((r) => r.status === filter);
+
+  return (
+    <div className="tasks-mod">
+      <div className="tasks-head">
+        <h3 className="ov-h">Безнальні рахунки</h3>
+        {canCreate && (
+          <button className="btn-primary small" onClick={() => setShowModal(true)}><Plus size={14} /> Новий рахунок</button>
+        )}
+      </div>
+
+      <div className="tasks-dash">
+        <span><b>{counts.issued || 0}</b> виставлено</span>
+        <span><b>{counts.paid || 0}</b> оплачено</span>
+        <span><b>{counts.shipped || 0}</b> відвантажено</span>
+      </div>
+
+      <div className="inv-filters">
+        {[["open", "Активні"], ["all", "Усі"], ...Object.entries(INVOICE_STATUS)].map(([k, l]) => (
+          <button key={k} className={`inv-fchip ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>{l}</button>
+        ))}
+      </div>
+
+      {shown.length === 0 ? (
+        <div className="admin-empty">Рахунків немає.</div>
+      ) : (
+        <div className="task-list">
+          {shown.map((inv) => (
+            <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} onPreview={setPreview} onChanged={reload} />
+          ))}
+        </div>
+      )}
+
+      {showModal && <InvoiceCreateModal cab={cab} onClose={() => setShowModal(false)} onCreated={reload} />}
+      {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
+    </div>
+  );
+}
+
 function CabinetShell({ title, onExit, onLogout, modules, cabKey }) {
   const items = modules.filter(Boolean);
   const [active, setActive] = useState(items[0].key);
@@ -3070,7 +3348,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <ModuleStub name="Показники території" /> },
     { key: "docs", label: "Документи й стандарти", icon: <FileText size={16} />, divider: true, render: () => <ModuleStub name="Документи й стандарти" /> },
     { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <ModuleStub name="Команда" /> },
-    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <ModuleStub name="Безнальні рахунки" /> },
+    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     isAdmin ? { key: "admin", label: "Адміністрування", icon: <User size={16} />, divider: true, render: () => <AdminPanel /> } : null,
   ];
   return <CabinetShell title={`ТМ · ${tm.name}`} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={tmKey} />;
@@ -3085,20 +3363,27 @@ function ManagerCabinet({ onExit, onLogout }) {
         <button className={tab === "byTm" ? "active" : ""} onClick={() => setTab("byTm")}><Users size={14} /> По ТМ</button>
         <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
         <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}><CheckSquare size={14} /> Задачі</button>
+        <button className={tab === "inv" ? "active" : ""} onClick={() => setTab("inv")}><CreditCard size={14} /> Рахунки</button>
       </div>
       {tab === "byTm" && <ManagerView embedded />}
       {tab === "consol" && <ConsolidationPanel role="manager" />}
       {tab === "tasks" && <TasksModule cab={{ key: "manager", type: "manager" }} />}
+      {tab === "inv" && <InvoicesModule cab={{ key: "manager", type: "manager" }} />}
     </div>
   );
 }
 
 function AccountantCabinet({ onExit, onLogout }) {
+  const [tab, setTab] = useState("consol");
   return (
     <div className="view">
       <TopBar title={ACCOUNTANT.name} onBack={onExit} onLogout={onLogout} cabKey="accountant" />
-      <div className="cab-nav"><button className="active"><Wallet size={14} /> Зведення ЗП</button></div>
-      <ConsolidationPanel role="accountant" />
+      <div className="cab-nav">
+        <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
+        <button className={tab === "inv" ? "active" : ""} onClick={() => setTab("inv")}><CreditCard size={14} /> Безнальні рахунки</button>
+      </div>
+      {tab === "consol" && <ConsolidationPanel role="accountant" />}
+      {tab === "inv" && <InvoicesModule cab={{ key: "accountant", type: "accountant" }} />}
     </div>
   );
 }
@@ -3113,7 +3398,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
     { key: "reports", label: "Звіти", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
     { key: "standards", label: "Стандарти й навчання", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
-    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <ModuleStub name="Безнальні рахунки" /> },
+    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
   ];
   return <CabinetShell title={`Салон · ${salonLabel(salon)}`} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={salonKey} />;
 }
@@ -3706,6 +3991,49 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .task-done-toggle:hover{color:var(--on-dark);}
 .btn-danger.small{background:rgba(160,58,42,.12);border:1px solid rgba(224,145,127,.3);color:var(--negative);border-radius:var(--radius-sm);padding:7px 13px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .14s var(--ease);}
 .btn-danger.small:hover{background:rgba(160,58,42,.2);}
+
+/* ---------- безнальні рахунки ---------- */
+.inv-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;}
+.inv-fchip{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:5px 12px;font-size:11.5px;font-family:inherit;cursor:pointer;transition:all .13s var(--ease);}
+.inv-fchip.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.inv-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:var(--sh-1);overflow:hidden;color:var(--ink);}
+.inv-card.inv-cancelled{opacity:.55;}
+.inv-card-main{width:100%;display:flex;align-items:center;gap:10px;padding:11px 14px;background:none;border:none;font-family:inherit;text-align:left;cursor:pointer;}
+.inv-card-main:hover{background:rgba(190,138,46,.05);}
+.inv-dot{width:9px;height:9px;border-radius:999px;flex-shrink:0;background:var(--muted);}
+.inv-dot.inv-issued{background:var(--gold-bright);}
+.inv-dot.inv-paid{background:#7896c8;}
+.inv-dot.inv-shipped{background:var(--positive);}
+.inv-dot.inv-documented{background:var(--positive);}
+.inv-dot.inv-cancelled{background:var(--negative-bright);}
+.inv-cp{font-weight:600;font-size:13px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.inv-amount{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-soft);white-space:nowrap;}
+.inv-badge{flex-shrink:0;}
+.inv-detail{padding:4px 14px 14px;border-top:1px solid var(--line);}
+.inv-meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin:10px 0;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.inv-meta b{color:var(--ink-soft);}
+.inv-thumb{max-width:100%;max-height:220px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:zoom-in;display:block;}
+.inv-history{margin:10px 0;padding:8px 10px;background:var(--surface-alt);border-radius:var(--radius-sm);display:flex;flex-direction:column;gap:4px;}
+.inv-hist-row{display:flex;flex-wrap:wrap;gap:4px 8px;font-size:11px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;}
+.inv-hist-st{font-weight:700;color:var(--ink);}
+.inv-hist-at{color:var(--muted);}
+.inv-hist-note{width:100%;color:var(--muted);}
+.inv-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px;}
+.inv-comment-add{display:flex;gap:7px;margin-top:10px;}
+.inv-comment-add input{flex:1;padding:8px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:12.5px;}
+.inv-paste{width:100%;display:flex;flex-direction:column;align-items:center;gap:6px;padding:24px 16px;border:1.5px dashed var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);color:var(--ink-soft);font-family:inherit;cursor:pointer;transition:border-color .14s var(--ease);}
+.inv-paste:hover{border-color:var(--gold);}
+.inv-paste.compact{padding:9px 14px;flex-direction:row;font-size:12px;}
+.inv-paste svg{color:var(--gold);}
+.inv-paste b{font-size:12.5px;color:var(--ink);}
+.inv-paste span{font-size:11px;color:var(--muted);}
+.inv-shot-preview{display:flex;flex-direction:column;gap:8px;}
+.inv-shot-preview img{max-width:100%;max-height:260px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);object-fit:contain;background:#fff;}
+.inv-ai{display:flex;align-items:center;gap:6px;font-size:12px;margin:2px 0;font-family:'IBM Plex Mono',monospace;}
+.inv-ai-run{color:var(--gold);}
+.inv-ai-ok{color:var(--positive);}
+.inv-ai-fail{color:var(--muted);}
+.task-modal .over-field>input,.task-modal .over-field>textarea{width:100%;}
 
 /* модалка створення задачі */
 .modal-overlay{position:fixed;inset:0;z-index:200;background:rgba(12,10,7,.55);display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px;overflow:auto;backdrop-filter:blur(2px);}
