@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import _ from "lodash";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
@@ -3245,23 +3245,138 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
   );
 }
 
+const invMonth = (inv) => (inv.created_at || "").slice(0, 7);
+const CHART_COLORS = { issued: "#DCA94A", paid: "#7896c8", shipped: "#7FBF8F", documented: "#3C6B49" };
+
+function InvoiceAnalytics({ rows, cab }) {
+  const [period, setPeriod] = useState("6m");   // 3m | 6m | 12m | all
+  const [statusF, setStatusF] = useState("all");
+  const [vatF, setVatF] = useState("all");      // all | vat | novat
+  const [salonF, setSalonF] = useState("all");
+
+  const multiSalon = cab.type !== "sm";
+  const salonKeys = useMemo(() => [...new Set(rows.map((r) => r.created_by))].sort(), [rows]);
+
+  const now = new Date();
+  const back = { "3m": 2, "6m": 5, "12m": 11 }[period];
+  const cutoff = period === "all" ? "0000-00" : `${new Date(now.getFullYear(), now.getMonth() - back, 1).getFullYear()}-${pad2(new Date(now.getFullYear(), now.getMonth() - back, 1).getMonth() + 1)}`;
+
+  const filtered = rows.filter((r) => {
+    if (r.status === "cancelled") return false;
+    if (invMonth(r) < cutoff) return false;
+    if (statusF !== "all" && r.status !== statusF) return false;
+    if (vatF === "vat" && !r.vat) return false;
+    if (vatF === "novat" && r.vat) return false;
+    if (salonF !== "all" && r.created_by !== salonF) return false;
+    return true;
+  });
+
+  const total = filtered.reduce((s, r) => s + Number(r.amount || 0), 0);
+  const vatSum = filtered.filter((r) => r.vat).reduce((s, r) => s + Number(r.amount || 0), 0);
+  const count = filtered.length;
+
+  const byMonth = {};
+  filtered.forEach((r) => {
+    const m = invMonth(r);
+    byMonth[m] = byMonth[m] || { m, issued: 0, paid: 0, shipped: 0, documented: 0 };
+    byMonth[m][r.status] += Number(r.amount || 0);
+  });
+  const chartData = Object.values(byMonth).sort((a, b) => (a.m < b.m ? -1 : 1))
+    .map((d) => ({ ...d, label: monthLabel(d.m).replace(/ 20\d\d/, "") }));
+
+  return (
+    <div className="inv-analytics">
+      <div className="inv-anl-filters">
+        <label>Період
+          <select value={period} onChange={(e) => setPeriod(e.target.value)}>
+            <option value="3m">3 місяці</option><option value="6m">6 місяців</option>
+            <option value="12m">рік</option><option value="all">увесь час</option>
+          </select>
+        </label>
+        <label>Статус
+          <select value={statusF} onChange={(e) => setStatusF(e.target.value)}>
+            <option value="all">усі</option>
+            {INVOICE_FLOW.map((s) => <option key={s} value={s}>{INVOICE_STATUS[s]}</option>)}
+          </select>
+        </label>
+        <label>ПДВ
+          <select value={vatF} onChange={(e) => setVatF(e.target.value)}>
+            <option value="all">усі</option><option value="vat">з ПДВ</option><option value="novat">без ПДВ</option>
+          </select>
+        </label>
+        {multiSalon && (
+          <label>Салон
+            <select value={salonF} onChange={(e) => setSalonF(e.target.value)}>
+              <option value="all">усі</option>
+              {salonKeys.map((k) => <option key={k} value={k}>{cabName(k)}</option>)}
+            </select>
+          </label>
+        )}
+      </div>
+
+      <div className="ov-tiles">
+        <div className="ov-tile"><b>{invMoney(total)}</b><span>сума за період</span></div>
+        <div className="ov-tile"><b>{count}</b><span>рахунків</span></div>
+        <div className="ov-tile"><b>{invMoney(vatSum)}</b><span>з них з ПДВ</span></div>
+        <div className="ov-tile"><b>{invMoney(count ? total / count : 0)}</b><span>середній рахунок</span></div>
+      </div>
+
+      {chartData.length === 0 ? (
+        <div className="admin-empty">Немає даних за обраними фільтрами.</div>
+      ) : (
+        <div className="chart-wrap">
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+              <CartesianGrid strokeDasharray="2 5" stroke="#D9D2BE" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#8A8069" }} tickLine={false} axisLine={{ stroke: "#D9D2BE" }} />
+              <YAxis tick={{ fontSize: 11, fill: "#8A8069" }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} tickLine={false} axisLine={false} width={40} />
+              <Tooltip formatter={(v, n) => [invMoney(v), INVOICE_STATUS[n] || n]} />
+              <Legend formatter={(v) => INVOICE_STATUS[v] || v} wrapperStyle={{ fontSize: 11 }} />
+              {INVOICE_FLOW.map((s) => (
+                <Bar key={s} dataKey={s} stackId="a" fill={CHART_COLORS[s]} radius={s === "documented" ? [3, 3, 0, 0] : 0} />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InvoicesModule({ cab }) {
   const [rows, reload] = useInvoices();
   const [showModal, setShowModal] = useState(false);
-  const [filter, setFilter] = useState("open"); // open | all | <status>
+  const [view, setView] = useState("list");     // list | analytics
+  const [filter, setFilter] = useState("open"); // open | archive | all | <status>
+  const [sort, setSort] = useState("date_desc");
+  const [salonF, setSalonF] = useState("all");
   const [preview, setPreview] = useState(null);
 
   const canCreate = cab.type === "sm";
   const canManage = cab.type === "accountant" || cab.type === "manager" || cab.type === "tm";
+  const multiSalon = cab.type !== "sm";
 
   if (rows === null) return <div className="loading">Завантаження…</div>;
 
+  const salonKeys = [...new Set(rows.map((r) => r.created_by))].sort();
   const counts = INVOICE_FLOW.reduce((a, s) => ({ ...a, [s]: rows.filter((r) => r.status === s).length }), {});
-  const openList = rows.filter((r) => r.status !== "documented" && r.status !== "cancelled");
-  const shown =
-    filter === "all" ? rows :
-    filter === "open" ? openList :
-    rows.filter((r) => r.status === filter);
+  const archived = (r) => r.status === "documented" || r.status === "cancelled";
+
+  let shown = rows.filter((r) => {
+    if (salonF !== "all" && r.created_by !== salonF) return false;
+    if (filter === "open") return !archived(r);
+    if (filter === "archive") return archived(r);
+    if (filter === "all") return true;
+    return r.status === filter;
+  });
+  const cmp = {
+    date_desc: (a, b) => (a.created_at < b.created_at ? 1 : -1),
+    date_asc: (a, b) => (a.created_at < b.created_at ? -1 : 1),
+    amount_desc: (a, b) => Number(b.amount) - Number(a.amount),
+    status: (a, b) => INVOICE_FLOW.indexOf(a.status) - INVOICE_FLOW.indexOf(b.status),
+    salon: (a, b) => cabName(a.created_by).localeCompare(cabName(b.created_by)),
+  }[sort];
+  shown = [...shown].sort(cmp);
 
   return (
     <div className="tasks-mod">
@@ -3272,26 +3387,53 @@ function InvoicesModule({ cab }) {
         )}
       </div>
 
-      <div className="tasks-dash">
-        <span><b>{counts.issued || 0}</b> виставлено</span>
-        <span><b>{counts.paid || 0}</b> оплачено</span>
-        <span><b>{counts.shipped || 0}</b> відвантажено</span>
+      <div className="inv-viewtabs">
+        <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}>Список</button>
+        <button className={view === "analytics" ? "on" : ""} onClick={() => setView("analytics")}><BarChart3 size={13} /> Аналітика</button>
       </div>
 
-      <div className="inv-filters">
-        {[["open", "Активні"], ["all", "Усі"], ...Object.entries(INVOICE_STATUS)].map(([k, l]) => (
-          <button key={k} className={`inv-fchip ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>{l}</button>
-        ))}
-      </div>
-
-      {shown.length === 0 ? (
-        <div className="admin-empty">Рахунків немає.</div>
+      {view === "analytics" ? (
+        <InvoiceAnalytics rows={rows} cab={cab} />
       ) : (
-        <div className="task-list">
-          {shown.map((inv) => (
-            <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} onPreview={setPreview} onChanged={reload} />
-          ))}
-        </div>
+        <>
+          <div className="tasks-dash">
+            <span><b>{counts.issued || 0}</b> виставлено</span>
+            <span><b>{counts.paid || 0}</b> оплачено</span>
+            <span><b>{counts.shipped || 0}</b> відвантажено</span>
+          </div>
+
+          <div className="inv-toolbar">
+            <select value={sort} onChange={(e) => setSort(e.target.value)}>
+              <option value="date_desc">Спочатку нові</option>
+              <option value="date_asc">Спочатку старі</option>
+              <option value="amount_desc">За сумою</option>
+              <option value="status">За статусом</option>
+              {multiSalon && <option value="salon">За салоном</option>}
+            </select>
+            {multiSalon && (
+              <select value={salonF} onChange={(e) => setSalonF(e.target.value)}>
+                <option value="all">Усі салони</option>
+                {salonKeys.map((k) => <option key={k} value={k}>{cabName(k)}</option>)}
+              </select>
+            )}
+          </div>
+
+          <div className="inv-filters">
+            {[["open", "Активні"], ["all", "Усі"], ...INVOICE_FLOW.map((s) => [s, INVOICE_STATUS[s]]), ["archive", "Архів"]].map(([k, l]) => (
+              <button key={k} className={`inv-fchip ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>{l}</button>
+            ))}
+          </div>
+
+          {shown.length === 0 ? (
+            <div className="admin-empty">Рахунків немає.</div>
+          ) : (
+            <div className="task-list">
+              {shown.map((inv) => (
+                <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} onPreview={setPreview} onChanged={reload} />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {showModal && <InvoiceCreateModal cab={cab} onClose={() => setShowModal(false)} onCreated={reload} />}
@@ -3332,7 +3474,9 @@ function TmOverview({ tmKey }) {
     let active = true;
     const ym = nowYm();
     (async () => {
-      const [d, g] = await Promise.all([loadData(tmKey, ym), loadGrade(tmKey, ymToQuarter(ym))]);
+      const [d, g, invoices] = await Promise.all([
+        loadData(tmKey, ym), loadGrade(tmKey, ymToQuarter(ym)), listInvoices().catch(() => []),
+      ]);
       const salons = salonsOfTm(tmKey, ym);
       let submitted = 0;
       for (const sl of salons) {
@@ -3340,7 +3484,10 @@ function TmOverview({ tmKey }) {
         if (sd.status === "submitted" || sd.status === "corrected") submitted += 1;
       }
       const calc = await calcTm(d, g, tmKey, ym);
-      if (active) setS({ status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct, submitted, salonTotal: salons.length, dl: deadlineInfo(ym) });
+      const invM = invoices.filter((inv) => invMonth(inv) === ym && inv.status !== "cancelled");
+      const invIssued = invM.reduce((a, i) => a + Number(i.amount || 0), 0);
+      const invPaid = invM.filter((i) => i.status !== "issued").reduce((a, i) => a + Number(i.amount || 0), 0);
+      if (active) setS({ status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct, submitted, salonTotal: salons.length, dl: deadlineInfo(ym), invIssued, invPaid, invCount: invM.length });
     })();
     return () => { active = false; };
   }, [tmKey]);
@@ -3355,6 +3502,8 @@ function TmOverview({ tmKey }) {
         <div className="ov-tile"><b>{fmt(s.total)}</b><span>моя ЗП · {st}</span></div>
         <div className="ov-tile"><b>{s.submitted} / {s.salonTotal}</b><span>салони подали ЗП</span></div>
         <div className="ov-tile"><b>{s.pct.toFixed(0)}%</b><span>план по ТО</span></div>
+        <div className="ov-tile"><b>{invMoney(s.invIssued)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
+        <div className="ov-tile"><b>{invMoney(s.invPaid)}</b><span>з них оплачено+</span></div>
       </div>
       {nagged && (
         <div className={`banner ${s.dl.overdue ? "banner-late" : "banner-warn"}`}>
@@ -3371,11 +3520,16 @@ function SmOverview({ salon }) {
   useEffect(() => {
     let active = true;
     const ym = nowYm();
-    loadSmData(salon.key, ym).then(async (d) => {
+    (async () => {
+      const [d, invoices] = await Promise.all([loadSmData(salon.key, ym), listInvoices().catch(() => [])]);
       const calc = await calcSm(d, salon.key, ym);
       if (!active) return;
-      setS({ status: d.status, total: calc.total, category: calc.category, dl: deadlineInfo(ym) });
-    });
+      const invM = invoices.filter((i) => invMonth(i) === ym && i.status !== "cancelled");
+      setS({
+        status: d.status, total: calc.total, category: calc.category, dl: deadlineInfo(ym),
+        invSum: invM.reduce((a, i) => a + Number(i.amount || 0), 0), invCount: invM.length,
+      });
+    })();
     return () => { active = false; };
   }, [salon.key]);
   if (!s) return <div className="loading">Завантаження…</div>;
@@ -3388,6 +3542,7 @@ function SmOverview({ salon }) {
       <div className="ov-tiles">
         <div className="ov-tile"><b>{fmt(s.total)}</b><span>ЗП · {st}</span></div>
         <div className="ov-tile"><b>{s.category}</b><span>категорія салону</span></div>
+        <div className="ov-tile"><b>{invMoney(s.invSum)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
       </div>
       {nagged && (
         <div className={`banner ${s.dl.overdue ? "banner-late" : "banner-warn"}`}>
@@ -4055,6 +4210,18 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .btn-danger.small:hover{background:rgba(160,58,42,.2);}
 
 /* ---------- безнальні рахунки ---------- */
+.inv-viewtabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--line-dark);}
+.inv-viewtabs button{background:none;border:none;border-bottom:2px solid transparent;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--on-dark-2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;margin-bottom:-1px;}
+.inv-viewtabs button:hover{color:var(--on-dark);}
+.inv-viewtabs button.on{color:var(--gold-bright);border-bottom-color:var(--gold);}
+.inv-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;}
+.inv-toolbar select{appearance:none;-webkit-appearance:none;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23BE8A2E' d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 10px center;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 28px 7px 11px;font-family:inherit;font-size:12px;color:var(--ink);cursor:pointer;}
+.inv-anl-filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;}
+.inv-anl-filters label{display:flex;flex-direction:column;gap:3px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--on-dark-2);}
+.inv-anl-filters select{appearance:none;-webkit-appearance:none;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23BE8A2E' d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 10px center;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 26px 7px 10px;font-family:inherit;font-size:12.5px;color:var(--ink);cursor:pointer;}
+.inv-analytics .chart-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:14px 10px 6px;box-shadow:var(--sh-1);}
+.inv-analytics .ov-tile b{font-size:16px;line-height:1.2;}
+.ov-tiles{grid-template-columns:repeat(auto-fit,minmax(135px,1fr));}
 .inv-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;}
 .inv-fchip{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:5px 12px;font-size:11.5px;font-family:inherit;cursor:pointer;transition:all .13s var(--ease);}
 .inv-fchip.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
