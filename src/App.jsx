@@ -14,6 +14,7 @@ import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
   verifyLogin, getLogin, currentCabinet, signOutCab, initAfterAuth,
   ADMIN_KEY, ADMIN_NAME, listRecoveryRequests, clearRecovery,
+  masterLogin, confirmRecovery, adminSetPassword,
   listReassignments, addReassignment, removeReassignment,
   CAPABILITIES, getCapabilities, setCapabilities, listLog, ALL_CAB_KEYS,
   cabType, PARTICIPANTS, canAssign,
@@ -1582,6 +1583,10 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [forgot, setForgot] = useState(false);
+  const [mCode, setMCode] = useState("");
+  const [mPass, setMPass] = useState("");
+  const [mErr, setMErr] = useState("");
+  const [mBusy, setMBusy] = useState(false);
 
   const submit = async () => {
     if (!login || !password) return;
@@ -1590,6 +1595,25 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
     setBusy(false);
     if (ok) onSuccess(remember);
     else { setError("Невірний логін або пароль"); setPassword(""); }
+  };
+
+  const masterEnter = async () => {
+    if (!mCode) return;
+    setMBusy(true); setMErr("");
+    const ok = await masterLogin(cabKey, mCode);
+    setMBusy(false);
+    if (ok) onSuccess(remember);
+    else setMErr("Невірний код відновлення");
+  };
+  const masterReset = async () => {
+    if (!mCode || mPass.length < 6) return;
+    setMBusy(true); setMErr("");
+    const r = await confirmRecovery(cabKey, mCode, mPass);
+    if (!r.ok) { setMBusy(false); setMErr(r.error || "Не вдалося"); return; }
+    const ok = await verify(login, mPass);
+    setMBusy(false);
+    if (ok) onSuccess(remember);
+    else { setForgot(false); setError("Пароль змінено — увійдіть новим"); setPassword(""); }
   };
 
   return (
@@ -1629,9 +1653,29 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
           </button>
         </div>
         {forgot ? (
-          <p className="recover-lead" style={{ textAlign: "center" }}>
-            Зверніться до адміністратора ({ADMIN_NAME}) — він змінить пароль. Онлайн-відновлення підключаємо.
-          </p>
+          <div className="lg-recover">
+            <p className="recover-lead">
+              Введіть <b>код відновлення</b>. Лише з кодом — увійдете одразу. З новим паролем — ще й зміните його.
+              Якщо коду немає — зверніться до {ADMIN_NAME}.
+            </p>
+            <input className="lg-recover-in" placeholder="Код відновлення" value={mCode}
+              onChange={(e) => { setMCode(e.target.value); setMErr(""); }} />
+            <input className="lg-recover-in" type="password" placeholder="Новий пароль (необовʼязково, мін. 6)"
+              value={mPass} onChange={(e) => { setMPass(e.target.value); setMErr(""); }} />
+            {mErr && <p className="pin-error visible">{mErr}</p>}
+            <div className="pin-actions">
+              <button className="btn-secondary" onClick={() => setForgot(false)}>Назад</button>
+              {mPass ? (
+                <button className="btn-primary" onClick={masterReset} disabled={mBusy || !mCode || mPass.length < 6}>
+                  {mBusy ? "…" : "Змінити й увійти"}
+                </button>
+              ) : (
+                <button className="btn-primary" onClick={masterEnter} disabled={mBusy || !mCode}>
+                  {mBusy ? "…" : "Увійти за кодом"}
+                </button>
+              )}
+            </div>
+          </div>
         ) : (
           <button className="pin-forgot" onClick={() => setForgot(true)}>Забули пароль?</button>
         )}
@@ -2366,7 +2410,10 @@ function AdminRecovery() {
   return (
     <div className="admin-panel">
       <h3>Запити на відновлення паролю</h3>
-      <p className="hint">Передайте код відповідній особі — вона введе його з новим паролем на екрані входу.</p>
+      <p className="hint">
+        Змінити пароль будь-кому — у вкладці «Доступи». Користувач також може відновити сам на екрані входу
+        («Забули пароль?») майстер-кодом.
+      </p>
       {reqs === null ? <div className="loading">Завантаження…</div>
         : reqs.length === 0 ? <div className="admin-empty">Активних запитів немає.</div>
         : (
@@ -2377,8 +2424,8 @@ function AdminRecovery() {
                   <span className="admin-req-name">{cabName(r.cabKey)}</span>
                   <span className="admin-req-time">запит {fmtDate(r.at)}</span>
                 </div>
-                <span className="admin-req-code">{r.code}</span>
-                <button className="btn-secondary small" onClick={() => dismiss(r.cabKey)}>Готово</button>
+                <PassReset cabKey={r.cabKey} />
+                <button className="btn-secondary small" onClick={() => dismiss(r.cabKey)}>Прибрати</button>
               </div>
             ))}
           </div>
@@ -2387,15 +2434,36 @@ function AdminRecovery() {
   );
 }
 
+function PassReset({ cabKey }) {
+  const [open, setOpen] = useState(false);
+  const [pass, setPass] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const save = async () => {
+    setBusy(true); setMsg("");
+    const r = await adminSetPassword(cabKey, pass);
+    setBusy(false);
+    if (r.ok) { setMsg("✓ змінено"); setPass(""); setTimeout(() => { setOpen(false); setMsg(""); }, 1400); }
+    else setMsg(r.error || "помилка");
+  };
+  if (!open) return <button className="btn-secondary small" onClick={() => setOpen(true)}>Змінити пароль</button>;
+  return (
+    <span className="admin-pass-edit">
+      <input type="text" autoFocus placeholder="новий пароль (мін. 6)" value={pass}
+        onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && pass.length >= 6) save(); }} />
+      <button className="btn-primary small" disabled={busy || pass.length < 6} onClick={save}>{busy ? "…" : "OK"}</button>
+      <button className="btn-secondary small" onClick={() => { setOpen(false); setMsg(""); }}>×</button>
+      {msg && <span className="admin-pass-msg">{msg}</span>}
+    </span>
+  );
+}
+
 function AdminAccess() {
   const rows = ALL_CAB_KEYS.map((k) => ({ key: k, name: cabName(k), login: getLogin(k) }));
   return (
     <div className="admin-panel">
       <h3>Доступи</h3>
-      <p className="hint">
-        Логіни фіксовані. Зміна паролів переноситься на сервер — тимчасово це робиться в Supabase → Authentication → Users
-        (знайти користувача за email виду <b>логін@dnipro-m.local</b> → «Reset password» / «Update user»).
-      </p>
+      <p className="hint">Логіни фіксовані. Пароль будь-якого кабінету можна змінити тут.</p>
       <div className="admin-list">
         {rows.map((r) => (
           <div className="admin-access-row" key={r.key}>
@@ -2403,6 +2471,7 @@ function AdminAccess() {
               <span className="admin-req-name">{r.name}</span>
               <span className="admin-req-time">{r.login}@dnipro-m.local</span>
             </div>
+            <PassReset cabKey={r.key} />
           </div>
         ))}
       </div>
@@ -4088,6 +4157,13 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .login-remember{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--on-dark-2);cursor:pointer;padding:2px 0;}
 .login-remember input[type=checkbox]{width:16px;height:16px;accent-color:var(--gold);cursor:pointer;flex-shrink:0;}
 .recover-lead{color:var(--on-dark-2);font-size:12.5px;line-height:1.5;margin:0 0 4px;text-align:left;}
+.lg-recover{display:flex;flex-direction:column;gap:9px;width:100%;margin-top:6px;}
+.lg-recover-in{width:100%;padding:10px 12px;border:1px solid var(--line-dark);border-radius:var(--radius-sm);background:rgba(247,244,234,.05);color:var(--on-dark);font-family:inherit;font-size:13px;}
+.lg-recover-in::placeholder{color:var(--on-dark-2);opacity:.6;}
+.lg-recover-in:focus{outline:none;border-color:var(--gold);}
+.admin-pass-edit{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
+.admin-pass-edit input{padding:7px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:12.5px;min-width:180px;}
+.admin-pass-msg{font-size:11.5px;color:var(--positive);}
 .resume-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:rgba(220,169,74,.1);border:1px solid rgba(220,169,74,.28);border-radius:var(--radius-md);padding:12px 16px;margin-bottom:18px;font-size:13px;color:var(--on-dark);}
 .resume-bar b{color:var(--gold-bright);}
 .resume-actions{display:flex;gap:8px;}

@@ -177,9 +177,53 @@ export async function listRecoveryRequests() {
     return out.sort((a, b) => (a.at < b.at ? 1 : -1));
   } catch { return []; }
 }
-const NEEDS_SERVER = { ok: false, error: "Зміну паролю переносимо на сервер — тимчасово недоступно. Зверніться до адміністратора." };
-export async function confirmRecovery() { return NEEDS_SERVER; }
-export async function adminSetPassword() { return NEEDS_SERVER; }
+/* ---- майстер-код: вхід у будь-який кабінет + скидання паролю (Edge Function) ---- */
+async function callAdminAuth(payload) {
+  const { data, error } = await supabase.functions.invoke("admin-auth", { body: payload });
+  if (error) {
+    let msg = error.message || "помилка";
+    try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch { /* ignore */ }
+    return { error: msg };
+  }
+  return data || {};
+}
+
+/* вхід у кабінет cabKey за майстер-кодом */
+export async function masterLogin(cabKey, code) {
+  const r = await callAdminAuth({ op: "master-login", cabinet_key: cabKey, code });
+  if (r.error || !r.token_hash) return false;
+  const { error } = await supabase.auth.verifyOtp({ token_hash: r.token_hash, type: "magiclink" });
+  if (error) return false;
+  const self = await cabMapSelf();
+  if (!self || self.cabinet_key !== cabKey) { await supabase.auth.signOut(); return false; }
+  await loadReassignCache();
+  try { sessionStorage.setItem("dnipro-m-master", "1"); } catch { /* ignore */ }
+  await logAction("login_master", { cabKey });
+  return true;
+}
+
+/* встановити пароль кабінету: code — майстер-код (для входу-відновлення),
+   або без коду, якщо викликає залогінений адмін */
+export async function setCabinetPassword(cabKey, newPassword, code) {
+  if (String(newPassword || "").length < 6) return { ok: false, error: "Пароль — не менше 6 символів" };
+  const r = await callAdminAuth({ op: "set-password", cabinet_key: cabKey, new_password: String(newPassword), code: code || undefined });
+  if (r.error) return { ok: false, error: r.error };
+  return r.ok ? { ok: true } : { ok: false, error: "Не вдалося" };
+}
+
+/* відновлення на екрані входу: майстер-код + новий пароль */
+export async function confirmRecovery(cabKey, code, newPassword) {
+  const r = await setCabinetPassword(cabKey, newPassword, code);
+  if (r.ok) { await clearRecovery(cabKey).catch(() => {}); await logAction("recovery_done", { cabKey }); }
+  return r;
+}
+
+/* адмін у панелі змінює пароль кабінету (використовує свою сесію) */
+export async function adminSetPassword(cabKey, newPassword) {
+  const r = await setCabinetPassword(cabKey, newPassword);
+  if (r.ok) { await clearRecovery(cabKey).catch(() => {}); await logAction("recovery_done", { cabKey }); }
+  return r;
+}
 
 /* =========================================================
    ПРАВА КОРИСТУВАЧІВ  (надає адміністратор)
