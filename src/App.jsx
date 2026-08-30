@@ -8,7 +8,7 @@ import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
   Store, Calculator, LogIn, Wallet, User, Clock,
   LayoutGrid, FileText, Calendar, Package, BarChart3, CreditCard, CheckSquare, ListChecks, GraduationCap,
-  Bell, Star, Trash2, Plus, ChevronRight, Sparkles,
+  Bell, Star, Trash2, Plus, ChevronRight, Sparkles, Image as ImageIcon,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -28,7 +28,7 @@ import {
 } from "./lib/calcRefs.js";
 import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, markSeen, subscribeTasks } from "./lib/tasks.js";
 import {
-  INVOICE_STATUS, INVOICE_FLOW, nextStatus,
+  INVOICE_STATUS, INVOICE_FLOW, nextStatus, deriveVat,
   listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice,
 } from "./lib/invoices.js";
 import {
@@ -3019,7 +3019,10 @@ function InvoicePasteZone({ onImage, busy, compact }) {
 
 function InvoiceCreateModal({ cab, onClose, onCreated }) {
   const [shot, setShot] = useState("");
-  const [counterparty, setCounterparty] = useState("");
+  const [counterparty, setCounterparty] = useState(""); // Покупець (клієнт)
+  const [issuer, setIssuer] = useState("");             // Постачальник (Будвік / ФОП)
+  const [vat, setVat] = useState(false);
+  const [items, setItems] = useState([]);
   const [amount, setAmount] = useState(0);
   const [invNo, setInvNo] = useState("");
   const [comment, setComment] = useState("");
@@ -3031,10 +3034,13 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
     setShot(url); setAi("run"); setErr("");
     try {
       const r = await extractInvoice(url);
-      setCounterparty((c) => c || r.counterparty || "");
+      setCounterparty((c) => c || r.buyer || "");
+      setIssuer((i) => i || r.issuer || "");
       setAmount((a) => a || r.amount || 0);
       setInvNo((n) => n || r.invoice_no || "");
-      setAi(r.counterparty || r.amount ? "ok" : "fail");
+      setVat(deriveVat(r.issuer, r.vat));
+      if (Array.isArray(r.items) && r.items.length) setItems(r.items);
+      setAi(r.buyer || r.amount ? "ok" : "fail");
     } catch { setAi("fail"); }
   };
 
@@ -3042,7 +3048,7 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
     if (!shot || (!amount && !counterparty.trim())) return;
     setBusy(true); setErr("");
     try {
-      await createInvoice({ counterparty, amount, invoice_no: invNo, screenshot: shot, comment, created_by: cab.key });
+      await createInvoice({ counterparty, issuer, vat, items, amount, invoice_no: invNo, screenshot: shot, comment, created_by: cab.key });
       pushToast({ title: "Рахунок виставлено", body: `${counterparty || "рахунок"} · ${invMoney(amount)}` });
       onCreated(); onClose();
     } catch (e) { setErr(e.message || "Не вдалося зберегти"); setBusy(false); }
@@ -3060,7 +3066,7 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
             <InvoicePasteZone onImage={onImage} busy={ai === "run"} />
           ) : (
             <div className="inv-shot-preview">
-              <img src={shot} alt="скрін рахунку" onClick={() => window.open("", "_blank")?.document.write(`<img src="${shot}" style="max-width:100%">`)} />
+              <img src={shot} alt="скрін рахунку" />
               <InvoicePasteZone onImage={onImage} busy={ai === "run"} compact />
             </div>
           )}
@@ -3068,9 +3074,18 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
           {ai === "ok" && <p className="inv-ai inv-ai-ok"><Sparkles size={13} /> Розпізнано — перевірте поля</p>}
           {ai === "fail" && <p className="inv-ai inv-ai-fail"><Sparkles size={13} /> Не вдалося розпізнати — заповніть вручну</p>}
 
-          <label className="over-field"><span>Контрагент</span>
-            <input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="Постачальник" />
+          <label className="over-field"><span>Покупець (клієнт)</span>
+            <input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="Кому виставлено рахунок" />
           </label>
+          <div className="task-modal-row">
+            <label className="over-field"><span>Виставлено від</span>
+              <input value={issuer} onChange={(e) => { setIssuer(e.target.value); setVat(deriveVat(e.target.value, vat)); }} placeholder="ТОВ Будвік / ФОП" />
+            </label>
+            <label className="task-priority-toggle">
+              <input type="checkbox" checked={vat} onChange={(e) => setVat(e.target.checked)} />
+              {vat ? "з ПДВ" : "без ПДВ"}
+            </label>
+          </div>
           <div className="task-modal-row">
             <label className="over-field"><span>Сума</span>
               <NumInput value={amount} onChange={setAmount} placeholder="0.00" />
@@ -3079,6 +3094,25 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
               <input value={invNo} onChange={(e) => setInvNo(e.target.value)} placeholder="—" />
             </label>
           </div>
+
+          {items.length > 0 && (
+            <div className="inv-items">
+              <div className="inv-items-head">
+                <span>Позиції ({items.length})</span>
+                <button type="button" className="inv-items-clear" onClick={() => setItems([])}>прибрати</button>
+              </div>
+              <div className="inv-items-list">
+                {items.map((it, i) => (
+                  <div className="inv-item-row" key={i}>
+                    <span className="inv-item-code">{it.code || "—"}</span>
+                    <span className="inv-item-name">{it.name}</span>
+                    <span className="inv-item-qty">{it.qty || ""}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <label className="over-field"><span>Коментар (необовʼязково)</span>
             <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
           </label>
@@ -3122,12 +3156,23 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
 
   return (
     <div className={`inv-card ${inv.status === "cancelled" ? "inv-cancelled" : ""} ${open ? "inv-open" : ""}`}>
-      <button className="inv-card-main" onClick={() => setOpen((v) => !v)}>
-        <span className={`inv-dot inv-${inv.status}`} />
-        <span className="inv-cp">{inv.counterparty || "рахунок без назви"}</span>
-        <span className="inv-amount">{invMoney(inv.amount)}</span>
-        <span className={`badge ${INV_TONE[inv.status]} inv-badge`}>{INVOICE_STATUS[inv.status]}</span>
-      </button>
+      <div className="inv-card-main">
+        <button className="inv-card-expand" onClick={() => setOpen((v) => !v)}>
+          <span className={`inv-dot inv-${inv.status}`} />
+          <span className="inv-cp-wrap">
+            <span className="inv-cp">{inv.counterparty || "рахунок без назви"}</span>
+            {inv.issuer && <span className="inv-issuer">від {inv.issuer}</span>}
+          </span>
+          <span className={`inv-vat ${inv.vat ? "on" : ""}`}>{inv.vat ? "з ПДВ" : "без ПДВ"}</span>
+          <span className="inv-amount">{invMoney(inv.amount)}</span>
+          <span className={`badge ${INV_TONE[inv.status]} inv-badge`}>{INVOICE_STATUS[inv.status]}</span>
+        </button>
+        {inv.screenshot && (
+          <button className="inv-shot-btn" title="Відкрити скрін рахунку" onClick={() => onPreview(inv.screenshot)}>
+            <ImageIcon size={15} />
+          </button>
+        )}
+      </div>
       {open && (
         <div className="inv-detail">
           <div className="inv-meta">
@@ -3135,8 +3180,25 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
             {inv.invoice_no && <span>№ {inv.invoice_no}</span>}
             <span>{fmtDeadline(inv.created_at)}</span>
           </div>
+
+          {(inv.items || []).length > 0 && (
+            <div className="inv-items-view">
+              <div className="inv-item-row inv-item-hd"><span>Код</span><span>Найменування</span><span>К-сть</span></div>
+              {inv.items.map((it, i) => (
+                <div className="inv-item-row" key={i}>
+                  <span className="inv-item-code">{it.code || "—"}</span>
+                  <span className="inv-item-name">{it.name}</span>
+                  <span className="inv-item-qty">{it.qty || ""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {inv.screenshot && (
-            <img className="inv-thumb" src={inv.screenshot} alt="скрін рахунку" onClick={() => onPreview(inv.screenshot)} />
+            <button className="inv-thumb-btn" onClick={() => onPreview(inv.screenshot)}>
+              <img className="inv-thumb" src={inv.screenshot} alt="скрін рахунку" />
+              <span className="inv-thumb-hint"><ImageIcon size={13} /> Відкрити рахунок</span>
+            </button>
           )}
           {inv.comment && <p className="task-comment">💬 {inv.comment}</p>}
 
@@ -3998,21 +4060,42 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .inv-fchip.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
 .inv-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:var(--sh-1);overflow:hidden;color:var(--ink);}
 .inv-card.inv-cancelled{opacity:.55;}
-.inv-card-main{width:100%;display:flex;align-items:center;gap:10px;padding:11px 14px;background:none;border:none;font-family:inherit;text-align:left;cursor:pointer;}
-.inv-card-main:hover{background:rgba(190,138,46,.05);}
+.inv-card-main{display:flex;align-items:stretch;}
+.inv-card-expand{flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:10px 12px 10px 14px;background:none;border:none;font-family:inherit;text-align:left;cursor:pointer;}
+.inv-card-expand:hover{background:rgba(190,138,46,.05);}
+.inv-shot-btn{flex-shrink:0;width:40px;border:none;border-left:1px solid var(--line);background:none;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.inv-shot-btn:hover{background:rgba(190,138,46,.1);color:var(--gold);}
 .inv-dot{width:9px;height:9px;border-radius:999px;flex-shrink:0;background:var(--muted);}
 .inv-dot.inv-issued{background:var(--gold-bright);}
 .inv-dot.inv-paid{background:#7896c8;}
 .inv-dot.inv-shipped{background:var(--positive);}
 .inv-dot.inv-documented{background:var(--positive);}
 .inv-dot.inv-cancelled{background:var(--negative-bright);}
-.inv-cp{font-weight:600;font-size:13px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.inv-cp-wrap{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.inv-cp{font-weight:600;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.inv-issuer{font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.inv-vat{flex-shrink:0;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;background:var(--surface-alt);color:var(--muted);border:1px solid var(--line);}
+.inv-vat.on{background:rgba(190,138,46,.16);color:var(--gold-ink);border-color:rgba(220,169,74,.3);}
 .inv-amount{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-soft);white-space:nowrap;}
 .inv-badge{flex-shrink:0;}
 .inv-detail{padding:4px 14px 14px;border-top:1px solid var(--line);}
 .inv-meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin:10px 0;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
 .inv-meta b{color:var(--ink-soft);}
-.inv-thumb{max-width:100%;max-height:220px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:zoom-in;display:block;}
+.inv-items-view{margin:8px 0 12px;border:1px solid var(--line);border-radius:var(--radius-sm);overflow:hidden;}
+.inv-item-row{display:grid;grid-template-columns:88px 1fr 56px;gap:8px;padding:6px 10px;font-size:11.5px;color:var(--ink-soft);border-bottom:1px solid var(--line);}
+.inv-item-row:last-child{border-bottom:none;}
+.inv-item-hd{background:var(--surface-alt);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);}
+.inv-item-code{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
+.inv-item-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.inv-item-qty{text-align:right;font-family:'IBM Plex Mono',monospace;}
+.inv-thumb-btn{display:block;width:100%;border:none;background:none;padding:0;cursor:zoom-in;position:relative;}
+.inv-thumb{max-width:100%;max-height:240px;border:1px solid var(--line);border-radius:var(--radius-sm);display:block;}
+.inv-thumb-hint{position:absolute;left:8px;bottom:8px;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;background:rgba(20,25,32,.82);color:#f4f1ea;padding:3px 8px;border-radius:999px;}
+.inv-items{border:1px solid var(--line-strong);border-radius:var(--radius-sm);overflow:hidden;}
+.inv-items-head{display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--surface-alt);font-size:11px;font-weight:700;color:var(--ink-soft);}
+.inv-items-clear{background:none;border:none;color:var(--gold);font-size:11px;cursor:pointer;font-family:inherit;}
+.inv-items-list{max-height:150px;overflow:auto;}
+.inv-items-list .inv-item-row{grid-template-columns:80px 1fr 44px;}
 .inv-history{margin:10px 0;padding:8px 10px;background:var(--surface-alt);border-radius:var(--radius-sm);display:flex;flex-direction:column;gap:4px;}
 .inv-hist-row{display:flex;flex-wrap:wrap;gap:4px 8px;font-size:11px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;}
 .inv-hist-st{font-weight:700;color:var(--ink);}

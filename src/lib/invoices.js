@@ -23,10 +23,13 @@ export async function listInvoices() {
   return data || [];
 }
 
-export async function createInvoice({ counterparty, amount, invoice_no, screenshot, comment, created_by }) {
+export async function createInvoice({ counterparty, issuer, vat, items, amount, invoice_no, screenshot, comment, created_by }) {
   const row = {
     created_by,
     counterparty: (counterparty || "").trim(),
+    issuer: (issuer || "").trim(),
+    vat: !!vat,
+    items: Array.isArray(items) ? items : [],
     amount: Number(amount) || 0,
     invoice_no: (invoice_no || "").trim(),
     screenshot: screenshot || "",
@@ -37,6 +40,14 @@ export async function createInvoice({ counterparty, amount, invoice_no, screensh
   const { data, error } = await supabase.from("invoices").insert(row).select().single();
   if (error) throw error;
   return data;
+}
+
+/* Будвік → з ПДВ, ФОП → без ПДВ; інакше — що прочитав AI */
+export function deriveVat(issuer, aiVat) {
+  const s = (issuer || "").toLowerCase();
+  if (s.includes("фоп")) return false;
+  if (s.includes("будвік") || s.includes("будвик") || s.includes("budvik")) return true;
+  return !!aiVat;
 }
 
 export async function setInvoiceStatus(inv, status, by, note) {

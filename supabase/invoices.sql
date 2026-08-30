@@ -7,7 +7,10 @@
 create table if not exists public.invoices (
   id           uuid primary key default gen_random_uuid(),
   created_by   text not null,                       -- кабінет-магазин, що виставив
-  counterparty text not null default '',            -- контрагент
+  counterparty text not null default '',            -- ПОКУПЕЦЬ (клієнт, кому виставлено)
+  issuer       text not null default '',            -- ПОСТАЧАЛЬНИК (юр-особа Дніпро-М: Будвік / ФОП)
+  vat          boolean not null default false,      -- з ПДВ / без ПДВ
+  items        jsonb not null default '[]'::jsonb,  -- [{code, name, qty}]
   amount       numeric(12,2) not null default 0,    -- сума, грн
   invoice_no   text not null default '',            -- № рахунку
   screenshot   text not null default '',            -- скрін з 1С (dataURL)
@@ -17,6 +20,10 @@ create table if not exists public.invoices (
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+-- якщо таблиця вже існує:
+alter table public.invoices add column if not exists issuer text not null default '';
+alter table public.invoices add column if not exists vat    boolean not null default false;
+alter table public.invoices add column if not exists items  jsonb not null default '[]'::jsonb;
 create index if not exists invoices_creator_idx on public.invoices (created_by, status);
 create index if not exists invoices_status_idx  on public.invoices (status, created_at desc);
 

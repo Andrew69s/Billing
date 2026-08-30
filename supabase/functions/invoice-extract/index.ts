@@ -39,12 +39,19 @@ Deno.serve(async (req) => {
   const mediaType = meta.match(/data:(image\/[a-z]+)/)?.[1] || "image/jpeg";
 
   const prompt =
-    "Це скріншот рахунку-фактури з 1С (українською). Витягни три поля:\n" +
-    "1) контрагента — постачальника/продавця (не «Дніпро-М», не покупця);\n" +
-    "2) загальну суму до сплати (тільки число, без валюти й пробілів);\n" +
-    "3) номер рахунку.\n" +
-    'Поверни СТРОГО JSON без пояснень і без markdown: {"counterparty": "", "amount": 0, "invoice_no": ""}. ' +
-    "Якщо поле не видно — порожній рядок або 0.";
+    "Це скріншот рахунку на оплату (1С, українською). Рахунок виставив магазин мережі «Дніпро-М» " +
+    "клієнту для безготівкової оплати. Витягни:\n" +
+    "1) buyer — ПОКУПЦЯ з рядка «Покупець»/«Покупатель» (це клієнт, кому виставлено рахунок); " +
+    "лише назву організації/ФОП, без ЄДРПОУ, адреси, банківських реквізитів;\n" +
+    "2) issuer — ПОСТАЧАЛЬНИКА/ПРОДАВЦЯ з рядка «Постачальник»/«Продавець» (це юр-особа Дніпро-М — " +
+    "напр. «ТОВ Будвік» або «ФОП Прізвище»); лише назву, без ЄДРПОУ й реквізитів;\n" +
+    "3) amount — загальну суму до сплати (тільки число);\n" +
+    "4) invoice_no — номер рахунку;\n" +
+    "5) vat — true, якщо в рахунку фігурує ПДВ («в т.ч. ПДВ», «ПДВ 20%», «з ПДВ»), інакше false;\n" +
+    "6) items — позиції таблиці: масив {code, name, qty} (код/артикул, найменування, кількість), максимум 20.\n" +
+    'Поверни СТРОГО JSON без пояснень і markdown: ' +
+    '{"buyer":"","issuer":"","amount":0,"invoice_no":"","vat":false,"items":[]}. ' +
+    "Якщо поле не видно — порожній рядок / 0 / false / [].";
 
   let resp: Response;
   try {
@@ -59,7 +66,7 @@ Deno.serve(async (req) => {
       headers,
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 300,
+        max_tokens: 1200,
         messages: [{
           role: "user",
           content: [
@@ -78,10 +85,19 @@ Deno.serve(async (req) => {
 
   const text = j.content?.[0]?.text || "";
   const m = text.match(/\{[\s\S]*\}/);
-  let out = { counterparty: "", amount: 0, invoice_no: "" };
+  let out: any = { buyer: "", issuer: "", amount: 0, invoice_no: "", vat: false, items: [] };
   try { out = { ...out, ...JSON.parse(m ? m[0] : text) }; } catch { /* ignore */ }
   out.amount = Number(String(out.amount).replace(/[^\d.,-]/g, "").replace(",", ".")) || 0;
-  out.counterparty = String(out.counterparty || "").trim();
+  out.buyer = String(out.buyer || "").trim();
+  out.issuer = String(out.issuer || "").trim();
   out.invoice_no = String(out.invoice_no || "").trim();
+  out.vat = !!out.vat;
+  out.items = Array.isArray(out.items)
+    ? out.items.slice(0, 20).map((it: any) => ({
+        code: String(it?.code ?? "").trim(),
+        name: String(it?.name ?? "").trim(),
+        qty: String(it?.qty ?? "").trim(),
+      })).filter((it: any) => it.name || it.code)
+    : [];
   return json(out);
 });
