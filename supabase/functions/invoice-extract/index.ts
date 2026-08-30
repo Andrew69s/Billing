@@ -10,6 +10,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") || "";
+const ANTHROPIC_WORKSPACE_ID = Deno.env.get("ANTHROPIC_WORKSPACE_ID") || "";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -47,13 +48,15 @@ Deno.serve(async (req) => {
 
   let resp: Response;
   try {
+    const headers: Record<string, string> = {
+      "x-api-key": ANTHROPIC_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    };
+    if (ANTHROPIC_WORKSPACE_ID) headers["anthropic-workspace-id"] = ANTHROPIC_WORKSPACE_ID;
     resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 300,
