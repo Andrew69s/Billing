@@ -108,9 +108,10 @@ function calcRent(b2: any, salonKeys: string[]) {
 }
 function calcPbi(b2: any) {
   const total = b2.pbiTotalRevenue || 0;
-  const percent = total > 0 ? ((b2.pbiRevenue || 0) / total) * 100 : 0;
+  const pbiRev = b2.pbiRevenue || 0;
+  const percent = total > 0 ? (pbiRev / total) * 100 : 0;
   const bp = percent < 15 ? 0.2 : percent <= 20 ? 0.5 : 0.7;
-  return { percent, bonus: total * (bp / 100) };
+  return { percent, bonus: pbiRev * (bp / 100) }; // % береться від обороту PBI
 }
 function calcStores(b2: any, salonKeys: string[]) {
   return salonKeys.reduce((sum, k) => {
@@ -123,7 +124,8 @@ function calcStaff(b3: any) {
   const bonus = pct < 75 ? 0 : pct <= 90 ? 2000 : pct <= 99 ? 4000 : 8000;
   return { pct, bonus };
 }
-function calcViolations32(count: number) {
+/* 0 порушень → +1000; ≥1 → +1000 не нараховується, лише штраф −200/шт (до −1000) */
+function calcZeroOrPenalty(count: number) {
   const c = count || 0;
   return c === 0 ? 1000 : Math.max(-1000, -200 * c);
 }
@@ -137,10 +139,10 @@ function calcTraining(score: number) {
 }
 function calcBlock3(b3: any, salonCount: number) {
   const staff = calcStaff(b3).bonus;
-  const violations = calcViolations32(b3.violationsCount);
-  const schedule = calcCapped1000(b3.scheduleViolationsCount);
+  const violations = calcZeroOrPenalty(b3.violationsCount);      // 3.2
+  const schedule = calcZeroOrPenalty(b3.scheduleViolationsCount); // 3.3 — та сама умова, що й 3.2
   const smState = calcSmState(salonCount, b3.smViolationsFound, b3.smViolationsUnfixed);
-  const merch = calcCapped1000(b3.merchViolationsCount);
+  const merch = calcCapped1000(b3.merchViolationsCount);         // 3.5
   const training = calcTraining(b3.trainingScore);
   const rawSubtotal = staff + violations + schedule + smState + merch + training;
   return { staff, violations, schedule, smState, merch, training, rawSubtotal, subtotal: Math.min(rawSubtotal, 15000) };
