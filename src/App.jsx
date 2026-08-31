@@ -39,7 +39,7 @@ import {
   birthdayIn, tenure,
 } from "./lib/employees.js";
 import {
-  SHIFT_HOURS, ABSENCE_REASONS, daysInMonth, dayKey, todayISO,
+  ABSENCE_REASONS, daysInMonth, dayKey, todayISO,
   listShifts, upsertShift, upsertShiftsBatch, deleteShift,
   getStoreDay, setStoreDay, listStoreDays, subscribeShifts, monthTally,
 } from "./lib/shifts.js";
@@ -3900,7 +3900,7 @@ function EmployeesModule({ cab, archive }) {
 ========================================================= */
 const shiftDow = (ym, day) => { const [y, m] = ym.split("-").map(Number); return (new Date(y, m - 1, day).getDay() + 6) % 7; }; // 0=пн
 const isWeekendDay = (ym, day) => shiftDow(ym, day) >= 5;
-const empRoleShort = { manager: "керуюча", acting_manager: "В.О.", seller: "продавець", intern: "стажер" };
+const empRoleShort = { manager: "керуючий", acting_manager: "В.О.", seller: "продавець", intern: "стажер" };
 
 function useShiftMonth(ym) {
   const [shifts, setShifts] = useState(null);
@@ -3918,11 +3918,10 @@ function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
       <div className="dtf-backdrop" onClick={onClose} />
       <div className="shift-menu" style={{ top: pos.top, left: pos.left }}>
         <div className="shift-menu-row">
-          {SHIFT_HOURS.map((h) => <button key={h} onClick={() => onSet({ type: "hours", h })}>{h}</button>)}
-          <button onClick={() => { const v = prompt("Годин:"); const n = Number(v); if (n > 0) onSet({ type: "hours", h: n }); }}>інша</button>
+          <button className="shift-menu-work" onClick={() => onSet({ type: "worked" })}>✓ На зміні</button>
+          <button onClick={() => onSet({ type: "off" })}>Вихідний</button>
         </div>
         <div className="shift-menu-row">
-          <button onClick={() => onSet({ type: "off" })}>Вихідний</button>
           <button onClick={() => onSet({ type: "absent" })}>Відсутній</button>
           <button onClick={() => onSet({ type: "clear" })}>Прибрати</button>
         </div>
@@ -3978,8 +3977,8 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
     const cur = shiftMap[`${empId}:${wd}`] || {};
     let row = { employee_id: empId, work_date: wd, salon_key: cur.salon_key || homeSalon, plan_h: cur.plan_h ?? null, fact_h: cur.fact_h ?? null, state: "work", absence_reason: cur.absence_reason || "", is_senior: cur.is_senior || false, updated_by: cabKey };
     if (action.type === "clear") { await deleteShift(empId, wd).catch(() => {}); onChange(); return; }
-    if (action.type === "hours") {
-      if (editMode === "plan") row.plan_h = action.h; else row.fact_h = action.h;
+    if (action.type === "worked") {
+      if (editMode === "plan") row.plan_h = 1; else row.fact_h = 1;
       row.state = "work"; row.absence_reason = "";
     } else if (action.type === "off") {
       row.state = "off"; row.plan_h = null; row.fact_h = null;
@@ -3989,8 +3988,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
       row.state = "absent"; row.absence_reason = key; row.fact_h = null;
     } else if (action.type === "subst") {
       row.salon_key = action.salon;
-      if (editMode === "plan" && !row.plan_h) row.plan_h = 9;
-      if (editMode === "fact" && !row.fact_h) row.fact_h = 9;
+      if (editMode === "plan") row.plan_h = 1; else row.fact_h = 1;
       row.state = "work";
     }
     await upsertShift(row).catch((e) => alert(e.message || e));
@@ -4001,14 +3999,14 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
     if (!s) return { txt: "", cls: "" };
     if (s.state === "closed") return { txt: "", cls: "sh-closed" };
     if (s.state === "off") return { txt: "", cls: "sh-off" };
-    if (s.state === "absent") return { txt: ABSENCE_REASONS[s.absence_reason]?.[0] || "×", cls: "sh-absent" };
-    const h = s.fact_h ?? s.plan_h;
-    if (h == null) return { txt: "", cls: "" };
-    const isPlan = s.fact_h == null;
+    if (s.state === "absent") return { txt: (ABSENCE_REASONS[s.absence_reason] || "×").slice(0, 4), cls: "sh-absent" };
+    const worked = s.fact_h != null;
+    const planned = s.plan_h != null;
+    if (!worked && !planned) return { txt: "", cls: "" };
     const subst = s.salon_key !== homeSalon;
     return {
-      txt: subst ? `${salonByKey(s.salon_key)?.city?.[0] || "?"}·${h}` : String(h),
-      cls: [isPlan ? "sh-plan" : "", subst ? "sh-subst" : ""].filter(Boolean).join(" "),
+      txt: subst ? (salonByKey(s.salon_key)?.city?.slice(0, 3) || "?") : (worked ? "✓" : "·"),
+      cls: [worked ? "" : "sh-plan", subst ? "sh-subst" : ""].filter(Boolean).join(" "),
     };
   };
 
@@ -4037,7 +4035,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
                   {d}<br /><span className="wd">{WEEKDAYS_SHORT[shiftDow(ym, d)].toLowerCase()}</span>
                 </th>
               ))}
-              <th className="rh sh-sum-h">факт</th>
+              <th className="rh sh-sum-h">відпрац.</th>
             </tr>
           </thead>
           <tbody>
@@ -4063,7 +4061,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
                           </td>
                         );
                       })}
-                      <td className="rh sh-sum"><b>{t.factDays}</b> дн · {t.factHours} год{t.substDays ? ` · зам. ${t.substDays}` : ""}</td>
+                      <td className="rh sh-sum"><b>{t.factDays}</b> дн{t.planDays ? ` / ${t.planDays} план` : ""}{t.substDays ? ` · зам. ${t.substDays}` : ""}{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</td>
                     </tr>
                   );
                 })}
@@ -4073,10 +4071,10 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
         </table>
       </div>
       <div className="shift-legend">
-        <span><i className="sw" />факт</span>
-        <span><i className="sw sh-plan" style={{ opacity: 1 }} />план (сірим)</span>
+        <span><i className="sw">✓</i>відпрацював</span>
+        <span><i className="sw sh-plan">·</i>заплановано</span>
         <span><i className="sw sh-off" />вихідний</span>
-        <span><i className="sw sh-subst" />заміна на іншому магазині</span>
+        <span><i className="sw sh-subst">Т</i>заміна на іншому магазині</span>
         <span><i className="sw sh-closed" />зачинено</span>
         <span><i className="sw sh-absent" />відсутній</span>
       </div>
@@ -4141,9 +4139,9 @@ function ShiftScheduleModule({ cab }) {
 function DailyCheckIn({ salon, onDone }) {
   const [employees, setEmployees] = useState(null);
   const [planned, setPlanned] = useState([]);
-  const [picks, setPicks] = useState({});   // empId → { on, h }
+  const [picks, setPicks] = useState({});   // empId → bool (на зміні)
   const [senior, setSenior] = useState(null);
-  const [subst, setSubst] = useState([]);   // [{empId, h}]
+  const [subst, setSubst] = useState([]);   // [empId] — заміни з інших магазинів
   const [busy, setBusy] = useState(false);
   const [closeMode, setCloseMode] = useState(false);
   const [closeReason, setCloseReason] = useState("");
@@ -4157,7 +4155,7 @@ function DailyCheckIn({ salon, onDone }) {
       const init = {};
       mine.forEach((e) => {
         const p = plan.find((s) => s.employee_id === e.id);
-        init[e.id] = { on: !!(p && p.state === "work" && (p.plan_h || p.fact_h)), h: p?.plan_h || p?.fact_h || 12 };
+        init[e.id] = !!(p && p.state === "work" && (p.plan_h != null || p.fact_h != null));
       });
       setEmployees(emps); setPlanned(plan); setPicks(init);
       const seniorPlan = plan.find((s) => s.is_senior);
@@ -4175,11 +4173,10 @@ function DailyCheckIn({ salon, onDone }) {
     try {
       const rows = [];
       mine.forEach((e) => {
-        const p = picks[e.id];
-        if (p?.on) rows.push({ employee_id: e.id, work_date: today, salon_key: salon.key, fact_h: p.h, state: "work", is_senior: e.id === senior, updated_by: salon.key });
-        else if (planned.find((s) => s.employee_id === e.id && s.plan_h)) rows.push({ employee_id: e.id, work_date: today, salon_key: salon.key, state: "absent", absence_reason: "dayoff", updated_by: salon.key });
+        if (picks[e.id]) rows.push({ employee_id: e.id, work_date: today, salon_key: salon.key, fact_h: 1, state: "work", is_senior: e.id === senior, updated_by: salon.key });
+        else if (planned.find((s) => s.employee_id === e.id && s.plan_h != null)) rows.push({ employee_id: e.id, work_date: today, salon_key: salon.key, state: "absent", absence_reason: "dayoff", updated_by: salon.key });
       });
-      subst.forEach((x) => rows.push({ employee_id: x.empId, work_date: today, salon_key: salon.key, fact_h: x.h, state: "work", updated_by: salon.key }));
+      subst.forEach((eid) => rows.push({ employee_id: eid, work_date: today, salon_key: salon.key, fact_h: 1, state: "work", updated_by: salon.key }));
       await upsertShiftsBatch(rows);
       await setStoreDay({ salon_key: salon.key, work_date: today, opened_at: new Date().toISOString(), opened_by: salon.key, senior_id: senior, closed: false });
       pushToast({ title: "Зміну розпочато", body: `${rows.filter((r) => r.state === "work").length} на зміні` });
@@ -4210,40 +4207,26 @@ function DailyCheckIn({ salon, onDone }) {
           </div>
         ) : (
           <div className="checkin-b">
-            {mine.map((e) => {
-              const p = picks[e.id] || { on: false, h: 12 };
+            {mine.map((e) => (
+              <div className="ci-emp" key={e.id}>
+                <button className={`chk ${picks[e.id] ? "on" : ""}`} onClick={() => setPicks((s) => ({ ...s, [e.id]: !s[e.id] }))} />
+                <span className="ci-name">{e.full_name}<span className="ci-role">{empRoleShort[e.role]}</span></span>
+                <button className={`ci-senior ${senior === e.id ? "on" : ""}`} title="Старший зміни" onClick={() => setSenior(e.id)}>★</button>
+              </div>
+            ))}
+            {subst.map((eid, i) => {
+              const e = employees.find((y) => y.id === eid);
               return (
-                <div className="ci-emp" key={e.id}>
-                  <button className={`chk ${p.on ? "on" : ""}`} onClick={() => setPicks((s) => ({ ...s, [e.id]: { ...p, on: !p.on } }))} />
-                  <span className="ci-name">{e.full_name}<span className="ci-role">{empRoleShort[e.role]}</span></span>
-                  <span className="ci-hrs">
-                    {SHIFT_HOURS.map((h) => (
-                      <button key={h} className={p.on && p.h === h ? "sel" : ""}
-                        onClick={() => setPicks((s) => ({ ...s, [e.id]: { on: true, h } }))}>{h}</button>
-                    ))}
-                  </span>
-                  <button className={`ci-senior ${senior === e.id ? "on" : ""}`} title="Старший зміни" onClick={() => setSenior(e.id)}>★</button>
-                </div>
-              );
-            })}
-            {subst.map((x, i) => {
-              const e = employees.find((y) => y.id === x.empId);
-              return (
-                <div className="ci-emp ci-subst" key={x.empId}>
+                <div className="ci-emp ci-subst" key={eid}>
                   <button className="chk on" style={{ background: "var(--blue)", borderColor: "var(--blue)" }} onClick={() => setSubst((s) => s.filter((_, j) => j !== i))} />
                   <span className="ci-name">{e?.full_name}<span className="ci-role">заміна · {salonByKey(e?.salon_key)?.city}</span></span>
-                  <span className="ci-hrs">
-                    {SHIFT_HOURS.map((h) => (
-                      <button key={h} className={x.h === h ? "sel" : ""} onClick={() => setSubst((s) => s.map((y, j) => j === i ? { ...y, h } : y))}>{h}</button>
-                    ))}
-                  </span>
                 </div>
               );
             })}
             {mine.length === 0 && <p className="hint" style={{ padding: "10px 2px" }}>Співробітників цього магазину ще не додано (модуль «Команда»). Можна почати зміну без списку.</p>}
             {others.length > 0 && (
               <div className="ci-add">
-                <select value="" onChange={(e) => { if (e.target.value && !subst.find((x) => x.empId === e.target.value)) setSubst((s) => [...s, { empId: e.target.value, h: 9 }]); }}>
+                <select value="" onChange={(e) => { if (e.target.value && !subst.includes(e.target.value)) setSubst((s) => [...s, e.target.value]); }}>
                   <option value="">+ додати заміну з іншого магазину</option>
                   {others.map((e) => <option key={e.id} value={e.id}>{e.full_name} — {salonByKey(e.salon_key)?.city}</option>)}
                 </select>
@@ -4261,7 +4244,7 @@ function DailyCheckIn({ salon, onDone }) {
           ) : (
             <>
               <button className="btn-secondary" onClick={() => setCloseMode(true)}>Зачинено сьогодні</button>
-              <button className="btn-primary" disabled={busy || (mine.length > 0 && !Object.values(picks).some((p) => p.on) && subst.length === 0)} onClick={start}>
+              <button className="btn-primary" disabled={busy || (mine.length > 0 && !Object.values(picks).some(Boolean) && subst.length === 0)} onClick={start}>
                 {busy ? "…" : "Почати зміну"}
               </button>
             </>
@@ -5106,7 +5089,12 @@ td.sh-sum,th.sh-sum-h{background:var(--surface-alt);font-size:10px;color:var(--m
 td.sh-sum b{color:var(--ink);}
 .shift-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--on-dark-2);}
 .shift-legend span{display:flex;align-items:center;gap:6px;}
-.shift-legend .sw{width:14px;height:14px;border-radius:3px;border:1px solid var(--line-strong);background:var(--surface);}
+.shift-legend .sw{width:16px;height:16px;border-radius:3px;border:1px solid var(--line-strong);background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--pos);font-style:normal;font-family:'IBM Plex Mono',monospace;}
+.shift-legend .sw.sh-plan{color:var(--muted);}
+.shift-legend .sw.sh-subst{color:#4E6C97;background:rgba(78,108,151,.16);}
+.shift-menu-work{background:var(--pos-soft,rgba(63,107,74,.2))!important;color:var(--positive)!important;font-weight:600;}
+td.sh{font-size:12px;font-weight:600;}
+td.sh.sh-plan{font-weight:400;}
 .shift-menu{position:fixed;z-index:301;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 20px 50px -14px rgba(0,0,0,.5);padding:10px;width:200px;animation:fadeIn .14s ease both;}
 .shift-menu-row{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;align-items:center;}
 .shift-menu-row button{flex:1;min-width:38px;padding:6px 4px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);font-family:inherit;font-size:11.5px;color:var(--ink-soft);cursor:pointer;}
@@ -5129,9 +5117,6 @@ td.sh-sum b{color:var(--ink);}
 .ci-emp .chk.on::after{content:"";position:absolute;left:5px;top:1px;width:5px;height:9px;border:solid var(--gold-ink);border-width:0 2px 2px 0;transform:rotate(45deg);}
 .ci-name{flex:1;font-size:13px;font-weight:500;min-width:0;}
 .ci-role{font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--muted);margin-left:6px;}
-.ci-hrs{display:flex;gap:3px;}
-.ci-hrs button{font-size:11px;font-family:'IBM Plex Mono',monospace;padding:4px 8px;border-radius:6px;border:1px solid var(--line-strong);background:var(--surface);color:var(--muted);cursor:pointer;}
-.ci-hrs button.sel{background:var(--gold);color:var(--gold-ink);border-color:transparent;font-weight:600;}
 .ci-senior{width:26px;height:26px;border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);color:var(--faint);cursor:pointer;font-size:13px;}
 .ci-senior.on{background:rgba(190,138,46,.16);color:var(--gold);border-color:rgba(220,169,74,.4);}
 .ci-add{padding:10px 0;}

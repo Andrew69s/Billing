@@ -1,6 +1,5 @@
 import { supabase } from "./supabase.js";
 
-export const SHIFT_HOURS = [3, 9, 12];
 export const ABSENCE_REASONS = {
   vacation: "Відпустка",
   sick: "Лікарняний",
@@ -82,15 +81,15 @@ export function subscribeShifts(onChange) {
 /* підсумок відпрацьованого за місяць по співробітнику (для ЗП) */
 export function monthTally(shifts, employeeId, homeSalonKey) {
   const mine = shifts.filter((s) => s.employee_id === employeeId);
-  let factDays = 0, factHours = 0, planDays = 0, planHours = 0, substDays = 0, offDays = 0;
+  let factDays = 0, planDays = 0, substDays = 0, offDays = 0, absentDays = 0;
   for (const s of mine) {
     if (s.state === "off" || s.state === "closed") { offDays += 1; continue; }
-    if (s.state === "absent") continue;
-    if (s.plan_h) { planDays += 1; planHours += Number(s.plan_h); }
+    if (s.state === "absent") { absentDays += 1; continue; }
+    if (s.plan_h != null) planDays += 1;
     if (s.fact_h != null) {
-      factDays += 1; factHours += Number(s.fact_h);
+      factDays += 1;
       if (homeSalonKey && s.salon_key !== homeSalonKey) substDays += 1;
     }
   }
-  return { factDays, factHours, planDays, planHours, substDays, offDays };
+  return { factDays, planDays, substDays, offDays, absentDays };
 }
