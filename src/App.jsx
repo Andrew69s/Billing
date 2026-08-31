@@ -201,21 +201,31 @@ async function listMonths(tmKey) {
     return (r?.keys || []).map((k) => k.replace(`data:${tmKey}:`, ""));
   } catch { return []; }
 }
-/* ---------- СМ: сховище розрахунків салонів ---------- */
-async function loadSmData(salonKey, ym) {
+/* ---------- СМ: сховище розрахунків ЗП (по співробітнику) ----------
+   Ключ: smdata:<salonKey>:<employeeId>:<ym>  (salonKey як частина 2 — для RLS) */
+const smKey = (salonKey, empId, ym) => `smdata:${salonKey}:${empId}:${ym}`;
+async function loadSmData(salonKey, empId, ym) {
   try {
-    const r = await window.storage.get(`smdata:${salonKey}:${ym}`, true);
+    const r = await window.storage.get(smKey(salonKey, empId, ym), true);
     return r ? { ...emptySmData(), ...JSON.parse(r.value) } : emptySmData();
   } catch { return emptySmData(); }
 }
-async function saveSmData(salonKey, ym, data) {
-  try { await window.storage.set(`smdata:${salonKey}:${ym}`, JSON.stringify(data), true); } catch (e) { console.error(e); }
+async function saveSmData(salonKey, empId, ym, data) {
+  try { await window.storage.set(smKey(salonKey, empId, ym), JSON.stringify(data), true); } catch (e) { console.error(e); }
 }
-async function listSmMonths(salonKey) {
+async function listSmMonths(salonKey, empId) {
   try {
-    const r = await window.storage.list(`smdata:${salonKey}:`, true);
-    return (r?.keys || []).map((k) => k.replace(`smdata:${salonKey}:`, ""));
+    const pref = `smdata:${salonKey}:${empId}:`;
+    const r = await window.storage.list(pref, true);
+    return (r?.keys || []).map((k) => k.replace(pref, ""));
   } catch { return []; }
+}
+/* ЗП салону за місяць = сума по всіх активних співробітниках */
+async function salonSalaryRows(salonKey, ym, employees) {
+  const emps = (employees || []).filter((e) => e.salon_key === salonKey && e.status === "active");
+  const datas = await Promise.all(emps.map((e) => loadSmData(salonKey, e.id, ym)));
+  const calcs = emps.length ? await calcSmBatch(emps.map((e, i) => ({ data: datas[i], salonKey, ym }))) : [];
+  return emps.map((e, i) => ({ emp: e, data: datas[i], calc: calcs[i], total: calcs[i]?.total || 0 }));
 }
 
 function resizeImage(file) {
@@ -1495,7 +1505,12 @@ function useMonthStats() {
         if (d.paymentStatus === "to_pay") toPay += 1;
       };
       for (const t of TMS) bump(await loadData(t.key, ym));
-      for (const s of SALONS) bump(await loadSmData(s.key, ym));
+      const employees = await listEmployees().catch(() => []);
+      for (const s of SALONS) {
+        const rows = await salonSalaryRows(s.key, ym, employees);
+        if (rows.length && rows.every((r) => r.data.status === "submitted" || r.data.status === "corrected")) submitted += 1;
+        if (rows.some((r) => r.data.paymentStatus === "to_pay")) toPay += 1;
+      }
       if (active) setStats({ submitted, toPay, total: TMS.length + SALONS.length });
     })();
     return () => { active = false; };
@@ -1964,7 +1979,33 @@ function smBuildDiff(snapshot, current) {
 /* =========================================================
    СМ · КАБІНЕТ (вкладка «Розрахунок ЗП»)
 ========================================================= */
+function SmEmployeePicker({ salon, employees, onPick, onlyName }) {
+  const emps = employees
+    .filter((e) => e.salon_key === salon.key && e.status === "active")
+    .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name));
+  return (
+    <div className="sm-emp-pick">
+      <h3 className="ov-h">Оберіть співробітника</h3>
+      <p className="ov-sub">ЗП рахується окремо для кожного — {salonLabel(salon)}</p>
+      {emps.length === 0 ? (
+        <div className="admin-empty">У цьому магазині ще немає співробітників. Додайте їх у модулі «Команда» (кабінет ТМ).</div>
+      ) : (
+        <div className="sm-emp-grid">
+          {emps.map((e) => (
+            <button className="sm-emp-card" key={e.id} onClick={() => onPick(e)}>
+              <span className="sm-emp-name">{e.full_name}</span>
+              <span className={`badge ${empRoleTone[e.role]}`}>{EMP_ROLES[e.role]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SmView({ salon, embedded }) {
+  const [employees, setEmployees] = useState(null);
+  const [emp, setEmp] = useState(null);
   const [ym, setYm] = useState(nowYm());
   const [data, setData] = useState(emptySmData());
   const [loading, setLoading] = useState(true);
@@ -1978,14 +2019,23 @@ function SmView({ salon, embedded }) {
   const qMonths = quarterMonths(ymToQuarter(ym));
   const isQuarterEnd = ym === qMonths[2];
 
+  useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
+
   useEffect(() => {
+    if (!emp) return undefined;
     let active = true;
     setLoading(true);
     setTab("form");
     skipSave.current = true;
-    loadSmData(salon.key, ym).then((d) => { if (active) { setData(d); setLoading(false); } });
+    loadSmData(salon.key, emp.id, ym).then((d) => {
+      if (!active) return;
+      // коефіцієнт керуючого за замовчуванням = роль співробітника
+      const roleCoef = { manager: "1.2", acting_manager: "1.1", seller: "1.0", intern: "1.0" }[emp.role] || "1.0";
+      setData(d.status === "draft" ? { ...d, manager: { ...d.manager, coef: roleCoef } } : d);
+      setLoading(false);
+    });
     return () => { active = false; };
-  }, [salon.key, ym]);
+  }, [salon.key, emp, ym]);
 
   const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
   const onAddShot = makeAddShot(setData);
@@ -1994,22 +2044,20 @@ function SmView({ salon, embedded }) {
 
   const saveDraft = async () => {
     setSaving(true);
-    await saveSmData(salon.key, ym, data);
+    await saveSmData(salon.key, emp.id, ym, data);
     setSaving(false);
     setSavedAt(new Date());
   };
   useEffect(() => {
-    if (loading) return undefined;
+    if (loading || !emp) return undefined;
     if (skipSave.current) { skipSave.current = false; return undefined; }
-    const t = setTimeout(async () => { await saveSmData(salon.key, ym, data); setSavedAt(new Date()); }, 2500);
+    const t = setTimeout(async () => { await saveSmData(salon.key, emp.id, ym, data); setSavedAt(new Date()); }, 2500);
     return () => clearTimeout(t);
-  }, [data, loading, salon.key, ym]);
+  }, [data, loading, salon.key, emp, ym]);
 
   const { calc } = useSmCalc(data, salon.key, ym);
 
-  const months = useMemo(() => {
-    return recentMonths(12);
-  }, []);
+  const months = useMemo(() => recentMonths(12), []);
 
   const submit = async () => {
     setSaving(true);
@@ -2022,15 +2070,25 @@ function SmView({ salon, embedded }) {
       tmComment: "", correctionDiff: [], correctedAt: null, smReplyComment: "", smRepliedAt: null,
       tmApproved: false, tmApprovedAt: null,
     };
-    await saveSmData(salon.key, ym, next);
+    await saveSmData(salon.key, emp.id, ym, next);
     setData(next);
     setSaving(false);
   };
   const onReply = async (comment) => {
     const next = { ...data, smReplyComment: comment, smRepliedAt: new Date().toISOString() };
-    await saveSmData(salon.key, ym, next);
+    await saveSmData(salon.key, emp.id, ym, next);
     setData(next);
   };
+
+  if (employees === null) return <div className="loading">Завантаження…</div>;
+  if (!emp) {
+    return (
+      <div className={embedded ? "embedded" : "view"}>
+        {!embedded && <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={() => {}} />}
+        <SmEmployeePicker salon={salon} employees={employees} onPick={setEmp} />
+      </div>
+    );
+  }
 
   const dl = deadlineInfo(ym);
   const showBanner = !dl.future && (data.status === "draft" || data.status === "corrected");
@@ -2039,6 +2097,11 @@ function SmView({ salon, embedded }) {
   return (
     <div className={embedded ? "embedded" : "view"}>
       {!embedded && <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={() => {}} />}
+      <div className="sm-emp-bar">
+        <button className="topbar-back" onClick={() => setEmp(null)}><ChevronLeft size={15} /> інший співробітник</button>
+        <span className="sm-emp-cur">{emp.full_name}</span>
+        <span className={`badge ${empRoleTone[emp.role]}`}>{EMP_ROLES[emp.role]}</span>
+      </div>
       <div className="month-picker">
         <select value={ym} onChange={(e) => setYm(e.target.value)}>
           {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
@@ -2091,10 +2154,8 @@ function SmView({ salon, embedded }) {
 /* =========================================================
    СМ · ДЕТАЛЬ ДЛЯ ТМ / КЕРІВНИКА (перегляд + корективи)
 ========================================================= */
-function SalonDetail({ salon, reviewer, onBack }) {
-  const [ym, setYm] = useState(nowYm());
+function SalonDetail({ salon, emp, ym, reviewer, onBack }) {
   const [data, setData] = useState(emptySmData());
-  const [months, setMonths] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -2105,14 +2166,16 @@ function SalonDetail({ salon, reviewer, onBack }) {
   const canEdit = reviewer === "tm"; // корективи вносить ТМ; керівник дивиться
   const qMonths = quarterMonths(ymToQuarter(ym));
   const isQuarterEnd = ym === qMonths[2];
+  const empId = emp?.id;
+  const notifBody = `${emp?.full_name || ""} · ${monthLabel(ym)}`;
 
   useEffect(() => {
+    if (!empId) return undefined;
     let active = true;
     setLoading(true); setEditMode(false); setComment(""); setExpandedBlock(null);
-    loadSmData(salon.key, ym).then((d) => { if (active) { setData(d); setLoading(false); } });
+    loadSmData(salon.key, empId, ym).then((d) => { if (active) { setData(d); setLoading(false); } });
     return () => { active = false; };
-  }, [salon.key, ym]);
-  useEffect(() => { listSmMonths(salon.key).then((m) => setMonths(m.sort().reverse())); }, [salon.key, ym]);
+  }, [salon.key, empId, ym]);
 
   const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
   const onAddShot = makeAddShot(setData);
@@ -2121,49 +2184,43 @@ function SalonDetail({ salon, reviewer, onBack }) {
 
   const { calc } = useSmCalc(data, salon.key, ym);
 
-  const saveAdjOnly = async () => { setSaving(true); await saveSmData(salon.key, ym, data); setSaving(false); };
+  const saveAdjOnly = async () => { setSaving(true); await saveSmData(salon.key, empId, ym, data); setSaving(false); };
   const setPaymentStatus = async (status) => {
     const next = { ...data, paymentStatus: status, paymentStatusAt: new Date().toISOString() };
     setData(next);
-    await saveSmData(salon.key, ym, next);
-    if (status === "to_pay") notify({ recipient: salon.key, kind: "salary", title: "ЗП призначено до виплати", body: monthLabel(ym), actor: "manager", link: "salary" });
-    if (status === "paid") notify({ recipient: salon.key, kind: "salary", title: "ЗП виплачено", body: monthLabel(ym), actor: "manager", link: "salary" });
+    await saveSmData(salon.key, empId, ym, next);
+    if (status === "to_pay") notify({ recipient: salon.key, kind: "salary", title: "ЗП призначено до виплати", body: notifBody, actor: "manager", link: "salary" });
+    if (status === "paid") notify({ recipient: salon.key, kind: "salary", title: "ЗП виплачено", body: notifBody, actor: "manager", link: "salary" });
   };
   const cancelEdit = async () => {
-    const d = await loadSmData(salon.key, ym);
+    const d = await loadSmData(salon.key, empId, ym);
     setData(d); setComment(""); setEditMode(false);
   };
   const saveCorrections = async () => {
     setSaving(true);
     const diff = smBuildDiff(data.smSnapshot, data);
     const next = { ...data, status: "corrected", correctedAt: new Date().toISOString(), tmComment: comment, correctionDiff: diff };
-    await saveSmData(salon.key, ym, next);
+    await saveSmData(salon.key, empId, ym, next);
     setData(next); setEditMode(false); setComment(""); setSaving(false);
-    notify({ recipient: salon.key, kind: "salary", title: "ТМ вніс корективи у вашу ЗП", body: monthLabel(ym), actor: "tm", link: "salary" });
+    notify({ recipient: salon.key, kind: "salary", title: "ТМ вніс корективи у ЗП", body: notifBody, actor: "tm", link: "salary" });
   };
   const approveToManager = async () => {
     const next = { ...data, tmApproved: true, tmApprovedAt: new Date().toISOString() };
     setData(next);
-    await saveSmData(salon.key, ym, next);
+    await saveSmData(salon.key, empId, ym, next);
   };
 
   return (
     <div className="embedded">
       <div className="detail-head">
-        <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> До списку салонів</button>
-        <span className="detail-title">{salonLabel(salon)}</span>
-      </div>
-
-      <div className="month-row">
-        <select value={ym} onChange={(e) => setYm(e.target.value)}>
-          {Array.from(new Set([ym, ...months])).sort().reverse().map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
-        </select>
+        <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> До списку співробітників</button>
+        <span className="detail-title">{emp?.full_name} <span className="detail-sub">· {salonLabel(salon)} · {EMP_ROLES[emp?.role]} · {monthLabel(ym)}</span></span>
       </div>
 
       {loading || !calc ? <div className="loading">Завантаження…</div> : (
         <>
           <div className="status-line">
-            Статус: {data.status === "submitted" ? "подано на погодження" : data.status === "corrected" ? "внесено корективи" : "салон ще не подав дані"}
+            Статус: {data.status === "submitted" ? "подано на погодження" : data.status === "corrected" ? "внесено корективи" : "не подано"}
             {data.submittedAt && ` · подано ${fmtDate(data.submittedAt)}`}
             {data.tmApproved && " · передано керівнику"}
           </div>
@@ -2208,35 +2265,44 @@ function SalonDetail({ salon, reviewer, onBack }) {
 /* =========================================================
    ТМ · ВКЛАДКА «ЗП САЛОНІВ» (лише свої салони)
 ========================================================= */
+const smStatusBadge = (st) => (
+  <span className={`badge ${st === "submitted" ? "badge-ok" : st === "corrected" ? "badge-off" : "badge-warn"}`}>
+    {st === "submitted" ? "подано" : st === "corrected" ? "корективи" : "чернетка"}
+  </span>
+);
+
 function SalonReviewPanel({ tmKey, reviewer }) {
   const [ym, setYm] = useState(nowYm());
   const salons = useMemo(() => salonsOfTm(tmKey, ym), [tmKey, ym]);
-  const [rows, setRows] = useState(null);
-  const [openKey, setOpenKey] = useState(null);
+  const [employees, setEmployees] = useState(null);
+  const [bySalon, setBySalon] = useState(null); // { salonKey: rows[] }
+  const [openSalon, setOpenSalon] = useState(null);
+  const [openEmp, setOpenEmp] = useState(null);
+  const [reloadN, setReloadN] = useState(0);
 
-  const months = useMemo(() => {
-    return recentMonths(12);
-  }, []);
+  const months = useMemo(() => recentMonths(12), []);
+
+  useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
 
   useEffect(() => {
+    if (!employees) return undefined;
     let active = true;
-    setRows(null);
+    setBySalon(null);
     (async () => {
-      const datas = await Promise.all(salons.map((s) => loadSmData(s.key, ym)));
-      const calcs = salons.length
-        ? await calcSmBatch(salons.map((s, i) => ({ data: datas[i], salonKey: s.key, ym })))
-        : [];
       const out = {};
-      salons.forEach((s, i) => { out[s.key] = { data: datas[i], total: calcs[i].total }; });
-      if (active) setRows(out);
+      for (const s of salons) out[s.key] = await salonSalaryRows(s.key, ym, employees);
+      if (active) setBySalon(out);
     })();
     return () => { active = false; };
-  }, [salons, ym, openKey]);
+  }, [salons, ym, employees, reloadN, openEmp]);
 
-  if (openKey) {
-    const salon = salonByKey(openKey);
-    return <SalonDetail salon={salon} reviewer={reviewer} onBack={() => setOpenKey(null)} />;
+  if (openSalon && openEmp) {
+    const salon = salonByKey(openSalon);
+    const emp = (employees || []).find((e) => e.id === openEmp);
+    return <SalonDetail salon={salon} emp={emp} ym={ym} reviewer={reviewer} onBack={() => { setOpenEmp(null); setReloadN((n) => n + 1); }} />;
   }
+
+  if (!employees || !bySalon) return <div className="loading">Завантаження…</div>;
 
   return (
     <div className="embedded">
@@ -2244,26 +2310,41 @@ function SalonReviewPanel({ tmKey, reviewer }) {
         <select value={ym} onChange={(e) => setYm(e.target.value)}>
           {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
         </select>
+        {openSalon && <button className="topbar-back" onClick={() => setOpenSalon(null)}><ChevronLeft size={15} /> усі магазини</button>}
       </div>
-      {!rows ? <div className="loading">Завантаження…</div> : (
+
+      {!openSalon ? (
         <div className="salon-list">
           {salons.map((s) => {
-            const r = rows[s.key];
-            const st = r.data.status;
+            const rows = bySalon[s.key] || [];
+            const total = rows.reduce((a, r) => a + r.total, 0);
+            const done = rows.filter((r) => r.data.status === "submitted" || r.data.status === "corrected").length;
             return (
-              <button className="salon-row" key={s.key} onClick={() => setOpenKey(s.key)}>
+              <button className="salon-row" key={s.key} onClick={() => setOpenSalon(s.key)}>
                 <span className="salon-row-main">
                   <span className="salon-row-name">{salonLabel(s)}</span>
-                  <span className="salon-row-sub">{s.area}</span>
+                  <span className="salon-row-sub">{rows.length} співр. · подали {done}/{rows.length}</span>
                 </span>
-                <span className={`badge ${st === "submitted" ? "badge-ok" : st === "corrected" ? "badge-off" : "badge-warn"}`}>
-                  {st === "submitted" ? "подано" : st === "corrected" ? "корективи" : "чернетка"}
-                </span>
-                {r.data.tmApproved && <span className="badge badge-warn">керівнику</span>}
-                <b className="salon-row-total">{fmt(r.total)}</b>
+                <b className="salon-row-total">{fmt(total)}</b>
               </button>
             );
           })}
+        </div>
+      ) : (
+        <div className="salon-list">
+          <div className="emp-group-head" style={{ borderRadius: "var(--radius-md)", marginBottom: 4 }}>{salonLabel(salonByKey(openSalon))}</div>
+          {(bySalon[openSalon] || []).length === 0 && <div className="admin-empty">У магазині немає співробітників.</div>}
+          {(bySalon[openSalon] || []).map((r) => (
+            <button className="salon-row" key={r.emp.id} onClick={() => setOpenEmp(r.emp.id)}>
+              <span className="salon-row-main">
+                <span className="salon-row-name">{r.emp.full_name}</span>
+                <span className="salon-row-sub">{EMP_ROLES[r.emp.role]}</span>
+              </span>
+              {smStatusBadge(r.data.status)}
+              {r.data.tmApproved && <span className="badge badge-warn">керівнику</span>}
+              <b className="salon-row-total">{fmt(r.total)}</b>
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -2299,36 +2380,43 @@ function ConsolidationPanel({ role }) {
     let active = true;
     setRows(null);
     (async () => {
-      const tmRows = [];
-      for (const t of TMS) {
-        const r = await tmGrandTotal(t.key, ym);
-        tmRows.push({ kind: "tm", key: t.key, name: t.name, tm: null, ...r });
-      }
-      const smDatas = await Promise.all(SALONS.map((s) => loadSmData(s.key, ym)));
-      const smCalcs = await calcSmBatch(SALONS.map((s, i) => ({ data: smDatas[i], salonKey: s.key, ym })));
-      const smRows = SALONS.map((s, i) => ({
-        kind: "sm", key: s.key, name: salonLabel(s), tm: salonTmOn(s.key, ym),
-        data: smDatas[i], total: smCalcs[i].total,
-        status: smDatas[i].status, paymentStatus: smDatas[i].paymentStatus, tmApproved: smDatas[i].tmApproved,
-      }));
+      const employees = await listEmployees().catch(() => []);
+      const [tmResults, salonResults] = await Promise.all([
+        Promise.all(TMS.map((t) => tmGrandTotal(t.key, ym))),
+        Promise.all(SALONS.map((s) => salonSalaryRows(s.key, ym, employees))),
+      ]);
+      const tmRows = TMS.map((t, i) => ({ kind: "tm", key: t.key, name: t.name, tm: null, ...tmResults[i] }));
+      const smRows = [];
+      SALONS.forEach((s, si) => {
+        salonResults[si].forEach((er) => smRows.push({
+          kind: "sm", key: `${s.key}::${er.emp.id}`, salonKey: s.key, empId: er.emp.id,
+          name: er.emp.full_name, sub: `${cabName(s.key)} · ${EMP_ROLES[er.emp.role]}`, tm: salonTmOn(s.key, ym),
+          data: er.data, total: er.total,
+          status: er.data.status, paymentStatus: er.data.paymentStatus, tmApproved: er.data.tmApproved,
+        }));
+      });
       if (active) setRows([...tmRows, ...smRows]);
     })();
     return () => { active = false; };
   }, [ym, reload]);
 
   const setPay = async (row, status) => {
+    const patch = { paymentStatus: status, paymentStatusAt: new Date().toISOString() };
+    let recipient = row.key;
     if (row.kind === "tm") {
       const d = await loadData(row.key, ym);
-      await saveData(row.key, ym, { ...d, paymentStatus: status, paymentStatusAt: new Date().toISOString() });
+      await saveData(row.key, ym, { ...d, ...patch });
     } else {
-      const d = await loadSmData(row.key, ym);
-      await saveSmData(row.key, ym, { ...d, paymentStatus: status, paymentStatusAt: new Date().toISOString() });
+      const d = await loadSmData(row.salonKey, row.empId, ym);
+      await saveSmData(row.salonKey, row.empId, ym, { ...d, ...patch });
+      recipient = row.salonKey;
     }
     if (status === "to_pay" || status === "paid") {
       notify({
-        recipient: row.key, kind: "salary",
+        recipient, kind: "salary",
         title: status === "to_pay" ? "ЗП призначено до виплати" : "ЗП виплачено",
-        body: monthLabel(ym), actor: role === "accountant" ? "accountant" : "manager", link: "salary",
+        body: row.kind === "sm" ? `${row.name} · ${monthLabel(ym)}` : monthLabel(ym),
+        actor: role === "accountant" ? "accountant" : "manager", link: "salary",
       });
     }
     setReload((n) => n + 1);
@@ -2355,7 +2443,7 @@ function ConsolidationPanel({ role }) {
             <div className="consol-row" key={r.kind + r.key}>
               <span className="consol-name">
                 {r.name}
-                <span className="consol-role">{r.kind === "tm" ? "ТМ" : `Салон · ${tmByKey(r.tm)?.name || ""}`}</span>
+                <span className="consol-role">{r.kind === "tm" ? "ТМ" : r.sub}</span>
               </span>
               <span className={`badge ${r.status === "submitted" ? "badge-ok" : r.status === "corrected" ? "badge-off" : "badge-warn"}`}>
                 {statusLabel(r.status)}
@@ -3802,20 +3890,22 @@ function TmOverview({ tmKey }) {
     let active = true;
     const ym = nowYm();
     (async () => {
-      const [d, g, invoices] = await Promise.all([
-        loadData(tmKey, ym), loadGrade(tmKey, ymToQuarter(ym)), listInvoices().catch(() => []),
+      const [d, g, invoices, employees] = await Promise.all([
+        loadData(tmKey, ym), loadGrade(tmKey, ymToQuarter(ym)), listInvoices().catch(() => []), listEmployees().catch(() => []),
       ]);
       const salons = salonsOfTm(tmKey, ym);
       let submitted = 0;
+      let salonPayroll = 0;
       for (const sl of salons) {
-        const sd = await loadSmData(sl.key, ym);
-        if (sd.status === "submitted" || sd.status === "corrected") submitted += 1;
+        const rows = await salonSalaryRows(sl.key, ym, employees);
+        if (rows.length && rows.every((r) => r.data.status === "submitted" || r.data.status === "corrected")) submitted += 1;
+        salonPayroll += rows.reduce((a, r) => a + r.total, 0);
       }
       const calc = await calcTm(d, g, tmKey, ym);
       const invM = invoices.filter((inv) => invMonth(inv) === ym && inv.status !== "cancelled");
       const invIssued = invM.reduce((a, i) => a + Number(i.amount || 0), 0);
       const invPaid = invM.filter((i) => i.status !== "issued").reduce((a, i) => a + Number(i.amount || 0), 0);
-      if (active) setS({ status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct, submitted, salonTotal: salons.length, dl: deadlineInfo(ym), invIssued, invPaid, invCount: invM.length });
+      if (active) setS({ status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct, submitted, salonTotal: salons.length, dl: deadlineInfo(ym), invIssued, invPaid, invCount: invM.length, salonPayroll });
     })();
     return () => { active = false; };
   }, [tmKey]);
@@ -3830,6 +3920,7 @@ function TmOverview({ tmKey }) {
         <div className="ov-tile"><b>{fmt(s.total)}</b><span>моя ЗП · {st}</span></div>
         <div className="ov-tile"><b>{s.submitted} / {s.salonTotal}</b><span>салони подали ЗП</span></div>
         <div className="ov-tile"><b>{s.pct.toFixed(0)}%</b><span>план по ТО</span></div>
+        <div className="ov-tile"><b>{fmt(s.salonPayroll)}</b><span>ФОП салонів за місяць</span></div>
         <div className="ov-tile"><b>{invMoney(s.invIssued)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
         <div className="ov-tile"><b>{invMoney(s.invPaid)}</b><span>з них оплачено+</span></div>
       </div>
@@ -3849,33 +3940,33 @@ function SmOverview({ salon }) {
     let active = true;
     const ym = nowYm();
     (async () => {
-      const [d, invoices] = await Promise.all([loadSmData(salon.key, ym), listInvoices().catch(() => [])]);
-      const calc = await calcSm(d, salon.key, ym);
+      const [invoices, employees] = await Promise.all([listInvoices().catch(() => []), listEmployees().catch(() => [])]);
+      const rows = await salonSalaryRows(salon.key, ym, employees);
       if (!active) return;
       const invM = invoices.filter((i) => invMonth(i) === ym && i.status !== "cancelled");
+      const pending = rows.filter((r) => r.data.status !== "submitted" && r.data.status !== "corrected").length;
       setS({
-        status: d.status, total: calc.total, category: calc.category, dl: deadlineInfo(ym),
+        payroll: rows.reduce((a, r) => a + r.total, 0), headcount: rows.length, pending, dl: deadlineInfo(ym),
         invSum: invM.reduce((a, i) => a + Number(i.amount || 0), 0), invCount: invM.length,
       });
     })();
     return () => { active = false; };
   }, [salon.key]);
   if (!s) return <div className="loading">Завантаження…</div>;
-  const st = { draft: "чернетка", submitted: "на розгляді в ТМ", corrected: "ТМ вніс корективи" }[s.status] || "—";
-  const nagged = (s.status === "draft" || s.status === "corrected") && !s.dl.future;
+  const nagged = s.pending > 0 && !s.dl.future;
   return (
     <div className="ov">
       <h3 className="ov-h">Огляд</h3>
       <p className="ov-sub">{monthLabel(nowYm())}</p>
       <div className="ov-tiles">
-        <div className="ov-tile"><b>{fmt(s.total)}</b><span>ЗП · {st}</span></div>
-        <div className="ov-tile"><b>{s.category}</b><span>категорія салону</span></div>
+        <div className="ov-tile"><b>{fmt(s.payroll)}</b><span>ФОП магазину за місяць</span></div>
+        <div className="ov-tile"><b>{s.headcount - s.pending} / {s.headcount}</b><span>ЗП подано</span></div>
         <div className="ov-tile"><b>{invMoney(s.invSum)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
       </div>
       {nagged && (
         <div className={`banner ${s.dl.overdue ? "banner-late" : "banner-warn"}`}>
           <AlertTriangle size={16} />
-          {s.dl.overdue ? `Термін подачі минув (був до ${s.dl.dueLabel})` : `Подайте ЗП до ${s.dl.dueLabel}`}
+          {s.dl.overdue ? `Термін подачі ЗП минув (був до ${s.dl.dueLabel})` : `Подайте ЗП співробітників до ${s.dl.dueLabel}`}
         </div>
       )}
     </div>
@@ -4570,6 +4661,14 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .emp-note{margin:6px 0 0;font-size:12px;color:var(--ink-soft);}
 .emp-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px;}
 .emp-xfer-sel{padding:7px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:12px;}
+.sm-emp-pick .ov-sub{margin-bottom:14px;}
+.sm-emp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;}
+.sm-emp-card{display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:14px 15px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);box-shadow:var(--sh-1);cursor:pointer;font-family:inherit;text-align:left;transition:border-color .14s var(--ease),transform .1s var(--ease);}
+.sm-emp-card:hover{border-color:var(--gold);transform:translateY(-1px);}
+.sm-emp-name{font-weight:600;font-size:13.5px;color:var(--ink);}
+.sm-emp-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line-dark);}
+.sm-emp-cur{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
+.detail-sub{font-family:'Inter',sans-serif;font-size:12px;font-weight:400;color:var(--muted);}
 
 .inv-viewtabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--line-dark);}
 .inv-viewtabs button{background:none;border:none;border-bottom:2px solid transparent;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--on-dark-2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;margin-bottom:-1px;}
