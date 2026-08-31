@@ -39,6 +39,11 @@ import {
   birthdayIn, tenure,
 } from "./lib/employees.js";
 import {
+  SHIFT_HOURS, ABSENCE_REASONS, daysInMonth, dayKey, todayISO,
+  listShifts, upsertShift, upsertShiftsBatch, deleteShift,
+  getStoreDay, setStoreDay, listStoreDays, subscribeShifts, monthTally,
+} from "./lib/shifts.js";
+import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
 } from "./lib/notifications.js";
 
@@ -3890,6 +3895,384 @@ function EmployeesModule({ cab, archive }) {
   );
 }
 
+/* =========================================================
+   МОДУЛЬ «ГРАФІК ЗМІН»
+========================================================= */
+const shiftDow = (ym, day) => { const [y, m] = ym.split("-").map(Number); return (new Date(y, m - 1, day).getDay() + 6) % 7; }; // 0=пн
+const isWeekendDay = (ym, day) => shiftDow(ym, day) >= 5;
+const empRoleShort = { manager: "керуюча", acting_manager: "В.О.", seller: "продавець", intern: "стажер" };
+
+function useShiftMonth(ym) {
+  const [shifts, setShifts] = useState(null);
+  const [storeDays, setStoreDays] = useState([]);
+  const reload = () => Promise.all([listShifts(ym), listStoreDays(ym)])
+    .then(([s, sd]) => { setShifts(s); setStoreDays(sd); })
+    .catch(() => { setShifts([]); setStoreDays([]); });
+  useEffect(() => { setShifts(null); reload(); const un = subscribeShifts(() => reload()); return un; /* eslint-disable-next-line */ }, [ym]);
+  return [shifts, storeDays, reload];
+}
+
+function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
+  return createPortal(
+    <>
+      <div className="dtf-backdrop" onClick={onClose} />
+      <div className="shift-menu" style={{ top: pos.top, left: pos.left }}>
+        <div className="shift-menu-row">
+          {SHIFT_HOURS.map((h) => <button key={h} onClick={() => onSet({ type: "hours", h })}>{h}</button>)}
+          <button onClick={() => { const v = prompt("Годин:"); const n = Number(v); if (n > 0) onSet({ type: "hours", h: n }); }}>інша</button>
+        </div>
+        <div className="shift-menu-row">
+          <button onClick={() => onSet({ type: "off" })}>Вихідний</button>
+          <button onClick={() => onSet({ type: "absent" })}>Відсутній</button>
+          <button onClick={() => onSet({ type: "clear" })}>Прибрати</button>
+        </div>
+        {salonOptions.length > 0 && (
+          <div className="shift-menu-row shift-menu-subst">
+            <span>Заміна:</span>
+            <select defaultValue="" onChange={(e) => { if (e.target.value) onSet({ type: "subst", salon: e.target.value }); }}>
+              <option value="" disabled>магазин</option>
+              {salonOptions.map((s) => <option key={s.key} value={s.key}>{s.city}</option>)}
+            </select>
+          </div>
+        )}
+        <div className="shift-menu-hint">{editMode === "plan" ? "редагуємо план" : "редагуємо факт"}</div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange, cabKey }) {
+  const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
+  const [editMode, setEditMode] = useState("plan");
+  const scrollRef = React.useRef(null);
+  const nDays = daysInMonth(ym);
+  const today = todayISO();
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || ym !== nowYm()) return;
+    const d = new Date().getDate();
+    el.scrollLeft = Math.max(0, (d - 4) * 27); // ~ширина клітинки
+  }, [ym, shifts]);
+  const shiftMap = useMemo(() => {
+    const m = {};
+    shifts.forEach((s) => { m[`${s.employee_id}:${s.work_date}`] = s; });
+    return m;
+  }, [shifts]);
+  const closedDays = useMemo(() => {
+    const m = {};
+    storeDays.forEach((d) => { if (d.closed) m[`${d.salon_key}:${d.work_date}`] = true; });
+    return m;
+  }, [storeDays]);
+
+  const openMenu = (e, empId, day, homeSalon) => {
+    if (!canEdit) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.min(r.left, window.innerWidth - 210) } });
+  };
+  const applySet = async (action) => {
+    const { empId, day, homeSalon } = menu;
+    const wd = dayKey(ym, day);
+    setMenu(null);
+    const cur = shiftMap[`${empId}:${wd}`] || {};
+    let row = { employee_id: empId, work_date: wd, salon_key: cur.salon_key || homeSalon, plan_h: cur.plan_h ?? null, fact_h: cur.fact_h ?? null, state: "work", absence_reason: cur.absence_reason || "", is_senior: cur.is_senior || false, updated_by: cabKey };
+    if (action.type === "clear") { await deleteShift(empId, wd).catch(() => {}); onChange(); return; }
+    if (action.type === "hours") {
+      if (editMode === "plan") row.plan_h = action.h; else row.fact_h = action.h;
+      row.state = "work"; row.absence_reason = "";
+    } else if (action.type === "off") {
+      row.state = "off"; row.plan_h = null; row.fact_h = null;
+    } else if (action.type === "absent") {
+      const reason = prompt("Причина (відпустка / лікарняний / відгул / прогул / навчання):", "відпустка") || "";
+      const key = Object.entries(ABSENCE_REASONS).find(([, v]) => v.toLowerCase() === reason.trim().toLowerCase())?.[0] || "vacation";
+      row.state = "absent"; row.absence_reason = key; row.fact_h = null;
+    } else if (action.type === "subst") {
+      row.salon_key = action.salon;
+      if (editMode === "plan" && !row.plan_h) row.plan_h = 9;
+      if (editMode === "fact" && !row.fact_h) row.fact_h = 9;
+      row.state = "work";
+    }
+    await upsertShift(row).catch((e) => alert(e.message || e));
+    onChange();
+  };
+
+  const cellContent = (s, homeSalon) => {
+    if (!s) return { txt: "", cls: "" };
+    if (s.state === "closed") return { txt: "", cls: "sh-closed" };
+    if (s.state === "off") return { txt: "", cls: "sh-off" };
+    if (s.state === "absent") return { txt: ABSENCE_REASONS[s.absence_reason]?.[0] || "×", cls: "sh-absent" };
+    const h = s.fact_h ?? s.plan_h;
+    if (h == null) return { txt: "", cls: "" };
+    const isPlan = s.fact_h == null;
+    const subst = s.salon_key !== homeSalon;
+    return {
+      txt: subst ? `${salonByKey(s.salon_key)?.city?.[0] || "?"}·${h}` : String(h),
+      cls: [isPlan ? "sh-plan" : "", subst ? "sh-subst" : ""].filter(Boolean).join(" "),
+    };
+  };
+
+  const groups = salons.map((s) => ({
+    salon: s,
+    emps: employees.filter((e) => e.salon_key === s.key && e.status === "active")
+      .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
+  }));
+
+  return (
+    <div className="shift-grid-wrap">
+      {canEdit && (
+        <div className="shift-modebar">
+          <span>Клік по клітинці редагує:</span>
+          <button className={editMode === "plan" ? "on" : ""} onClick={() => setEditMode("plan")}>План</button>
+          <button className={editMode === "fact" ? "on" : ""} onClick={() => setEditMode("fact")}>Факт</button>
+        </div>
+      )}
+      <div className="grid-scroll" ref={scrollRef}>
+        <table className="sched">
+          <thead>
+            <tr>
+              <th className="rh" />
+              {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => (
+                <th key={d} className={isWeekendDay(ym, d) ? "we" : ""}>
+                  {d}<br /><span className="wd">{WEEKDAYS_SHORT[shiftDow(ym, d)].toLowerCase()}</span>
+                </th>
+              ))}
+              <th className="rh sh-sum-h">факт</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map(({ salon, emps }) => (
+              <React.Fragment key={salon.key}>
+                <tr className="grp"><td colSpan={nDays + 2}>{salonLabel(salon)}</td></tr>
+                {emps.length === 0 && <tr><td className="rh muted" colSpan={nDays + 2}>немає співробітників</td></tr>}
+                {emps.map((e) => {
+                  const t = monthTally(shifts, e.id, e.salon_key);
+                  return (
+                    <tr key={e.id}>
+                      <td className="rh"><span className="nm">{e.full_name}</span><br /><span className="rl">{empRoleShort[e.role]}</span></td>
+                      {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => {
+                        const wd = dayKey(ym, d);
+                        let s = shiftMap[`${e.id}:${wd}`];
+                        if (!s && closedDays[`${e.salon_key}:${wd}`]) s = { state: "closed" };
+                        const { txt, cls } = cellContent(s, e.salon_key);
+                        return (
+                          <td key={d}
+                            className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${canEdit ? "sh-edit" : ""}`}
+                            onClick={canEdit ? (ev) => openMenu(ev, e.id, d, e.salon_key) : undefined}>
+                            {txt}
+                          </td>
+                        );
+                      })}
+                      <td className="rh sh-sum"><b>{t.factDays}</b> дн · {t.factHours} год{t.substDays ? ` · зам. ${t.substDays}` : ""}</td>
+                    </tr>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="shift-legend">
+        <span><i className="sw" />факт</span>
+        <span><i className="sw sh-plan" style={{ opacity: 1 }} />план (сірим)</span>
+        <span><i className="sw sh-off" />вихідний</span>
+        <span><i className="sw sh-subst" />заміна на іншому магазині</span>
+        <span><i className="sw sh-closed" />зачинено</span>
+        <span><i className="sw sh-absent" />відсутній</span>
+      </div>
+      {menu && (
+        <ShiftCellMenu
+          pos={menu.pos} editMode={editMode} onClose={() => setMenu(null)} onSet={applySet}
+          salonOptions={SALONS.filter((s) => s.key !== menu.homeSalon)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ShiftScheduleModule({ cab }) {
+  const [ym, setYm] = useState(nowYm());
+  const [employees, setEmployees] = useState(null);
+  const [shifts, storeDays, reload] = useShiftMonth(ym);
+  const months = useMemo(() => recentMonths(12), []);
+
+  useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
+
+  const salons = useMemo(() => {
+    if (cab.type === "sm") return [salonByKey(cab.key)].filter(Boolean);
+    if (cab.type === "tm") return salonsOfTm(cab.tmKey || cab.key);
+    return SALONS;
+  }, [cab]);
+  const canEdit = cab.type === "sm" || cab.type === "tm" || cab.type === "manager";
+
+  if (employees === null || shifts === null) return <div className="loading">Завантаження…</div>;
+
+  const today = todayISO();
+  const onShiftToday = shifts.filter((s) => s.work_date === today && s.state === "work" && s.fact_h != null);
+
+  return (
+    <div className="tasks-mod">
+      <div className="tasks-head">
+        <h3 className="ov-h">Графік змін</h3>
+        <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+      </div>
+
+      {ym === nowYm() && (
+        <div className="tasks-dash">
+          {onShiftToday.length === 0
+            ? <span className="tasks-dash-alert">Сьогодні ще ніхто не відмітив зміну</span>
+            : <span><b>{onShiftToday.length}</b> на зміні сьогодні: {onShiftToday.map((s) => {
+                const e = employees.find((x) => x.id === s.employee_id);
+                return e ? `${e.full_name}${s.salon_key !== e.salon_key ? ` (${salonByKey(s.salon_key)?.city})` : ""}` : "";
+              }).filter(Boolean).join(", ")}</span>}
+        </div>
+      )}
+
+      <ShiftGrid
+        ym={ym} salons={salons} employees={employees} shifts={shifts} storeDays={storeDays}
+        canEdit={canEdit} onChange={reload} cabKey={cab.key}
+      />
+    </div>
+  );
+}
+
+function DailyCheckIn({ salon, onDone }) {
+  const [employees, setEmployees] = useState(null);
+  const [planned, setPlanned] = useState([]);
+  const [picks, setPicks] = useState({});   // empId → { on, h }
+  const [senior, setSenior] = useState(null);
+  const [subst, setSubst] = useState([]);   // [{empId, h}]
+  const [busy, setBusy] = useState(false);
+  const [closeMode, setCloseMode] = useState(false);
+  const [closeReason, setCloseReason] = useState("");
+  const today = todayISO();
+
+  useEffect(() => {
+    (async () => {
+      const [emps, todayShifts] = await Promise.all([listEmployees().catch(() => []), listShifts(nowYm()).catch(() => [])]);
+      const mine = emps.filter((e) => e.salon_key === salon.key && e.status === "active");
+      const plan = todayShifts.filter((s) => s.work_date === today);
+      const init = {};
+      mine.forEach((e) => {
+        const p = plan.find((s) => s.employee_id === e.id);
+        init[e.id] = { on: !!(p && p.state === "work" && (p.plan_h || p.fact_h)), h: p?.plan_h || p?.fact_h || 12 };
+      });
+      setEmployees(emps); setPlanned(plan); setPicks(init);
+      const seniorPlan = plan.find((s) => s.is_senior);
+      setSenior(seniorPlan?.employee_id || mine.find((e) => e.role === "manager")?.id || mine[0]?.id || null);
+    })();
+  }, [salon.key]);
+
+  if (employees === null) return null;
+  const mine = employees.filter((e) => e.salon_key === salon.key && e.status === "active")
+    .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role));
+  const others = employees.filter((e) => e.salon_key !== salon.key && e.status === "active");
+
+  const start = async () => {
+    setBusy(true);
+    try {
+      const rows = [];
+      mine.forEach((e) => {
+        const p = picks[e.id];
+        if (p?.on) rows.push({ employee_id: e.id, work_date: today, salon_key: salon.key, fact_h: p.h, state: "work", is_senior: e.id === senior, updated_by: salon.key });
+        else if (planned.find((s) => s.employee_id === e.id && s.plan_h)) rows.push({ employee_id: e.id, work_date: today, salon_key: salon.key, state: "absent", absence_reason: "dayoff", updated_by: salon.key });
+      });
+      subst.forEach((x) => rows.push({ employee_id: x.empId, work_date: today, salon_key: salon.key, fact_h: x.h, state: "work", updated_by: salon.key }));
+      await upsertShiftsBatch(rows);
+      await setStoreDay({ salon_key: salon.key, work_date: today, opened_at: new Date().toISOString(), opened_by: salon.key, senior_id: senior, closed: false });
+      pushToast({ title: "Зміну розпочато", body: `${rows.filter((r) => r.state === "work").length} на зміні` });
+      onDone();
+    } catch (e) { alert(e.message || e); setBusy(false); }
+  };
+  const closeStore = async () => {
+    setBusy(true);
+    try {
+      await setStoreDay({ salon_key: salon.key, work_date: today, opened_by: salon.key, closed: true, closed_reason: closeReason.trim() });
+      onDone();
+    } catch (e) { alert(e.message || e); setBusy(false); }
+  };
+
+  return createPortal(
+    <div className="modal-overlay checkin-overlay">
+      <div className="checkin-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="checkin-h">
+          <div className="k">Хто сьогодні на зміні?</div>
+          <div className="d">{fmtDeadline(today)} · {salonLabel(salon)}</div>
+        </div>
+
+        {closeMode ? (
+          <div className="checkin-b">
+            <label className="over-field"><span>Причина (необовʼязково)</span>
+              <input value={closeReason} onChange={(e) => setCloseReason(e.target.value)} placeholder="напр. санітарний день" autoFocus />
+            </label>
+          </div>
+        ) : (
+          <div className="checkin-b">
+            {mine.map((e) => {
+              const p = picks[e.id] || { on: false, h: 12 };
+              return (
+                <div className="ci-emp" key={e.id}>
+                  <button className={`chk ${p.on ? "on" : ""}`} onClick={() => setPicks((s) => ({ ...s, [e.id]: { ...p, on: !p.on } }))} />
+                  <span className="ci-name">{e.full_name}<span className="ci-role">{empRoleShort[e.role]}</span></span>
+                  <span className="ci-hrs">
+                    {SHIFT_HOURS.map((h) => (
+                      <button key={h} className={p.on && p.h === h ? "sel" : ""}
+                        onClick={() => setPicks((s) => ({ ...s, [e.id]: { on: true, h } }))}>{h}</button>
+                    ))}
+                  </span>
+                  <button className={`ci-senior ${senior === e.id ? "on" : ""}`} title="Старший зміни" onClick={() => setSenior(e.id)}>★</button>
+                </div>
+              );
+            })}
+            {subst.map((x, i) => {
+              const e = employees.find((y) => y.id === x.empId);
+              return (
+                <div className="ci-emp ci-subst" key={x.empId}>
+                  <button className="chk on" style={{ background: "var(--blue)", borderColor: "var(--blue)" }} onClick={() => setSubst((s) => s.filter((_, j) => j !== i))} />
+                  <span className="ci-name">{e?.full_name}<span className="ci-role">заміна · {salonByKey(e?.salon_key)?.city}</span></span>
+                  <span className="ci-hrs">
+                    {SHIFT_HOURS.map((h) => (
+                      <button key={h} className={x.h === h ? "sel" : ""} onClick={() => setSubst((s) => s.map((y, j) => j === i ? { ...y, h } : y))}>{h}</button>
+                    ))}
+                  </span>
+                </div>
+              );
+            })}
+            {mine.length === 0 && <p className="hint" style={{ padding: "10px 2px" }}>Співробітників цього магазину ще не додано (модуль «Команда»). Можна почати зміну без списку.</p>}
+            {others.length > 0 && (
+              <div className="ci-add">
+                <select value="" onChange={(e) => { if (e.target.value && !subst.find((x) => x.empId === e.target.value)) setSubst((s) => [...s, { empId: e.target.value, h: 9 }]); }}>
+                  <option value="">+ додати заміну з іншого магазину</option>
+                  {others.map((e) => <option key={e.id} value={e.id}>{e.full_name} — {salonByKey(e.salon_key)?.city}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="checkin-f">
+          {closeMode ? (
+            <>
+              <button className="btn-secondary" onClick={() => setCloseMode(false)}>Назад</button>
+              <button className="btn-primary" disabled={busy} onClick={closeStore}>Підтвердити «зачинено»</button>
+            </>
+          ) : (
+            <>
+              <button className="btn-secondary" onClick={() => setCloseMode(true)}>Зачинено сьогодні</button>
+              <button className="btn-primary" disabled={busy || (mine.length > 0 && !Object.values(picks).some((p) => p.on) && subst.length === 0)} onClick={start}>
+                {busy ? "…" : "Почати зміну"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function CabinetShell({ title, onExit, onLogout, modules, cabKey }) {
   const items = modules.filter(Boolean);
   const [active, setActive] = useState(items[0].key);
@@ -4015,6 +4398,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <ModuleStub name="Показники території" /> },
     { key: "team", label: "Команда", icon: <Users size={16} />, divider: true, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "archive", label: "Архів", icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
     { key: "docs", label: "Документи й стандарти", icon: <FileText size={16} />, divider: true, render: () => <ModuleStub name="Документи й стандарти" /> },
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
@@ -4034,11 +4418,13 @@ function ManagerCabinet({ onExit, onLogout }) {
         <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}><CheckSquare size={14} /> Задачі</button>
         <button className={tab === "inv" ? "active" : ""} onClick={() => setTab("inv")}><CreditCard size={14} /> Рахунки</button>
         <button className={tab === "team" ? "active" : ""} onClick={() => setTab("team")}><Users size={14} /> Команда</button>
+        <button className={tab === "shifts" ? "active" : ""} onClick={() => setTab("shifts")}><Calendar size={14} /> Графік</button>
       </div>
       {tab === "byTm" && <ManagerView embedded />}
       {tab === "consol" && <ConsolidationPanel role="manager" />}
       {tab === "tasks" && <TasksModule cab={{ key: "manager", type: "manager" }} />}
       {tab === "inv" && <InvoicesModule cab={{ key: "manager", type: "manager" }} />}
+      {tab === "shifts" && <ShiftScheduleModule cab={{ key: "manager", type: "manager" }} />}
       {tab === "team" && (
         <>
           <EmployeesModule cab={{ key: "manager", type: "manager" }} />
@@ -4066,12 +4452,26 @@ function AccountantCabinet({ onExit, onLogout }) {
 
 function SmCabinet({ salonKey, onExit, onLogout }) {
   const salon = salonByKey(salonKey);
+  const [checkedIn, setCheckedIn] = useState(null); // null=loading, false=треба, true=ок
+
+  useEffect(() => {
+    let a = true;
+    getStoreDay(salonKey, todayISO())
+      .then((d) => { if (a) setCheckedIn(!!(d && (d.opened_at || d.closed))); })
+      .catch(() => { if (a) setCheckedIn(true); }); // якщо помилка — не блокуємо
+    return () => { a = false; };
+  }, [salonKey]);
+
+  if (checkedIn === false) {
+    return <DailyCheckIn salon={salon} onDone={() => setCheckedIn(true)} />;
+  }
+
   const modules = [
     { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
     { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
     { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ModuleStub name="Графік змін" /> },
+    { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
     { key: "reports", label: "Звіти", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
     { key: "standards", label: "Стандарти й навчання", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
@@ -4678,6 +5078,66 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 
 /* ---------- безнальні рахунки ---------- */
 /* ---------- команда / співробітники ---------- */
+/* ---------- графік змін ---------- */
+.inv-toolbar-sel{appearance:none;-webkit-appearance:none;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23BE8A2E' d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 10px center;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 28px 7px 11px;font-family:inherit;font-size:12.5px;color:var(--ink);cursor:pointer;}
+.shift-modebar{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--on-dark-2);margin-bottom:10px;}
+.shift-modebar button{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:5px 13px;font-size:11.5px;font-family:inherit;cursor:pointer;}
+.shift-modebar button.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.grid-scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
+table.sched{border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;}
+table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
+table.sched thead th{background:var(--surface-alt);color:var(--muted);font-weight:600;padding:3px 0;min-width:26px;line-height:1.2;position:sticky;top:0;}
+table.sched thead th.we{background:rgba(63,107,74,.14);color:var(--positive);}
+table.sched .wd{font-size:8px;opacity:.7;}
+table.sched .rh{text-align:left;padding:5px 10px;white-space:nowrap;background:var(--surface);font-family:'Inter',sans-serif;position:sticky;left:0;z-index:1;min-width:150px;}
+table.sched .rh .nm{font-size:12px;font-weight:600;color:var(--ink);}
+table.sched .rh .rl{font-size:10px;color:var(--muted);}
+table.sched .grp td{background:var(--surface-sink);text-align:left;padding:4px 10px;font-size:11px;font-weight:700;color:var(--ink-soft);position:sticky;left:0;}
+td.sh{height:26px;color:var(--ink);}
+td.sh-edit{cursor:pointer;}
+td.sh-edit:hover{background:rgba(190,138,46,.1);}
+td.sh-plan{color:var(--muted);}
+td.sh-off{background:rgba(160,58,42,.14);}
+td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(--surface-sink) 3px,transparent 3px,transparent 6px);}
+td.sh-subst{background:rgba(78,108,151,.16);color:#4E6C97;font-weight:600;}
+td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);font-size:9px;}
+td.sh-today{outline:2px solid var(--gold);outline-offset:-2px;}
+td.sh-sum,th.sh-sum-h{background:var(--surface-alt);font-size:10px;color:var(--muted);white-space:nowrap;padding:0 8px;text-align:right;position:sticky;right:0;}
+td.sh-sum b{color:var(--ink);}
+.shift-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--on-dark-2);}
+.shift-legend span{display:flex;align-items:center;gap:6px;}
+.shift-legend .sw{width:14px;height:14px;border-radius:3px;border:1px solid var(--line-strong);background:var(--surface);}
+.shift-menu{position:fixed;z-index:301;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 20px 50px -14px rgba(0,0,0,.5);padding:10px;width:200px;animation:fadeIn .14s ease both;}
+.shift-menu-row{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;align-items:center;}
+.shift-menu-row button{flex:1;min-width:38px;padding:6px 4px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);font-family:inherit;font-size:11.5px;color:var(--ink-soft);cursor:pointer;}
+.shift-menu-row button:hover{background:rgba(190,138,46,.14);}
+.shift-menu-subst{font-size:11px;color:var(--muted);}
+.shift-menu-subst select{flex:1;padding:5px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-size:11px;}
+.shift-menu-hint{font-size:10px;color:var(--muted);text-align:center;font-family:'IBM Plex Mono',monospace;}
+
+/* щоденний вхід */
+.checkin-overlay{align-items:flex-start;padding-top:6vh;}
+.checkin-modal{width:min(460px,100%);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 40px 100px -24px rgba(0,0,0,.6);color:var(--ink);animation:fadeIn .24s ease both;overflow:hidden;}
+.checkin-h{padding:16px 20px;border-bottom:1px solid var(--line);}
+.checkin-h .k{font-family:'Fraunces',serif;font-size:18px;font-weight:600;}
+.checkin-h .d{font-size:12px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:2px;}
+.checkin-b{padding:8px 20px;max-height:52vh;overflow:auto;}
+.ci-emp{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line);}
+.ci-emp:last-child{border-bottom:none;}
+.ci-emp .chk{width:19px;height:19px;border-radius:5px;border:2px solid var(--line-strong);background:none;flex-shrink:0;cursor:pointer;position:relative;}
+.ci-emp .chk.on{background:var(--gold);border-color:var(--gold);}
+.ci-emp .chk.on::after{content:"";position:absolute;left:5px;top:1px;width:5px;height:9px;border:solid var(--gold-ink);border-width:0 2px 2px 0;transform:rotate(45deg);}
+.ci-name{flex:1;font-size:13px;font-weight:500;min-width:0;}
+.ci-role{font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--muted);margin-left:6px;}
+.ci-hrs{display:flex;gap:3px;}
+.ci-hrs button{font-size:11px;font-family:'IBM Plex Mono',monospace;padding:4px 8px;border-radius:6px;border:1px solid var(--line-strong);background:var(--surface);color:var(--muted);cursor:pointer;}
+.ci-hrs button.sel{background:var(--gold);color:var(--gold-ink);border-color:transparent;font-weight:600;}
+.ci-senior{width:26px;height:26px;border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);color:var(--faint);cursor:pointer;font-size:13px;}
+.ci-senior.on{background:rgba(190,138,46,.16);color:var(--gold);border-color:rgba(220,169,74,.4);}
+.ci-add{padding:10px 0;}
+.ci-add select{width:100%;padding:8px 10px;border:1px dashed var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:12px;background:var(--surface-alt);}
+.checkin-f{padding:14px 20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;background:var(--surface-alt);}
+
 .emp-groups{display:flex;flex-direction:column;gap:16px;}
 .emp-group{border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;background:var(--surface);box-shadow:var(--sh-1);}
 .emp-group-head{padding:9px 14px;background:var(--surface-alt);font-family:'Fraunces',serif;font-size:14px;font-weight:600;color:var(--ink);}
