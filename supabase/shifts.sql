@@ -40,7 +40,7 @@ create table if not exists public.store_days (
 alter table public.shifts enable row level security;
 alter table public.store_days enable row level security;
 
--- helper: чи це магазин моєї території / мій магазин / керівник
+-- РЕДАГУВАТИ: мій магазин / моя територія (ТМ) / керівник
 create or replace function public.can_touch_salon(k text)
 returns boolean language sql stable security definer set search_path = public as $$
   select auth.uid() is not null and (
@@ -51,14 +51,26 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
+-- ПЕРЕГЛЯДАТИ: те саме + СМ бачить увесь свій ТМ (усю територію)
+create or replace function public.can_view_salon(k text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select auth.uid() is not null and (
+    public.is_manager_or_admin()
+    or public.my_cabinet_type() = 'accountant'
+    or k = public.my_cabinet_key()
+    or (public.my_cabinet_type() = 'tm' and public.current_salon_tm(k) = public.my_cabinet_key())
+    or (public.my_cabinet_type() = 'sm' and public.current_salon_tm(k) = public.current_salon_tm(public.my_cabinet_key()))
+  );
+$$;
+
 drop policy if exists shifts_select on public.shifts;
-create policy shifts_select on public.shifts for select using (public.can_touch_salon(salon_key));
+create policy shifts_select on public.shifts for select using (public.can_view_salon(salon_key));
 drop policy if exists shifts_write on public.shifts;
 create policy shifts_write on public.shifts for all
   using (public.can_touch_salon(salon_key)) with check (public.can_touch_salon(salon_key));
 
 drop policy if exists store_days_select on public.store_days;
-create policy store_days_select on public.store_days for select using (public.can_touch_salon(salon_key));
+create policy store_days_select on public.store_days for select using (public.can_view_salon(salon_key));
 drop policy if exists store_days_write on public.store_days;
 create policy store_days_write on public.store_days for all
   using (public.can_touch_salon(salon_key)) with check (public.can_touch_salon(salon_key));

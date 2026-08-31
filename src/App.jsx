@@ -3941,9 +3941,10 @@ function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
   );
 }
 
-function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange, cabKey }) {
+function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey }) {
   const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
   const [editMode, setEditMode] = useState("plan");
+  const canEdit = salons.some((s) => canEditSalon(s.key));
   const scrollRef = React.useRef(null);
   const nDays = daysInMonth(ym);
   const today = todayISO();
@@ -3966,7 +3967,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
   }, [storeDays]);
 
   const openMenu = (e, empId, day, homeSalon) => {
-    if (!canEdit) return;
+    if (!canEditSalon(homeSalon)) return;
     const r = e.currentTarget.getBoundingClientRect();
     setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.min(r.left, window.innerWidth - 210) } });
   };
@@ -4004,10 +4005,9 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
     const planned = s.plan_h != null;
     if (!worked && !planned) return { txt: "", cls: "" };
     const subst = s.salon_key !== homeSalon;
-    return {
-      txt: subst ? (salonByKey(s.salon_key)?.city?.slice(0, 3) || "?") : (worked ? "✓" : "·"),
-      cls: [worked ? "" : "sh-plan", subst ? "sh-subst" : ""].filter(Boolean).join(" "),
-    };
+    if (subst) return { txt: salonByKey(s.salon_key)?.city?.slice(0, 3) || "?", cls: "sh-subst" };
+    // відпрацював → повна заливка; заплановано → напівпрозора
+    return { txt: "", cls: worked ? "sh-fill" : "sh-fill-plan" };
   };
 
   const groups = salons.map((s) => ({
@@ -4023,6 +4023,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
           <span>Клік по клітинці редагує:</span>
           <button className={editMode === "plan" ? "on" : ""} onClick={() => setEditMode("plan")}>План</button>
           <button className={editMode === "fact" ? "on" : ""} onClick={() => setEditMode("fact")}>Факт</button>
+          {salons.length > 1 && !salons.every((s) => canEditSalon(s.key)) && <span className="muted" style={{ marginLeft: 6 }}>· редагувати можна лише свій магазин</span>}
         </div>
       )}
       <div className="grid-scroll" ref={scrollRef}>
@@ -4053,10 +4054,11 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
                         let s = shiftMap[`${e.id}:${wd}`];
                         if (!s && closedDays[`${e.salon_key}:${wd}`]) s = { state: "closed" };
                         const { txt, cls } = cellContent(s, e.salon_key);
+                        const edit = canEditSalon(e.salon_key);
                         return (
                           <td key={d}
-                            className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${canEdit ? "sh-edit" : ""}`}
-                            onClick={canEdit ? (ev) => openMenu(ev, e.id, d, e.salon_key) : undefined}>
+                            className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
+                            onClick={edit ? (ev) => openMenu(ev, e.id, d, e.salon_key) : undefined}>
                             {txt}
                           </td>
                         );
@@ -4071,8 +4073,8 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEdit, onChange
         </table>
       </div>
       <div className="shift-legend">
-        <span><i className="sw">✓</i>відпрацював</span>
-        <span><i className="sw sh-plan">·</i>заплановано</span>
+        <span><i className="sw sh-fill" />відпрацював</span>
+        <span><i className="sw sh-fill-plan" />заплановано</span>
         <span><i className="sw sh-off" />вихідний</span>
         <span><i className="sw sh-subst">Т</i>заміна на іншому магазині</span>
         <span><i className="sw sh-closed" />зачинено</span>
@@ -4097,11 +4099,15 @@ function ShiftScheduleModule({ cab }) {
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
 
   const salons = useMemo(() => {
-    if (cab.type === "sm") return [salonByKey(cab.key)].filter(Boolean);
+    if (cab.type === "sm") { const tm = cab.tmKey || salonTmOn(cab.key); return tm ? salonsOfTm(tm) : [salonByKey(cab.key)].filter(Boolean); }
     if (cab.type === "tm") return salonsOfTm(cab.tmKey || cab.key);
     return SALONS;
   }, [cab]);
-  const canEdit = cab.type === "sm" || cab.type === "tm" || cab.type === "manager";
+  const canEditSalon = useMemo(() => {
+    if (cab.type === "sm") return (k) => k === cab.key;
+    if (cab.type === "tm" || cab.type === "manager") return () => true;
+    return () => false;
+  }, [cab]);
 
   if (employees === null || shifts === null) return <div className="loading">Завантаження…</div>;
 
@@ -4130,7 +4136,7 @@ function ShiftScheduleModule({ cab }) {
 
       <ShiftGrid
         ym={ym} salons={salons} employees={employees} shifts={shifts} storeDays={storeDays}
-        canEdit={canEdit} onChange={reload} cabKey={cab.key}
+        canEditSalon={canEditSalon} onChange={reload} cabKey={cab.key}
       />
     </div>
   );
@@ -5084,6 +5090,9 @@ td.sh-off{background:rgba(160,58,42,.14);}
 td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(--surface-sink) 3px,transparent 3px,transparent 6px);}
 td.sh-subst{background:rgba(78,108,151,.16);color:#4E6C97;font-weight:600;}
 td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);font-size:9px;}
+td.sh-fill{background:#0a0a0a;}
+td.sh-fill-plan{background:linear-gradient(135deg,#0a0a0a 0 46%,transparent 46%);}
+td.sh-fill.sh-edit:hover{background:#333;}
 td.sh-today{outline:2px solid var(--gold);outline-offset:-2px;}
 td.sh-sum,th.sh-sum-h{background:var(--surface-alt);font-size:10px;color:var(--muted);white-space:nowrap;padding:0 8px;text-align:right;position:sticky;right:0;}
 td.sh-sum b{color:var(--ink);}
