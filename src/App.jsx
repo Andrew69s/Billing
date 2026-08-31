@@ -1979,24 +1979,51 @@ function smBuildDiff(snapshot, current) {
 /* =========================================================
    СМ · КАБІНЕТ (вкладка «Розрахунок ЗП»)
 ========================================================= */
-function SmEmployeePicker({ salon, employees, onPick, onlyName }) {
-  const emps = employees
+const smStatusText = { draft: "чернетка", submitted: "подано", corrected: "корективи ТМ", approved: "погоджено" };
+function SmEmployeePicker({ salon, employees, ym, onPick }) {
+  const emps = useMemo(() => employees
     .filter((e) => e.salon_key === salon.key && e.status === "active")
-    .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name));
+    .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)), [employees, salon.key]);
+  const [info, setInfo] = useState({}); // empId → { status, total }
+
+  useEffect(() => {
+    let active = true;
+    if (!emps.length) return undefined;
+    salonSalaryRows(salon.key, ym, employees).then((rows) => {
+      if (!active) return;
+      const m = {};
+      rows.forEach((r) => { m[r.emp.id] = { status: r.data.status, total: r.total }; });
+      setInfo(m);
+    });
+    return () => { active = false; };
+  }, [salon.key, ym, emps.length]); // eslint-disable-line
+
   return (
     <div className="sm-emp-pick">
       <h3 className="ov-h">Оберіть співробітника</h3>
-      <p className="ov-sub">ЗП рахується окремо для кожного — {salonLabel(salon)}</p>
+      <p className="ov-sub">ЗП рахується окремо для кожного · {salonLabel(salon)} · {monthLabel(ym)}</p>
       {emps.length === 0 ? (
         <div className="admin-empty">У цьому магазині ще немає співробітників. Додайте їх у модулі «Команда» (кабінет ТМ).</div>
       ) : (
         <div className="sm-emp-grid">
-          {emps.map((e) => (
-            <button className="sm-emp-card" key={e.id} onClick={() => onPick(e)}>
-              <span className="sm-emp-name">{e.full_name}</span>
-              <span className={`badge ${empRoleTone[e.role]}`}>{EMP_ROLES[e.role]}</span>
-            </button>
-          ))}
+          {emps.map((e) => {
+            const it = info[e.id];
+            const submitted = it && it.status !== "draft";
+            return (
+              <button className="sm-emp-card" key={e.id} onClick={() => onPick(e)}>
+                <span className="sm-emp-name">{e.full_name}</span>
+                <span className={`badge ${empRoleTone[e.role]}`}>{EMP_ROLES[e.role]}</span>
+                {it && (
+                  <span className="sm-emp-status">
+                    <span className={`badge ${it.status === "submitted" || it.status === "approved" ? "badge-ok" : it.status === "corrected" ? "badge-off" : "badge-warn"}`}>
+                      {smStatusText[it.status] || "—"}
+                    </span>
+                    {submitted && <b>{fmt(it.total)}</b>}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -2085,7 +2112,12 @@ function SmView({ salon, embedded }) {
     return (
       <div className={embedded ? "embedded" : "view"}>
         {!embedded && <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={() => {}} />}
-        <SmEmployeePicker salon={salon} employees={employees} onPick={setEmp} />
+        <div className="month-picker">
+          <select value={ym} onChange={(e) => setYm(e.target.value)}>
+            {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
+          </select>
+        </div>
+        <SmEmployeePicker salon={salon} employees={employees} ym={ym} onPick={setEmp} />
       </div>
     );
   }
@@ -4666,6 +4698,8 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .sm-emp-card{display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:14px 15px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);box-shadow:var(--sh-1);cursor:pointer;font-family:inherit;text-align:left;transition:border-color .14s var(--ease),transform .1s var(--ease);}
 .sm-emp-card:hover{border-color:var(--gold);transform:translateY(-1px);}
 .sm-emp-name{font-weight:600;font-size:13.5px;color:var(--ink);}
+.sm-emp-status{display:flex;align-items:center;gap:8px;margin-top:2px;}
+.sm-emp-status b{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);}
 .sm-emp-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line-dark);}
 .sm-emp-cur{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
 .detail-sub{font-family:'Inter',sans-serif;font-size:12px;font-weight:400;color:var(--muted);}
