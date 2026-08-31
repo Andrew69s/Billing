@@ -9,6 +9,7 @@ import {
   Store, Calculator, LogIn, Wallet, User, Clock,
   LayoutGrid, FileText, Calendar, Package, BarChart3, CreditCard, CheckSquare, ListChecks, GraduationCap,
   Bell, Star, Trash2, Plus, ChevronRight, Sparkles, Image as ImageIcon,
+  Cake, UserPlus, UserMinus, Archive as ArchiveIcon,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -32,6 +33,11 @@ import {
   INVOICE_STATUS, INVOICE_FLOW, nextStatus, deriveVat,
   listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice,
 } from "./lib/invoices.js";
+import {
+  EMP_ROLES, EMP_ROLE_ORDER,
+  listEmployees, createEmployee, updateEmployee, fireEmployee, rehireEmployee, transferEmployee, deleteEmployee, subscribeEmployees,
+  birthdayIn, tenure,
+} from "./lib/employees.js";
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
 } from "./lib/notifications.js";
@@ -575,6 +581,7 @@ const notifIcon = (kind) => {
   if (kind === "task_status") return <Check size={15} />;
   if (kind === "salary") return <Wallet size={15} />;
   if (kind === "invoice") return <CreditCard size={15} />;
+  if (kind === "birthday") return <Cake size={15} />;
   return <Bell size={15} />;
 };
 const relTime = (iso) => {
@@ -3511,6 +3518,258 @@ function InvoicesModule({ cab }) {
   );
 }
 
+/* =========================================================
+   МОДУЛЬ «КОМАНДА» (співробітники магазинів)
+========================================================= */
+function useEmployees() {
+  const [rows, setRows] = useState(null);
+  const reload = () => listEmployees().then(setRows).catch(() => setRows([]));
+  useEffect(() => { reload(); return subscribeEmployees(() => reload()); }, []);
+  return [rows, reload];
+}
+
+const empRoleTone = { manager: "badge-ok", acting_manager: "badge-warn", seller: "badge-off", intern: "badge-off" };
+const fmtBday = (dob) => {
+  if (!dob) return "—";
+  const [, m, d] = dob.split("-").map(Number);
+  return `${d} ${MON_SHORT[m - 1]}`;
+};
+
+function EmployeeForm({ cab, salons, emp, onClose, onSaved }) {
+  const [salonKey, setSalonKey] = useState(emp?.salon_key || salons[0]?.key || "");
+  const [name, setName] = useState(emp?.full_name || "");
+  const [phone, setPhone] = useState(emp?.phone || "");
+  const [dob, setDob] = useState(emp?.dob || "");
+  const [hired, setHired] = useState(emp?.hired_at || "");
+  const [role, setRole] = useState(emp?.role || "seller");
+  const [note, setNote] = useState(emp?.note || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    if (!name.trim() || !salonKey) return;
+    setBusy(true); setErr("");
+    try {
+      if (emp) {
+        await updateEmployee(emp, { salon_key: salonKey, full_name: name.trim(), phone: phone.trim(), dob: dob || null, hired_at: hired || null, role, note: note.trim() }, cab.key, "edit");
+      } else {
+        await createEmployee({ salon_key: salonKey, full_name: name, phone, dob, hired_at: hired, role, note, by: cab.key });
+        pushToast({ title: "Прийнято на роботу", body: `${name.trim()} · ${cabName(salonKey)}` });
+      }
+      onSaved(); onClose();
+    } catch (e) { setErr(e.message || "Не вдалося зберегти"); setBusy(false); }
+  };
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{emp ? "Редагувати співробітника" : "Прийняти на роботу"}</h3>
+          <button className="modal-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <label className="over-field"><span>ПІБ</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="Прізвище Імʼя" />
+          </label>
+          <div className="task-modal-row">
+            <label className="over-field"><span>Магазин</span>
+              <select value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
+                {salons.map((s) => <option key={s.key} value={s.key}>{salonLabel(s)}</option>)}
+              </select>
+            </label>
+            <label className="over-field"><span>Посада</span>
+              <select value={role} onChange={(e) => setRole(e.target.value)}>
+                {EMP_ROLE_ORDER.map((r) => <option key={r} value={r}>{EMP_ROLES[r]}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="task-modal-row">
+            <label className="over-field"><span>Телефон</span>
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+380…" />
+            </label>
+            <label className="over-field"><span>День народження</span>
+              <input type="date" value={dob} onChange={(e) => setDob(e.target.value)} />
+            </label>
+          </div>
+          <label className="over-field"><span>Дата прийому</span>
+            <input type="date" value={hired} onChange={(e) => setHired(e.target.value)} />
+          </label>
+          <label className="over-field"><span>Примітка</span>
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          {err && <p className="form-err">{err}</p>}
+        </div>
+        <div className="modal-foot">
+          <span className="task-modal-count" />
+          <button className="btn-primary" onClick={submit} disabled={busy || !name.trim()}>
+            {busy ? "…" : emp ? "Зберегти" : "Прийняти"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function FireModal({ emp, cab, onClose, onDone }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fire = async () => {
+    setBusy(true);
+    try { await fireEmployee(emp, reason, cab.key); pushToast({ title: "Співробітника звільнено", body: emp.full_name }); onDone(); onClose(); }
+    catch (e) { alert(e.message || e); setBusy(false); }
+  };
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: "min(420px,100%)" }}>
+        <div className="modal-head"><h3>Звільнити: {emp.full_name}</h3><button className="modal-x" onClick={onClose}><X size={18} /></button></div>
+        <div className="modal-body">
+          <label className="over-field"><span>Причина / коментар</span>
+            <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+          </label>
+          <p className="hint">Запис перейде в «Архів». Дані збережуться.</p>
+        </div>
+        <div className="modal-foot">
+          <button className="btn-secondary" onClick={onClose}>Скасувати</button>
+          <button className="btn-danger small" disabled={busy} onClick={fire}>{busy ? "…" : "Звільнити"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function EmployeeRow({ emp, canManage, salons, onEdit, onFire, onTransfer }) {
+  const [xfer, setXfer] = useState(false);
+  const bd = birthdayIn(emp.dob);
+  const bdSoon = bd !== null && bd <= 7;
+  return (
+    <div className="emp-row">
+      <div className="emp-main">
+        <span className="emp-name">{emp.full_name}</span>
+        <span className={`badge ${empRoleTone[emp.role]} emp-role`}>{EMP_ROLES[emp.role]}</span>
+        {bdSoon && <span className="emp-bd"><Cake size={12} /> {bd === 0 ? "сьогодні ДН" : `ДН через ${bd} дн.`}</span>}
+      </div>
+      <div className="emp-meta">
+        {emp.phone && <span>{emp.phone}</span>}
+        <span>ДН: {fmtBday(emp.dob)}</span>
+        {emp.hired_at && <span>прийнято {fmtDeadline(emp.hired_at)} · {tenure(emp.hired_at)}</span>}
+      </div>
+      {emp.note && <p className="emp-note">{emp.note}</p>}
+      {canManage && (
+        <div className="emp-actions">
+          {xfer ? (
+            <>
+              <select className="emp-xfer-sel" defaultValue="" onChange={(e) => { if (e.target.value) { onTransfer(emp, e.target.value); setXfer(false); } }}>
+                <option value="" disabled>перевести в…</option>
+                {salons.filter((s) => s.key !== emp.salon_key).map((s) => <option key={s.key} value={s.key}>{salonLabel(s)}</option>)}
+              </select>
+              <button className="btn-secondary small" onClick={() => setXfer(false)}>×</button>
+            </>
+          ) : (
+            <>
+              <button className="btn-secondary small" onClick={() => onEdit(emp)}>Редагувати</button>
+              {salons.length > 1 && <button className="btn-secondary small" onClick={() => setXfer(true)}>Перевести</button>}
+              <button className="btn-danger small" onClick={() => onFire(emp)}><UserMinus size={13} /> Звільнити</button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmployeesModule({ cab, archive }) {
+  const [rows, reload] = useEmployees();
+  const [form, setForm] = useState(null);   // null | "new" | emp
+  const [fireT, setFireT] = useState(null);
+
+  const canManage = !archive && (cab.type === "tm" || cab.type === "manager");
+  const salons = useMemo(() => {
+    if (cab.type === "tm") return salonsOfTm(cab.tmKey || cab.key);
+    if (cab.type === "sm") return [salonByKey(cab.key)].filter(Boolean);
+    return SALONS;
+  }, [cab]);
+
+  if (rows === null) return <div className="loading">Завантаження…</div>;
+
+  const list = rows.filter((e) => (archive ? e.status === "fired" : e.status === "active"));
+  const bySalon = salons.map((s) => ({
+    salon: s,
+    emps: list.filter((e) => e.salon_key === s.key)
+      .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
+  }));
+  const orphan = list.filter((e) => !salons.some((s) => s.key === e.salon_key));
+
+  const onTransfer = async (emp, toKey) => { await transferEmployee(emp, toKey, cab.key); pushToast({ title: "Переведено", body: `${emp.full_name} → ${cabName(toKey)}` }); reload(); };
+  const onRehire = async (emp) => { await rehireEmployee(emp, emp.salon_key, cab.key); reload(); };
+
+  return (
+    <div className="tasks-mod">
+      <div className="tasks-head">
+        <h3 className="ov-h">{archive ? "Архів співробітників" : "Команда"}</h3>
+        {canManage && <button className="btn-primary small" onClick={() => setForm("new")}><UserPlus size={14} /> Прийняти на роботу</button>}
+      </div>
+
+      {!archive && (
+        <div className="tasks-dash">
+          <span><b>{list.length}</b> у штаті</span>
+          <span><b>{list.filter((e) => e.role === "manager" || e.role === "acting_manager").length}</b> керуючих</span>
+          <span><b>{list.filter((e) => e.role === "intern").length}</b> стажерів</span>
+        </div>
+      )}
+
+      {list.length === 0 ? (
+        <div className="admin-empty">{archive ? "Архів порожній." : "Співробітників ще не додано."}</div>
+      ) : archive ? (
+        <div className="task-list">
+          {list.sort((a, b) => (a.fired_at < b.fired_at ? 1 : -1)).map((e) => (
+            <div className="emp-row emp-fired" key={e.id}>
+              <div className="emp-main">
+                <span className="emp-name">{e.full_name}</span>
+                <span className={`badge ${empRoleTone[e.role]} emp-role`}>{EMP_ROLES[e.role]}</span>
+              </div>
+              <div className="emp-meta">
+                <span>{cabName(e.salon_key)}</span>
+                {e.hired_at && <span>стаж {tenure(e.hired_at, e.fired_at)}</span>}
+                <span>звільнено {e.fired_at ? fmtDeadline(e.fired_at) : "—"}</span>
+                {e.phone && <span>{e.phone}</span>}
+              </div>
+              {e.fired_reason && <p className="emp-note">Причина: {e.fired_reason}</p>}
+              {(cab.type === "tm" || cab.type === "manager") && (
+                <div className="emp-actions"><button className="btn-secondary small" onClick={() => onRehire(e)}>Повернути в штат</button></div>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="emp-groups">
+          {bySalon.map(({ salon, emps }) => (
+            <div className="emp-group" key={salon.key}>
+              <div className="emp-group-head">{salonLabel(salon)} <span>· {emps.length}</span></div>
+              {emps.length === 0 ? <div className="admin-empty" style={{ padding: "10px 0" }}>немає</div> : emps.map((e) => (
+                <EmployeeRow key={e.id} emp={e} canManage={canManage} salons={salons}
+                  onEdit={(x) => setForm(x)} onFire={(x) => setFireT(x)} onTransfer={onTransfer} />
+              ))}
+            </div>
+          ))}
+          {orphan.length > 0 && (
+            <div className="emp-group">
+              <div className="emp-group-head">Інші магазини</div>
+              {orphan.map((e) => (
+                <EmployeeRow key={e.id} emp={e} canManage={false} salons={salons} onEdit={() => {}} onFire={() => {}} onTransfer={() => {}} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {form && <EmployeeForm cab={cab} salons={salons} emp={form === "new" ? null : form} onClose={() => setForm(null)} onSaved={reload} />}
+      {fireT && <FireModal emp={fireT} cab={cab} onClose={() => setFireT(null)} onDone={reload} />}
+    </div>
+  );
+}
+
 function CabinetShell({ title, onExit, onLogout, modules, cabKey }) {
   const items = modules.filter(Boolean);
   const [active, setActive] = useState(items[0].key);
@@ -3632,8 +3891,9 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "salons", label: "ЗП салонів", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
     { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <ModuleStub name="Показники території" /> },
+    { key: "team", label: "Команда", icon: <Users size={16} />, divider: true, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "archive", label: "Архів", icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
     { key: "docs", label: "Документи й стандарти", icon: <FileText size={16} />, divider: true, render: () => <ModuleStub name="Документи й стандарти" /> },
-    { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <ModuleStub name="Команда" /> },
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     isAdmin ? { key: "admin", label: "Адміністрування", icon: <User size={16} />, divider: true, render: () => <AdminPanel /> } : null,
   ];
@@ -3650,11 +3910,18 @@ function ManagerCabinet({ onExit, onLogout }) {
         <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
         <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}><CheckSquare size={14} /> Задачі</button>
         <button className={tab === "inv" ? "active" : ""} onClick={() => setTab("inv")}><CreditCard size={14} /> Рахунки</button>
+        <button className={tab === "team" ? "active" : ""} onClick={() => setTab("team")}><Users size={14} /> Команда</button>
       </div>
       {tab === "byTm" && <ManagerView embedded />}
       {tab === "consol" && <ConsolidationPanel role="manager" />}
       {tab === "tasks" && <TasksModule cab={{ key: "manager", type: "manager" }} />}
       {tab === "inv" && <InvoicesModule cab={{ key: "manager", type: "manager" }} />}
+      {tab === "team" && (
+        <>
+          <EmployeesModule cab={{ key: "manager", type: "manager" }} />
+          <EmployeesModule cab={{ key: "manager", type: "manager" }} archive />
+        </>
+      )}
     </div>
   );
 }
@@ -3680,6 +3947,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
     { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
     { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ModuleStub name="Графік змін" /> },
     { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
     { key: "reports", label: "Звіти", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
@@ -4286,6 +4554,23 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .btn-danger.small:hover{background:rgba(160,58,42,.2);}
 
 /* ---------- безнальні рахунки ---------- */
+/* ---------- команда / співробітники ---------- */
+.emp-groups{display:flex;flex-direction:column;gap:16px;}
+.emp-group{border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;background:var(--surface);box-shadow:var(--sh-1);}
+.emp-group-head{padding:9px 14px;background:var(--surface-alt);font-family:'Fraunces',serif;font-size:14px;font-weight:600;color:var(--ink);}
+.emp-group-head span{color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px;}
+.emp-row{padding:11px 14px;border-top:1px solid var(--line);}
+.emp-group .emp-row:first-of-type{border-top:none;}
+.emp-row.emp-fired{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);opacity:.85;}
+.emp-main{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.emp-name{font-weight:600;font-size:13.5px;color:var(--ink);}
+.emp-role{flex-shrink:0;}
+.emp-bd{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--gold);background:rgba(190,138,46,.1);border-radius:999px;padding:2px 8px;}
+.emp-meta{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:6px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
+.emp-note{margin:6px 0 0;font-size:12px;color:var(--ink-soft);}
+.emp-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px;}
+.emp-xfer-sel{padding:7px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:12px;}
+
 .inv-viewtabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--line-dark);}
 .inv-viewtabs button{background:none;border:none;border-bottom:2px solid transparent;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--on-dark-2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;margin-bottom:-1px;}
 .inv-viewtabs button:hover{color:var(--on-dark);}
