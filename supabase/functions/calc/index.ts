@@ -150,7 +150,8 @@ function calcBlock3(b3: any, salonCount: number) {
 function calcEz(ez: any) {
   const netProfit = (ez.revenue || 0) * ((ez.profitabilityPercent || 0) / 100);
   const ezValue = netProfit - (ez.och || 0) - (ez.np || 0) - (ez.acquiring || 0) - (ez.taxes || 0);
-  return { netProfit, ezValue, bonus: ezValue * 0.10 };
+  // бонус лише додатний — відʼємне ЕЗ не віднімається від ЗП
+  return { netProfit, ezValue, bonus: Math.max(0, ezValue * 0.10) };
 }
 function calcTmAll(data: any, grade: number, tmKey: string, ym: string, reass: any[]) {
   const salonKeys = salonsOfTm(tmKey || TM_KEYS[0], ym, reass);
