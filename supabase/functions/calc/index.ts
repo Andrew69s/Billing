@@ -134,7 +134,7 @@ function calcSmState(smCount: number, found: number, unfixed: number) { return 5
 function calcTraining(score: number) {
   if (score < 90) return -1000;
   if (score < 95) return 0;
-  if (score < 98) return 1000;
+  if (score < 100) return 1000;
   return 2000;
 }
 function calcBlock3(b3: any, salonCount: number) {
