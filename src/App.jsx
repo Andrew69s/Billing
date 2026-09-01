@@ -2,14 +2,16 @@ import React, { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import _ from "lodash";
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import {
   Camera, X, ChevronLeft, Check, AlertTriangle, TrendingUp, Users, ClipboardList, Pencil,
   Store, Calculator, LogIn, Wallet, User, Clock,
   LayoutGrid, FileText, Calendar, Package, BarChart3, CreditCard, CheckSquare, ListChecks, GraduationCap,
   Bell, Star, Trash2, Plus, ChevronRight, Sparkles, Image as ImageIcon,
-  Cake, UserPlus, UserMinus, Archive as ArchiveIcon,
+  Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
+  Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
+  Wrench, MessageSquare, Send, Banknote, Menu,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -46,6 +48,16 @@ import {
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
 } from "./lib/notifications.js";
+import {
+  TM_METRICS, SALON_MONTH_PLAN, daysInYm, dateOf,
+  listMetrics, effective, saveManual, resetManual, syncFromPlanner, subscribeMetrics, monthAgg, planAgg,
+} from "./lib/territory.js";
+import { getMaintenance, setMaintenance, subscribeFlags } from "./lib/appFlags.js";
+import { submitFeedback, listFeedback, setFeedbackStatus, resolveFeedback, deleteFeedback, subscribeFeedback } from "./lib/feedback.js";
+import {
+  listCashDays, outstandingBySalon, setCashDay, cashHandover, listHandovers, subscribeCash,
+  yesterdayISO as cashYesterday,
+} from "./lib/cash.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
@@ -285,7 +297,11 @@ function NumInput({ value, onChange, className, placeholder = "0", allowEmpty = 
 
   const commit = () => {
     editing.current = false;
-    onChange(parseNum(ref.current.value, allowEmpty));
+    const next = parseNum(ref.current.value, allowEmpty);
+    // не смикати onChange, якщо значення фактично не змінилося
+    const cur = allowEmpty && (value === "" || value == null) ? "" : (Number(value) || 0);
+    if (next === cur) return;
+    onChange(next);
   };
 
   return (
@@ -550,12 +566,90 @@ function BlockHeader({ n, title }) {
     </div>
   );
 }
-function ImageModal({ src, onClose }) {
+
+/* міні-тренд для KPI-плиток (без осей) */
+function Spark({ data, w = 56, h = 18, color = "var(--gold)" }) {
+  const pts = (data || []).filter((v) => typeof v === "number" && !Number.isNaN(v));
+  if (pts.length < 2) return null;
+  const min = Math.min(...pts), max = Math.max(...pts), rng = max - min || 1;
+  const step = w / (pts.length - 1);
+  const xy = pts.map((v, i) => [i * step, h - 1 - ((v - min) / rng) * (h - 2)]);
+  const d = xy.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+  const last = xy[xy.length - 1];
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+    <svg className="kpi-spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+      <path d={`${d} L ${w} ${h} L 0 ${h} Z`} fill={color} opacity="0.12" />
+      <path d={d} fill="none" stroke={color} strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={last[0]} cy={last[1]} r="1.9" fill={color} />
+    </svg>
+  );
+}
+
+/* дельта до попереднього місяця */
+function Delta({ value, unit = "", suffix = "", invert = false }) {
+  if (value == null || Number.isNaN(value)) return null;
+  const zero = Math.abs(value) < (unit === "%" ? 0.5 : 1);
+  const good = invert ? value < 0 : value > 0;
+  const tone = zero ? "flat" : good ? "up" : "down";
+  const arrow = zero ? "≈" : value > 0 ? "▲" : "▼";
+  const num = unit === "%" ? Math.abs(Math.round(value)) : fmt(Math.abs(value)).replace(" грн", "");
+  return (
+    <span className={`kpi-delta ${tone}`}>
+      {arrow} {zero ? "на рівні місяця" : `${num}${unit} ${suffix}`}
+    </span>
+  );
+}
+function ImageModal({ src, onClose }) {
+  const [z, setZ] = useState(1);              // масштаб
+  const [off, setOff] = useState({ x: 0, y: 0 }); // зсув при перетягуванні
+  const drag = useRef(null);
+  const MIN = 1, MAX = 6;
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "+" || e.key === "=") setZ((v) => Math.min(MAX, +(v + 0.4).toFixed(2)));
+      if (e.key === "-") setZ((v) => { const n = Math.max(MIN, +(v - 0.4).toFixed(2)); if (n === MIN) setOff({ x: 0, y: 0 }); return n; });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const zoomAt = (delta) => setZ((v) => {
+    const n = Math.min(MAX, Math.max(MIN, +(v + delta).toFixed(2)));
+    if (n === MIN) setOff({ x: 0, y: 0 });
+    return n;
+  });
+  const onWheel = (e) => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 0.3 : -0.3); };
+  const onDown = (e) => { if (z <= MIN) return; drag.current = { x: e.clientX - off.x, y: e.clientY - off.y }; };
+  const onMove = (e) => { if (!drag.current) return; setOff({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y }); };
+  const onUp = () => { drag.current = null; };
+  const onDbl = () => { if (z > MIN) { setZ(1); setOff({ x: 0, y: 0 }); } else setZ(2.5); };
+
+  return (
+    <div className="modal-overlay" onClick={onClose} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}>
+      <div className="img-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="img-modal-tools">
+          <button type="button" onClick={() => zoomAt(-0.4)} disabled={z <= MIN} aria-label="Зменшити">−</button>
+          <span className="img-modal-z">{Math.round(z * 100)}%</span>
+          <button type="button" onClick={() => zoomAt(0.4)} disabled={z >= MAX} aria-label="Збільшити">+</button>
+          <button type="button" onClick={() => { setZ(1); setOff({ x: 0, y: 0 }); }} disabled={z === 1} aria-label="Скинути">↺</button>
+        </div>
         <button className="modal-close" onClick={onClose}><X size={18} /></button>
-        <img src={src} alt="скрін" />
+        <div
+          className="img-modal-stage"
+          onWheel={onWheel}
+          onMouseDown={onDown}
+          onDoubleClick={onDbl}
+          style={{ cursor: z > MIN ? (drag.current ? "grabbing" : "grab") : "zoom-in" }}
+        >
+          <img
+            src={src}
+            alt="скрін"
+            draggable={false}
+            style={{ transform: `translate(${off.x}px, ${off.y}px) scale(${z})` }}
+          />
+        </div>
       </div>
     </div>
   );
@@ -566,13 +660,98 @@ function CalcBusyDot() {
   return <span className={`calc-busy-dot ${busy ? "on" : ""}`} title="Перерахунок мотивації…" aria-hidden={!busy} />;
 }
 
-function TopBar({ title, onBack, onLogout, cabKey }) {
+function FeedbackButton({ cabKey }) {
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState("problem");
+  const [body, setBody] = useState("");
+  const [shot, setShot] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const pickFile = async (file) => {
+    if (!file) return;
+    try { setShot(await resizeImage(file)); } catch { /* ignore */ }
+  };
+  const onPaste = (e) => {
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+    if (item) pickFile(item.getAsFile());
+  };
+  const send = async () => {
+    if (!body.trim()) return;
+    setBusy(true);
+    try {
+      await submitFeedback({ kind, body, screenshot: shot, fromCabinet: cabKey, fromType: "" });
+      setDone(true);
+      setTimeout(() => { setOpen(false); setDone(false); setBody(""); setShot(null); setKind("problem"); }, 1400);
+    } catch (e) { alert(e.message || e); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <>
+      <button className="topbar-fb" title="Повідомити про проблему або запропонувати" onClick={() => setOpen(true)}>
+        <MessageSquare size={17} />
+      </button>
+      {open && createPortal(
+        <div className="modal-overlay" onClick={() => !busy && setOpen(false)}>
+          <div className="fb-modal" onClick={(e) => e.stopPropagation()} onPaste={onPaste}>
+            <div className="fb-modal-head">
+              <span>Звернення до адміністратора</span>
+              <button className="modal-close" onClick={() => setOpen(false)}><X size={16} /></button>
+            </div>
+            {done ? (
+              <div className="fb-done"><Check size={22} /> Дякуємо! Звернення надіслано.</div>
+            ) : (
+              <div className="fb-modal-body">
+                <div className="fb-kind">
+                  <button className={kind === "problem" ? "active" : ""} onClick={() => setKind("problem")}>
+                    <Wrench size={14} /> Проблема
+                  </button>
+                  <button className={kind === "proposal" ? "active" : ""} onClick={() => setKind("proposal")}>
+                    <Sparkles size={14} /> Пропозиція
+                  </button>
+                </div>
+                <textarea
+                  className="fb-ta" rows={4} autoFocus value={body}
+                  placeholder={kind === "problem" ? "Опишіть, що не працює або поводиться дивно…" : "Опишіть ідею чи що покращити…"}
+                  onChange={(e) => setBody(e.target.value)}
+                />
+                {shot ? (
+                  <div className="fb-shot">
+                    <img src={shot} alt="скрін" />
+                    <button onClick={() => setShot(null)}><X size={13} /></button>
+                  </div>
+                ) : (
+                  <label className="fb-attach">
+                    <ImageIcon size={14} /> Додати скріншот
+                    <input type="file" accept="image/*" hidden onChange={(e) => pickFile(e.target.files?.[0])} />
+                  </label>
+                )}
+                <p className="fb-hint">Скрін можна вставити з буфера (Ctrl+V).</p>
+                <button className="btn-primary" onClick={send} disabled={busy || !body.trim()}>
+                  <Send size={14} /> {busy ? "Надсилання…" : "Надіслати"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+function TopBar({ title, onBack, onLogout, cabKey, onMenu }) {
   return (
     <div className="topbar">
+      {onMenu && (
+        <button className="topbar-menu" onClick={onMenu} aria-label="Меню"><Menu size={18} /></button>
+      )}
       <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> Назад</button>
       <span className="topbar-title">{title}</span>
       <div className="topbar-right">
         <CalcBusyDot />
+        {cabKey && <FeedbackButton cabKey={cabKey} />}
         {cabKey && <NotificationCenter cabKey={cabKey} />}
         {onLogout && (
           <button className="topbar-logout" onClick={onLogout}>Вийти</button>
@@ -597,6 +776,7 @@ const notifIcon = (kind) => {
   if (kind === "salary") return <Wallet size={15} />;
   if (kind === "invoice") return <CreditCard size={15} />;
   if (kind === "birthday") return <Cake size={15} />;
+  if (kind === "feedback") return <MessageSquare size={15} />;
   return <Bell size={15} />;
 };
 const relTime = (iso) => {
@@ -2740,6 +2920,157 @@ function AdminLog() {
   );
 }
 
+function AdminMaintenance() {
+  const [flag, setFlag] = useState(null);   // { on, message, since }
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let a = true;
+    getMaintenance().then((f) => { if (a) { setFlag(f || { on: false }); setMsg(f?.message || ""); } });
+    return subscribeFlags(() => getMaintenance().then((f) => { if (a && f) setFlag(f); }));
+  }, []);
+  if (!flag) return <div className="loading">Завантаження…</div>;
+
+  const toggle = async (on) => {
+    setBusy(true);
+    try { await setMaintenance(on, msg, "andriy"); setFlag((f) => ({ ...f, on, message: msg, since: on ? new Date().toISOString() : null })); }
+    catch (e) { alert(e.message || e); }
+    finally { setBusy(false); }
+  };
+  const saveMsg = async () => {
+    if (!flag.on) return;
+    setBusy(true);
+    try { await setMaintenance(true, msg, "andriy"); pushToast({ title: "Текст оновлено" }); }
+    catch (e) { alert(e.message || e); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="admin-panel">
+      <h3>Технічна перерва</h3>
+      <p className="hint" style={{ marginBottom: 14 }}>
+        Коли увімкнено — усі, крім вас, бачать вікно «Тривають технічні роботи» і не можуть користуватися застосунком.
+        Ви працюєте як зазвичай.
+      </p>
+      <label className={`maint-toggle ${flag.on ? "on" : ""}`}>
+        <input type="checkbox" checked={!!flag.on} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
+        <span className="maint-switch" />
+        <span className="maint-label">
+          {flag.on ? "Технічну перерву УВІМКНЕНО" : "Технічну перерву вимкнено"}
+          {flag.on && flag.since && <em> · з {fmtDate(flag.since)}</em>}
+        </span>
+      </label>
+      <label className="over-field" style={{ maxWidth: "100%", marginTop: 14 }}>
+        <span>Повідомлення для користувачів (необовʼязково)</span>
+        <textarea
+          rows={2} value={msg} placeholder="напр. Оновлюємо розрахунок ЗП, повернемось за 15 хв"
+          onChange={(e) => setMsg(e.target.value)}
+        />
+      </label>
+      {flag.on && (
+        <button className="btn-secondary small" style={{ marginTop: 8 }} onClick={saveMsg} disabled={busy}>
+          Оновити текст
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FeedbackItem({ r, onPreview, onReload }) {
+  const [comment, setComment] = useState("");
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const resolve = async () => {
+    setBusy(true);
+    try {
+      await resolveFeedback(r, comment);
+      pushToast({ title: "Звернення опрацьовано", body: r.from_cabinet ? `Сповіщення надіслано: ${cabName(r.from_cabinet)}` : "" });
+      onReload();
+    } catch (e) { alert(e.message || e); setBusy(false); }
+  };
+
+  return (
+    <div className={`fb-item ${r.status}`}>
+      <div className="fb-item-top">
+        <span className={`fb-tag ${r.kind}`}>{r.kind === "proposal" ? "Пропозиція" : "Проблема"}</span>
+        <span className="fb-from">{cabName(r.from_cabinet) || r.from_cabinet || "—"}</span>
+        <span className="fb-time">{fmtDate(r.created_at)}</span>
+      </div>
+      <p className="fb-body">{r.body}</p>
+      {r.screenshot && (
+        <button className="fb-thumb" onClick={() => onPreview(r.screenshot)}>
+          <img src={r.screenshot} alt="скрін" />
+        </button>
+      )}
+      {r.status === "done" && r.admin_comment && (
+        <div className="fb-reply"><b>Відповідь:</b> {r.admin_comment}</div>
+      )}
+
+      <div className="fb-actions">
+        {r.status === "new" ? (
+          open ? (
+            <button className="btn-secondary small" onClick={() => setOpen(false)}>Згорнути</button>
+          ) : (
+            <button className="btn-primary small" onClick={() => setOpen(true)}>
+              <Check size={13} /> Опрацювати
+            </button>
+          )
+        ) : (
+          <button className="btn-secondary small" onClick={() => setFeedbackStatus(r.id, "new").then(onReload)}>Повернути в нові</button>
+        )}
+        <button className="fb-del" onClick={() => { if (confirm("Видалити звернення?")) deleteFeedback(r.id).then(onReload); }}>
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      {open && r.status === "new" && (
+        <div className="fb-resolve">
+          <textarea
+            rows={2} value={comment} autoFocus
+            placeholder="Коментар для автора (необовʼязково): що виправлено / рішення по пропозиції…"
+            onChange={(e) => setComment(e.target.value)}
+          />
+          <button className="btn-primary small" onClick={resolve} disabled={busy}>
+            <Send size={13} /> {busy ? "…" : (r.from_cabinet ? "Опрацювати й повідомити автора" : "Позначити опрацьованим")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminFeedback() {
+  const [rows, setRows] = useState(null);
+  const [filter, setFilter] = useState("new");
+  const [preview, setPreview] = useState(null);
+  const reload = () => listFeedback().then(setRows).catch(() => setRows([]));
+  useEffect(() => { reload(); return subscribeFeedback(reload); }, []);
+  if (rows === null) return <div className="loading">Завантаження…</div>;
+
+  const shown = rows.filter((r) => (filter === "new" ? r.status === "new" : filter === "all" ? true : r.status === filter));
+  const newCount = rows.filter((r) => r.status === "new").length;
+
+  return (
+    <div className="admin-panel">
+      <h3>Звернення {newCount > 0 && <span className="badge badge-warn">{newCount} нових</span>}</h3>
+      <div className="fb-filter">
+        {[["new", "Нові"], ["done", "Опрацьовані"], ["all", "Усі"]].map(([k, l]) => (
+          <button key={k} className={filter === k ? "active" : ""} onClick={() => setFilter(k)}>{l}</button>
+        ))}
+      </div>
+      {shown.length === 0 ? <div className="admin-empty">Немає звернень.</div> : (
+        <div className="fb-list">
+          {shown.map((r) => (
+            <FeedbackItem key={r.id} r={r} onPreview={setPreview} onReload={reload} />
+          ))}
+        </div>
+      )}
+      {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
+    </div>
+  );
+}
+
 function AdminPanel() {
   const [tab, setTab] = useState("recovery");
   const tabs = [
@@ -2747,6 +3078,8 @@ function AdminPanel() {
     ["access", "Доступи"],
     ["reassign", "Магазини й ТМ"],
     ["rights", "Права"],
+    ["feedback", "Звернення"],
+    ["maint", "Технічна перерва"],
     ["log", "Журнал"],
   ];
   return (
@@ -2760,6 +3093,8 @@ function AdminPanel() {
       {tab === "access" && <AdminAccess />}
       {tab === "reassign" && <AdminReassign />}
       {tab === "rights" && <AdminRights />}
+      {tab === "feedback" && <AdminFeedback />}
+      {tab === "maint" && <AdminMaintenance />}
       {tab === "log" && <AdminLog />}
     </div>
   );
@@ -4151,6 +4486,8 @@ function DailyCheckIn({ salon, onDone }) {
   const [busy, setBusy] = useState(false);
   const [closeMode, setCloseMode] = useState(false);
   const [closeReason, setCloseReason] = useState("");
+  const [step, setStep] = useState("shift");   // shift | cash
+  const [cashInfo, setCashInfo] = useState(null); // { total, days }
   const today = todayISO();
 
   useEffect(() => {
@@ -4186,6 +4523,22 @@ function DailyCheckIn({ salon, onDone }) {
       await upsertShiftsBatch(rows);
       await setStoreDay({ salon_key: salon.key, work_date: today, opened_at: new Date().toISOString(), opened_by: salon.key, senior_id: senior, closed: false });
       pushToast({ title: "Зміну розпочато", body: `${rows.filter((r) => r.state === "work").length} на зміні` });
+      // питання про готівку: чи забрав Віктор те, що назбиралось до сьогодні
+      const prior = await listCashDays({ salonKey: salon.key, to: cashYesterday() }).catch(() => []);
+      const openPrior = prior.filter((r) => !r.collected);
+      if (openPrior.length) {
+        setCashInfo({ total: openPrior.reduce((a, r) => a + Number(r.amount), 0), days: openPrior.length });
+        setStep("cash");
+        setBusy(false);
+      } else {
+        onDone();
+      }
+    } catch (e) { alert(e.message || e); setBusy(false); }
+  };
+  const answerCash = async (taken) => {
+    setBusy(true);
+    try {
+      if (taken) await cashHandover(salon.key, salon.key, "підтверджено на ранковому чек-іні");
       onDone();
     } catch (e) { alert(e.message || e); setBusy(false); }
   };
@@ -4196,6 +4549,29 @@ function DailyCheckIn({ salon, onDone }) {
       onDone();
     } catch (e) { alert(e.message || e); setBusy(false); }
   };
+
+  if (step === "cash") {
+    return createPortal(
+      <div className="modal-overlay checkin-overlay">
+        <div className="checkin-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="checkin-h">
+            <div className="k">Готівка</div>
+            <div className="d">{salonLabel(salon)}</div>
+          </div>
+          <div className="checkin-b ci-cash">
+            <span className="ci-cash-ic"><Banknote size={26} /></span>
+            <p>До видачі назбиралось <b>{uah(cashInfo.total)}</b> за {cashInfo.days} дн.</p>
+            <p className="hint">Віктор уже забрав цю готівку?</p>
+          </div>
+          <div className="checkin-f">
+            <button className="btn-secondary" disabled={busy} onClick={() => answerCash(false)}>Ще ні</button>
+            <button className="btn-primary" disabled={busy} onClick={() => answerCash(true)}>Так, забрав</button>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
 
   return createPortal(
     <div className="modal-overlay checkin-overlay">
@@ -4262,28 +4638,730 @@ function DailyCheckIn({ salon, onDone }) {
   );
 }
 
+/* Загальна панель для вбудованого зовнішнього ресурсу (iframe + шапка з діями). */
+function EmbedPanel({ url, title, hint }) {
+  const [k, setK] = useState(0); // для «оновити»
+  return (
+    <div className="planner-embed">
+      <div className="planner-bar">
+        <span className="planner-hint">{hint}</span>
+        <div className="planner-actions">
+          <button type="button" className="planner-btn" onClick={() => setK((v) => v + 1)}>
+            <RefreshCw size={13} /> Оновити
+          </button>
+          <a className="planner-btn" href={url} target="_blank" rel="noopener noreferrer">
+            <ExternalLink size={13} /> Відкрити в новому вікні
+          </a>
+        </div>
+      </div>
+      <iframe
+        key={k}
+        src={url}
+        title={title}
+        className="planner-frame"
+        loading="lazy"
+        allow="clipboard-write"
+        referrerPolicy="no-referrer"
+      />
+    </div>
+  );
+}
+
+/* Онлайн-планер регіону (зовнішній застосунок, власний бекенд).
+   За потреби різні сторінки під різних ТМ — додати ключ у PLANNER_BY_TM. */
+const PLANNER_URL_DEFAULT = "https://serene-sunflower-83a9e2.netlify.app/bor.html";
+const PLANNER_BY_TM = {
+  // andriy: "https://serene-sunflower-83a9e2.netlify.app/bor.html",
+  // ivan:   "https://serene-sunflower-83a9e2.netlify.app/por.html",
+};
+const plannerUrl = (tmKey) => PLANNER_BY_TM[tmKey] || PLANNER_URL_DEFAULT;
+
+function PlannerModule({ tmKey }) {
+  return (
+    <EmbedPanel
+      url={plannerUrl(tmKey)}
+      title="Планер регіону"
+      hint="Онлайн-планер регіону — заповнюють магазини, дані спільні для всіх учасників."
+    />
+  );
+}
+
+/* Офіційні виплати — Google-таблиця (лише ТМ і керівник). */
+const REGION_SHEET_URL =
+  "https://docs.google.com/spreadsheets/d/1yVdLFLuT6P7bj3FeoDN1zx4-1gFFyu7t88wONJiVF-w/edit?gid=1711229427&rm=minimal";
+
+function RegionSheetModule() {
+  return (
+    <EmbedPanel
+      url={REGION_SHEET_URL}
+      title="Офіційні виплати"
+      hint="Офіційні виплати — Google-таблиця. Потрібен доступ Google — якщо в рамці просить вхід, відкрийте в новому вікні."
+    />
+  );
+}
+
+/* ---------- Показники території ---------- */
+const tmMoney = (n) => Math.round(n || 0).toLocaleString("uk-UA");
+const rowKey = (sk, d) => `${sk}|${d}`;
+
+function TerritorySummaryStrip({ salonKeys, rows, daysPassed, dim }) {
+  const { sum } = monthAgg(rows, salonKeys);
+  const plan = planAgg(salonKeys);
+  return (
+    <div className="tm-strip">
+      {TM_METRICS.map((mt) => {
+        const planToDate = dim ? (plan[mt.key] / dim) * daysPassed : 0;
+        const pct = planToDate ? Math.round((sum[mt.key] / planToDate) * 100) : null;
+        const tone = pct == null ? "" : pct >= 100 ? "good" : pct >= 90 ? "warn" : "bad";
+        return (
+          <div className="tm-strip-tile" key={mt.key}>
+            <span className="tm-strip-lab">{mt.label}</span>
+            <b>{tmMoney(sum[mt.key])}{mt.money ? " ₴" : ""}</b>
+            <span className="tm-strip-sub">
+              план міс. {tmMoney(plan[mt.key])}
+              {pct != null && <em className={`tm-pct ${tone}`}> · {pct}% до дати</em>}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TerritoryAllSalons({ salons, rows, activeKey, onPick }) {
+  return (
+    <div className="tm-all">
+      <table className="tm-all-tbl">
+        <thead>
+          <tr><th>Салон</th><th>Оборот, міс.</th><th>План</th><th>%</th><th>Днів</th></tr>
+        </thead>
+        <tbody>
+          {salons.map((s) => {
+            const { sum, daysBySalon } = monthAgg(rows, [s.key]);
+            const plan = SALON_MONTH_PLAN[s.key]?.assort || 0;
+            const pct = plan ? Math.round((sum.assort / plan) * 100) : null;
+            return (
+              <tr key={s.key} className={s.key === activeKey ? "active" : ""} onClick={() => onPick(s.key)}>
+                <td>{s.city}, {shortAddr(s.addr)}</td>
+                <td className="num">{tmMoney(sum.assort)} ₴</td>
+                <td className="num muted">{tmMoney(plan)}</td>
+                <td className="num">{pct == null ? "—" : `${pct}%`}</td>
+                <td className="num">{daysBySalon[s.key] || 0}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TerritoryDayTable({ salonKey, ym, rowsMap, editable, by, onPatched }) {
+  const dim = daysInYm(ym);
+  const today = todayISO();
+  const days = Array.from({ length: dim }, (_, i) => i + 1);
+  const plan = SALON_MONTH_PLAN[salonKey] || {};
+  const totals = { assort: 0, ez: 0, cheky: 0, bn: 0, dzvinky: 0 };
+
+  const commit = async (day, metric, val) => {
+    const d = dateOf(ym, day);
+    const patch = { [metric]: val === "" || val == null ? null : Number(val) || 0 };
+    onPatched(salonKey, d, patch); // оптимістично
+    try { await saveManual(salonKey, d, patch, by); }
+    catch (e) { alert(e.message || e); }
+  };
+  const reset = async (day) => {
+    const d = dateOf(ym, day);
+    onPatched(salonKey, d, null);
+    try { await resetManual(salonKey, d); } catch (e) { alert(e.message || e); }
+  };
+
+  return (
+    <div className="tm-grid-wrap">
+      <table className="tm-grid">
+        <thead>
+          <tr>
+            <th className="tm-c-day">День</th>
+            {TM_METRICS.map((mt) => <th key={mt.key}>{mt.short}</th>)}
+            <th>Сер. чек</th>
+            {editable && <th className="tm-c-rst" />}
+          </tr>
+        </thead>
+        <tbody>
+          {days.map((day) => {
+            const d = dateOf(ym, day);
+            const row = rowsMap.get(rowKey(salonKey, d));
+            const e = effective(row || {});
+            for (const mt of TM_METRICS) totals[mt.key] += e[mt.key];
+            const anyEdited = TM_METRICS.some((mt) => e[`${mt.key}__edited`]);
+            const isFuture = d > today;
+            const avg = e.cheky ? Math.round(e.assort / e.cheky) : 0;
+            return (
+              <tr key={day} className={isFuture ? "tm-future" : ""}>
+                <td className="tm-c-day">{day}</td>
+                {TM_METRICS.map((mt) => (
+                  <td key={mt.key} className={e[`${mt.key}__edited`] ? "tm-edited" : ""}>
+                    {editable ? (
+                      <NumInput
+                        className="tm-in" allowEmpty
+                        value={e[`${mt.key}__edited`] || e[mt.key] ? e[mt.key] : ""}
+                        onChange={(v) => commit(day, mt.key, v)}
+                      />
+                    ) : (
+                      <span>{e[mt.key] ? tmMoney(e[mt.key]) : "—"}</span>
+                    )}
+                  </td>
+                ))}
+                <td className="muted">{avg ? tmMoney(avg) : "—"}</td>
+                {editable && (
+                  <td className="tm-c-rst">
+                    {anyEdited && (
+                      <button type="button" className="tm-rst" title="Повернути до планера" onClick={() => reset(day)}>↩</button>
+                    )}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <tr className="tm-tot">
+            <td className="tm-c-day">Разом</td>
+            {TM_METRICS.map((mt) => <td key={mt.key} className="num">{tmMoney(totals[mt.key])}</td>)}
+            <td className="muted">{totals.cheky ? tmMoney(Math.round(totals.assort / totals.cheky)) : "—"}</td>
+            {editable && <td />}
+          </tr>
+          <tr className="tm-plan">
+            <td className="tm-c-day">План міс.</td>
+            {TM_METRICS.map((mt) => <td key={mt.key} className="num muted">{tmMoney(plan[mt.key] || 0)}</td>)}
+            <td />
+            {editable && <td />}
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+function TerritoryModule({ cab }) {
+  const scopeSalons = cab.type === "tm"
+    ? salonsOfTm(cab.tmKey || cab.key)
+    : (cab.type === "sm" ? [salonByKey(cab.key)].filter(Boolean) : SALONS);
+  const editable = cab.type === "tm" || cab.type === "manager";
+  const months = useMemo(() => recentMonths(15), []);
+  const [ym, setYm] = useState(nowYm());
+  const [rowsMap, setRowsMap] = useState(new Map());
+  const [loading, setLoading] = useState(true);
+  const [salonKey, setSalonKey] = useState(scopeSalons[0]?.key || null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState("");
+  const localEditAt = React.useRef(0);
+
+  const reload = async () => {
+    // не перетирати щойно збережені локальні правки відлунням realtime
+    if (Date.now() - localEditAt.current < 2500) return;
+    const list = await listMetrics(ym).catch(() => []);
+    const m = new Map();
+    for (const r of list) m.set(rowKey(r.salon_key, r.work_date), r);
+    setRowsMap(m);
+    setLoading(false);
+  };
+  useEffect(() => { setLoading(true); localEditAt.current = 0; reload(); /* eslint-disable-next-line */ }, [ym]);
+  useEffect(() => subscribeMetrics(() => reload()), [ym]); // eslint-disable-line
+
+  const patchLocal = (sk, d, patch) => {
+    localEditAt.current = Date.now();
+    setRowsMap((prev) => {
+      const next = new Map(prev);
+      const k = rowKey(sk, d);
+      const cur = next.get(k) || { salon_key: sk, work_date: d, planner: {}, manual: {} };
+      const manual = patch === null ? {} : { ...(cur.manual || {}) };
+      if (patch) {
+        for (const [kk, vv] of Object.entries(patch)) {
+          if (vv === null) delete manual[kk]; else manual[kk] = Number(vv) || 0;
+        }
+      }
+      next.set(k, { ...cur, manual });
+      return next;
+    });
+  };
+
+  const runSync = async () => {
+    setSyncing(true); setSyncNote("");
+    try {
+      const r = await syncFromPlanner([ym]);
+      setSyncNote(`оновлено рядків: ${r?.rows ?? 0}`);
+      localEditAt.current = 0;
+      await reload();
+    } catch (e) {
+      setSyncNote(`помилка: ${e.message || e}`);
+    } finally { setSyncing(false); }
+  };
+
+  const dim = daysInYm(ym);
+  const isCurYm = ym === nowYm();
+  const daysPassed = isCurYm ? Math.min(new Date().getDate(), dim) : dim;
+  const rowsArr = Array.from(rowsMap.values());
+  const scopeKeys = scopeSalons.map((s) => s.key);
+  const activeSalon = salonKey && scopeKeys.includes(salonKey) ? salonKey : scopeKeys[0];
+
+  return (
+    <div className="tm-mod">
+      <div className="tm-head">
+        <h3 className="ov-h">Показники території</h3>
+        <div className="tm-head-actions">
+          <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
+            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          </select>
+          {editable && (
+            <button type="button" className="planner-btn" onClick={runSync} disabled={syncing}>
+              <RefreshCw size={13} /> {syncing ? "Оновлення…" : "Оновити з планера"}
+            </button>
+          )}
+        </div>
+      </div>
+      {syncNote && <p className="tm-sync-note">{syncNote}</p>}
+
+      {loading ? <div className="loading">Завантаження…</div> : (
+        <>
+          <TerritorySummaryStrip salonKeys={scopeKeys} rows={rowsArr} daysPassed={daysPassed} dim={dim} />
+
+          {scopeSalons.length > 1 && (
+            <TerritoryAllSalons salons={scopeSalons} rows={rowsArr} activeKey={activeSalon} onPick={setSalonKey} />
+          )}
+
+          {scopeSalons.length > 1 && (
+            <div className="tm-salon-chips">
+              {scopeSalons.map((s) => (
+                <button key={s.key} className={`chip ${s.key === activeSalon ? "active" : ""}`} onClick={() => setSalonKey(s.key)}>
+                  {s.city}, {shortAddr(s.addr)}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {activeSalon && (
+            <>
+              <p className="tm-grid-cap">
+                {salonLabel(salonByKey(activeSalon))} · {monthLabel(ym)}
+                {editable && <span className="muted"> · клітинку можна відкоригувати вручну, ↩ повертає значення з планера</span>}
+              </p>
+              <TerritoryDayTable
+                salonKey={activeSalon} ym={ym} rowsMap={rowsMap}
+                editable={editable} by={cab.key} onPatched={patchLocal}
+              />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Облік готівки ---------- */
+const uah = (n) => Math.round(Number(n) || 0).toLocaleString("uk-UA") + " ₴";
+const cashDayLabel = (iso) => { const [y, m, d] = iso.split("-").map(Number); return `${d} ${MON_SHORT[m - 1]}`; };
+
+/* СМ: внести наторговане за день + видача Віктору */
+function CashModule({ cab, salonKey: overrideKey }) {
+  const salonKey = overrideKey || cab.key;
+  const canEdit = cab.type === "sm" || cab.type === "manager";
+  const [days, setDays] = useState(null);
+  const [handovers, setHandovers] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const reload = async () => {
+    const [d, h] = await Promise.all([
+      listCashDays({ salonKey, from: "2000-01-01" }).catch(() => []),
+      listHandovers({ salonKey }).catch(() => []),
+    ]);
+    setDays(d); setHandovers(h);
+  };
+  useEffect(() => { reload(); return subscribeCash(reload); /* eslint-disable-next-line */ }, [salonKey]);
+  if (days === null) return <div className="loading">Завантаження…</div>;
+
+  const open = days.filter((r) => !r.collected);
+  const outstanding = open.reduce((a, r) => a + Number(r.amount), 0);
+  const todayRow = days.find((r) => r.work_date === todayISO());
+  const recent = days.slice(0, 20);
+
+  const saveToday = async (val) => {
+    try { await setCashDay(salonKey, todayISO(), val, cab.key); }
+    catch (e) { alert(e.message || e); }
+  };
+  const handover = async () => {
+    if (!open.length) return;
+    if (!confirm(`Підтвердити видачу готівки Віктору: ${uah(outstanding)}?`)) return;
+    setBusy(true);
+    try {
+      const s = await cashHandover(salonKey, cab.key, "");
+      pushToast({ title: "Готівку видано", body: uah(s) });
+      await reload();
+    } catch (e) { alert(e.message || e); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="cash-mod">
+      <h3 className="ov-h">Готівка</h3>
+      <p className="ov-sub">{salonLabel(salonByKey(salonKey))}</p>
+
+      <div className="cash-cards">
+        <div className="cash-card big">
+          <span className="cash-lab">До видачі Віктору</span>
+          <b>{uah(outstanding)}</b>
+          <span className="cash-sub">{open.length ? `${open.length} дн. не забрано` : "усе забрано"}</span>
+          {canEdit && open.length > 0 && (
+            <button className="btn-primary" onClick={handover} disabled={busy}>
+              <Banknote size={15} /> Видача готівки Віктору
+            </button>
+          )}
+        </div>
+        {canEdit && (
+          <div className="cash-card">
+            <span className="cash-lab">Наторговано сьогодні ({cashDayLabel(todayISO())})</span>
+            <NumInput
+              className="cash-in" allowEmpty placeholder="0"
+              value={todayRow ? Number(todayRow.amount) : ""}
+              onChange={saveToday}
+            />
+            <span className="cash-sub">готівка, яку ви здасте Віктору</span>
+          </div>
+        )}
+      </div>
+
+      <div className="cash-hist">
+        <h4>Останні дні</h4>
+        {recent.length === 0 ? <p className="hint">Записів ще немає.</p> : (
+          <table className="cash-tbl">
+            <tbody>
+              {recent.map((r) => (
+                <tr key={r.work_date} className={r.collected ? "done" : ""}>
+                  <td>{cashDayLabel(r.work_date)}</td>
+                  <td className="num">{uah(r.amount)}</td>
+                  <td className="st">{r.collected ? `забрано ${fmtDate(r.collected_at).split(",")[0]}` : "до видачі"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {handovers.length > 0 && (
+        <div className="cash-hist">
+          <h4>Видачі Віктору</h4>
+          <table className="cash-tbl">
+            <tbody>
+              {handovers.slice(0, 12).map((h) => (
+                <tr key={h.id}>
+                  <td>{fmtDate(h.happened_at)}</td>
+                  <td className="num">{uah(h.amount)}</td>
+                  <td className="st">{h.covers_from ? `за ${cashDayLabel(h.covers_from)}–${cashDayLabel(h.covers_to)}` : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* к-ть повних днів від дати (ISO) до сьогодні */
+const daysSince = (iso) => {
+  if (!iso) return 0;
+  const a = new Date(iso + "T00:00:00");
+  const b = new Date(todayISO() + "T00:00:00");
+  return Math.max(0, Math.round((b - a) / 86400000));
+};
+/* рівень терміновості плитки готівки */
+const cashLevel = (m) => {
+  if (!m || m.total <= 0) return 0;
+  const age = daysSince(m.oldest);
+  if (age >= 3) return 3;              // лежить 3+ дні — критично
+  if (age >= 2 || m.total >= 20000) return 2;
+  return 1;
+};
+const cashLevelWord = (m) => {
+  const age = daysSince(m.oldest);
+  if (age <= 0) return "сьогодні";
+  return `${age} ${age === 1 ? "день" : age < 5 ? "дні" : "днів"}${m.days > 1 ? ` · ${m.days} внесень` : ""}`;
+};
+
+/* Віктор — головний екран: теплова сітка готівки до видачі */
+function ManagerCashOverview() {
+  const [out, setOut] = useState(null);
+  const [lastHand, setLastHand] = useState(null);
+  useEffect(() => {
+    const load = () => {
+      outstandingBySalon().then(setOut).catch(() => setOut({}));
+      listHandovers({ limit: 1 }).then((h) => setLastHand(h[0] || null)).catch(() => {});
+    };
+    load();
+    return subscribeCash(load);
+  }, []);
+  if (out === null) return <div className="loading">Завантаження…</div>;
+
+  const tmTitle = { ivan: "Львів", andriy: "Область" };
+  const grand = Object.values(out).reduce((a, m) => a + m.total, 0);
+  const subtotals = { ivan: 0, andriy: 0 };
+  SALONS.forEach((s) => { const t = salonTmOn(s.key); if (subtotals[t] != null) subtotals[t] += out[s.key]?.total || 0; });
+  const waiting = SALONS.filter((s) => (out[s.key]?.total || 0) > 0).length;
+
+  const tiles = SALONS
+    .map((s) => ({ s, m: out[s.key], lvl: cashLevel(out[s.key]) }))
+    .sort((a, b) => (b.lvl - a.lvl) || ((b.m?.total || 0) - (a.m?.total || 0)));
+
+  return (
+    <div className="cash-bento">
+      <div className={`cash-hero ${grand === 0 ? "calm" : ""}`}>
+        <div>
+          <div className="cash-hero-lab">Готівка до видачі</div>
+          {grand === 0 ? (
+            <>
+              <div className="cash-hero-v calm">Усе зібрано</div>
+              <p className="cash-hero-note">
+                {lastHand
+                  ? `останнє надходження — ${cabName(lastHand.salon_key).replace("Салон · ", "") || lastHand.salon_key}, ${fmtDate(lastHand.happened_at)}`
+                  : "жоден магазин не має незданої готівки"}
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="cash-hero-v">{uah(grand)}</div>
+              <p className="cash-hero-note">{waiting} {waiting === 1 ? "магазин чекає" : waiting < 5 ? "магазини чекають" : "магазинів чекають"} · оновлено щойно</p>
+            </>
+          )}
+        </div>
+        <div className="cash-hero-terrs">
+          {["ivan", "andriy"].map((t) => (
+            <div key={t}>
+              <div className="n">{uah(subtotals[t])}</div>
+              <div className="l">{tmTitle[t]}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {tiles.map(({ s, m, lvl }) => (
+        <div className={`cash-tile lvl${lvl}`} key={s.key} title={salonLabel(s)}>
+          <div className="cash-tile-nm">{s.city}, {shortAddr(s.addr)}</div>
+          <div>
+            <div className="cash-tile-v">{uah(m?.total || 0)}</div>
+            <div className="cash-tile-d">{lvl === 0 ? "зібрано" : cashLevelWord(m)}</div>
+          </div>
+        </div>
+      ))}
+
+      <p className="cash-bento-note">
+        Магазини вносять готівку в кінці дня. Червоне «горить» — лежить 3+ дні. Коли забрали — СМ тисне «Видача готівки».
+      </p>
+    </div>
+  );
+}
+
+/* Віктор — вкладка «Готівка»: аналітика по кожному магазину */
+function ManagerCashTab() {
+  const [salonKey, setSalonKey] = useState(SALONS[0].key);
+  return (
+    <div className="embedded">
+      <div className="tm-salon-chips" style={{ marginBottom: 16 }}>
+        {SALONS.map((s) => (
+          <button key={s.key} className={`chip ${s.key === salonKey ? "active" : ""}`} onClick={() => setSalonKey(s.key)}>
+            {s.city}, {shortAddr(s.addr)}
+          </button>
+        ))}
+      </div>
+      <CashModule cab={{ key: "manager", type: "manager" }} salonKey={salonKey} />
+    </div>
+  );
+}
+
+/* Персональне налаштування лівої навігації (порядок + приховані пункти).
+   Зберігається локально на пристрої, окремо для кожного кабінету. */
+function useNavPrefs(cabKey, itemKeys) {
+  const storeKey = `dnipro-m-nav:${cabKey}`;
+  const [prefs, setPrefs] = useState(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem(storeKey) || "{}");
+      return { order: Array.isArray(p.order) ? p.order : [], hidden: Array.isArray(p.hidden) ? p.hidden : [] };
+    } catch { return { order: [], hidden: [] }; }
+  });
+  const save = (next) => {
+    setPrefs(next);
+    try { localStorage.setItem(storeKey, JSON.stringify(next)); } catch { /* ignore */ }
+  };
+
+  // впорядкувати за збереженим порядком; невідомі (нові) ключі — у їхній первісній позиції
+  const ordered = (() => {
+    const known = prefs.order.filter((k) => itemKeys.includes(k));
+    const rest = itemKeys.filter((k) => !known.includes(k));
+    if (!known.length) return itemKeys.slice();
+    const out = [];
+    // вставляємо rest приблизно там, де вони стоять у оригіналі
+    itemKeys.forEach((k, i) => {
+      if (rest.includes(k)) out.push({ k, i });
+    });
+    const merged = known.slice();
+    out.forEach(({ k, i }) => {
+      const at = Math.min(i, merged.length);
+      merged.splice(at, 0, k);
+    });
+    return merged.filter((k, i) => merged.indexOf(k) === i);
+  })();
+
+  const move = (key, dir) => {
+    const arr = ordered.slice();
+    const i = arr.indexOf(key);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    save({ ...prefs, order: arr });
+  };
+  const moveTo = (key, targetKey) => {
+    if (key === targetKey) return;
+    const arr = ordered.filter((k) => k !== key);
+    const at = arr.indexOf(targetKey);
+    if (at < 0) return;
+    arr.splice(at, 0, key);
+    save({ ...prefs, order: arr });
+  };
+  const toggleHidden = (key) => {
+    const hidden = prefs.hidden.includes(key)
+      ? prefs.hidden.filter((k) => k !== key)
+      : [...prefs.hidden, key];
+    if (hidden.length >= itemKeys.length) return; // не ховати геть усе
+    save({ ...prefs, hidden });
+  };
+  const reset = () => save({ order: [], hidden: [] });
+
+  return { ordered, hidden: prefs.hidden, customised: !!(prefs.order.length || prefs.hidden.length), move, moveTo, toggleHidden, reset };
+}
+
 function CabinetShell({ title, onExit, onLogout, modules, cabKey }) {
   const items = modules.filter(Boolean);
-  const [active, setActive] = useState(items[0].key);
-  const mod = items.find((m) => m.key === active) || items[0];
+  const byKey = React.useMemo(() => Object.fromEntries(items.map((m) => [m.key, m])), [items]);
+  const nav = useNavPrefs(cabKey, items.map((m) => m.key));
+  const [editNav, setEditNav] = useState(false);
+  const [dragKey, setDragKey] = useState(null);
+
+  const orderedItems = nav.ordered.map((k) => byKey[k]).filter(Boolean);
+  const visibleItems = orderedItems.filter((m) => !nav.hidden.includes(m.key));
+  const shownItems = editNav ? orderedItems : visibleItems;
+
+  const [activeReq, setActive] = useState(items[0].key);
+  const [navOpen, setNavOpen] = useState(false); // мобільна шухляда
+  // якщо обраний пункт приховано — показуємо перший видимий (без ефекту, прямо при рендері)
+  const active = (!editNav && !visibleItems.some((m) => m.key === activeReq))
+    ? (visibleItems[0]?.key ?? activeReq)
+    : activeReq;
+  const mod = byKey[active] || visibleItems[0] || items[0];
+  const pick = (key) => { setActive(key); setNavOpen(false); };
+
   return (
     <div className="view cab-shell">
-      <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} />
+      <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
+      <div className={`cab-scrim ${navOpen ? "on" : ""}`} onClick={() => setNavOpen(false)} />
       <div className="cab-layout">
-        <nav className="cab-side">
-          {items.map((m) => (
-            <React.Fragment key={m.key}>
-              {m.divider && <span className="cab-side-sep" />}
-              <button className={`cab-side-item ${m.key === active ? "active" : ""}`} onClick={() => setActive(m.key)}>
-                {m.icon}
-                <span className="cab-side-label">{m.label}</span>
-                {m.badge != null && <span className={`badge ${m.badgeTone || "badge-warn"}`}>{m.badge}</span>}
-              </button>
-            </React.Fragment>
-          ))}
+        <nav className={`cab-side ${editNav ? "editing" : ""} ${navOpen ? "open" : ""}`}>
+          {shownItems.map((m) => {
+            const isHidden = nav.hidden.includes(m.key);
+            return (
+              <React.Fragment key={m.key}>
+                {m.divider && !editNav && <span className="cab-side-sep" />}
+                <div
+                  className={`cab-side-row ${dragKey === m.key ? "dragging" : ""}`}
+                  draggable={editNav}
+                  onDragStart={editNav ? () => setDragKey(m.key) : undefined}
+                  onDragOver={editNav ? (e) => e.preventDefault() : undefined}
+                  onDrop={editNav ? () => { if (dragKey) nav.moveTo(dragKey, m.key); setDragKey(null); } : undefined}
+                  onDragEnd={() => setDragKey(null)}
+                >
+                  {editNav && <span className="cab-side-grip"><GripVertical size={15} /></span>}
+                  <button
+                    className={`cab-side-item ${m.key === active && !editNav ? "active" : ""} ${editNav && isHidden ? "is-hidden" : ""}`}
+                    onClick={() => (editNav ? nav.toggleHidden(m.key) : pick(m.key))}
+                    title={editNav ? (isHidden ? "Показати" : "Приховати") : undefined}
+                  >
+                    {m.icon}
+                    <span className="cab-side-label">{m.label}</span>
+                    {!editNav && m.badge != null && <span className={`badge ${m.badgeTone || "badge-warn"}`}>{m.badge}</span>}
+                    {editNav && <span className="cab-side-eye">{isHidden ? <EyeOff size={15} /> : <Eye size={15} />}</span>}
+                  </button>
+                </div>
+              </React.Fragment>
+            );
+          })}
+          <span className="cab-side-sep" />
+          <button className="cab-side-cfg" onClick={() => setEditNav((v) => !v)}>
+            {editNav ? <><Check size={15} /> Готово</> : <><SlidersHorizontal size={15} /> Налаштувати меню</>}
+          </button>
+          {editNav && nav.customised && (
+            <button className="cab-side-cfg subtle" onClick={nav.reset}>
+              <RefreshCw size={14} /> Скинути до типового
+            </button>
+          )}
+          {editNav && <p className="cab-side-tip">Перетягніть, щоб змінити порядок. Натисніть пункт, щоб приховати або повернути.</p>}
         </nav>
         <div className="cab-content">{mod.render()}</div>
       </div>
+    </div>
+  );
+}
+
+const WHATIF_STEPS = [70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130];
+
+function TmWhatIf({ base }) {
+  // base: { plan, ez, curve: [{pct,total}], current }
+  const clampPct = (p) => Math.max(WHATIF_STEPS[0], Math.min(WHATIF_STEPS[WHATIF_STEPS.length - 1], p));
+  const [pct, setPct] = useState(() => clampPct(Math.round(base.current || 100)));
+  const curve = base.curve;
+  // лінійна інтерполяція між вузлами кривої
+  const at = (p) => {
+    const lo = [...curve].reverse().find((c) => c.pct <= p) || curve[0];
+    const hi = curve.find((c) => c.pct >= p) || curve[curve.length - 1];
+    if (lo.pct === hi.pct) return lo.total;
+    const k = (p - lo.pct) / (hi.pct - lo.pct);
+    return lo.total + k * (hi.total - lo.total);
+  };
+  const total = at(pct);
+  const diff = total - at(clampPct(base.current || 100));
+  const flat = curve.every((c) => c.total === curve[0].total);
+  return (
+    <div className="chart-wrap ov-whatif">
+      <div className="ov-card-h">Калькулятор «що якщо»</div>
+      <p className="ov-card-sub">Якщо територія виконає план на <b>{pct}%</b> — очікувана ЗП за місяць:</p>
+      <div className="wi-value">{fmt(total)}</div>
+      {flat ? (
+        <div className="wi-diff flat">ЗП тримається на мінімумі грейду — заповніть блоки 2–3 у розрахунку для точного прогнозу</div>
+      ) : Math.abs(diff) >= 500 && (
+        <div className={`wi-diff ${diff > 0 ? "up" : "down"}`}>
+          {diff > 0 ? "▲" : "▼"} {fmt(Math.abs(diff))} до поточного темпу ({Math.round(base.current)}%)
+        </div>
+      )}
+      <input
+        type="range" className="wi-slider"
+        min={WHATIF_STEPS[0]} max={WHATIF_STEPS[WHATIF_STEPS.length - 1]} step={1}
+        value={pct} onChange={(e) => setPct(+e.target.value)}
+        aria-label="Виконання плану, %"
+      />
+      <div className="wi-scale"><span>70%</span><span>100%</span><span>130%</span></div>
+      <div className="wi-chart">
+        <ResponsiveContainer width="100%" height={120}>
+          <LineChart data={curve} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid strokeDasharray="2 5" stroke="#D9D2BE" vertical={false} />
+            <XAxis dataKey="pct" tick={{ fontSize: 10, fill: "#8A8069" }} tickFormatter={(v) => `${v}%`}
+              axisLine={{ stroke: "#D9D2BE" }} tickLine={false} interval={2} />
+            <YAxis hide domain={["dataMin - 2000", "dataMax + 2000"]} />
+            <Tooltip formatter={(v) => fmt(v)} labelFormatter={(v) => `План ${v}%`}
+              contentStyle={{ borderRadius: 8, border: "1px solid #E1D9C1", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }} />
+            <ReferenceLine x={curve.reduce((a, c) => (Math.abs(c.pct - pct) < Math.abs(a - pct) ? c.pct : a), curve[0].pct)}
+              stroke="#BE8A2E" strokeDasharray="3 3" />
+            <Line type="monotone" dataKey="total" stroke="#BE8A2E" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="chart-note">Змінюється лише Факт продажів (п. 1.1). Квартальні бонуси, аванс і коригування керівника не враховані.</p>
     </div>
   );
 }
@@ -4309,21 +5387,93 @@ function TmOverview({ tmKey }) {
       const invM = invoices.filter((inv) => invMonth(inv) === ym && inv.status !== "cancelled");
       const invIssued = invM.reduce((a, i) => a + Number(i.amount || 0), 0);
       const invPaid = invM.filter((i) => i.status !== "issued").reduce((a, i) => a + Number(i.amount || 0), 0);
-      if (active) setS({ status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct, submitted, salonTotal: salons.length, dl: deadlineInfo(ym), invIssued, invPaid, invCount: invM.length, salonPayroll });
+
+      // --- історія за 6 місяців (для дельт, спарклайнів, графіка по блоках) ---
+      let hist = [];
+      try {
+        let ms = (await listMonths(tmKey)).sort();
+        if (!ms.includes(ym)) ms.push(ym);
+        ms = ms.slice(-6);
+        const datas = await Promise.all(ms.map((m) => loadData(tmKey, m)));
+        const grades = await Promise.all(ms.map((m) => loadGrade(tmKey, ymToQuarter(m))));
+        const calcs = await calcTmBatch(ms.map((m, i) => ({ data: datas[i], grade: grades[i], tmKey, ym: m })));
+        hist = ms.map((m, i) => {
+          const c = calcs[i];
+          const mi = Number(m.split("-")[1]) - 1;
+          return {
+            ym: m, m: MON_SHORT[mi],
+            total: Math.round(c.floored),
+            b1: Math.round(c.b1.subtotal),
+            b2: Math.round(c.b2.subtotal + c.ez.bonus),
+            b3: Math.round(c.b3.subtotal),
+            pct: c.b1.d.sales.pct || 0,
+          };
+        });
+      } catch { hist = []; }
+
+      // --- калькулятор «що якщо» ---
+      let whatif = null;
+      const plan = Number(d.block1?.salesPlan || 0);
+      const ez = Number(d.block1?.salesEz || 0);
+      if (plan > 0) {
+        try {
+          const items = WHATIF_STEPS.map((p) => ({
+            data: { ...d, block1: { ...d.block1, salesFact: Math.round((plan * p) / 100 + ez) } },
+            grade: g, tmKey, ym,
+          }));
+          const calcs = await calcTmBatch(items);
+          whatif = {
+            plan, ez, current: calc.b1.d.sales.pct || 0,
+            curve: WHATIF_STEPS.map((p, i) => ({ pct: p, total: Math.round(calcs[i].floored) })),
+          };
+        } catch { whatif = null; }
+      }
+
+      const curFinal = d.status !== "draft";        // місяць подано/погоджено → порівняння коректне
+      const hasPct = plan > 0 || curFinal;
+      if (active) setS({
+        status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct || 0, curFinal, hasPct, ym,
+        submitted, salonTotal: salons.length, dl: deadlineInfo(ym),
+        invIssued, invPaid, invCount: invM.length, salonPayroll, hist, whatif,
+      });
     })();
     return () => { active = false; };
   }, [tmKey]);
   if (!s) return <div className="loading">Завантаження…</div>;
   const st = { draft: "чернетка", submitted: "на розгляді", corrected: "потребує коректив", approved: "погоджено" }[s.status] || "—";
   const nagged = (s.status === "draft" || s.status === "corrected") && !s.dl.future;
+  const notSubmitted = s.salonTotal - s.submitted;
+
+  // для трендів ігноруємо поточний місяць, поки він чернетка (неповний)
+  const vizHist = s.curFinal ? s.hist : s.hist.filter((h) => h.ym !== s.ym);
+  const prev = s.curFinal && vizHist.length >= 2 ? vizHist[vizHist.length - 2] : null;
+  const dZP = prev ? s.total - prev.total : null;
+  const dPct = prev ? s.pct - prev.pct : null;
+  const chartData = vizHist.length >= 2 ? vizHist : null;
+  const sparkZP = vizHist.map((h) => h.total);
+  const sparkPct = vizHist.map((h) => h.pct);
+
   return (
     <div className="ov">
       <h3 className="ov-h">Огляд</h3>
       <p className="ov-sub">{monthLabel(nowYm())}</p>
       <div className="ov-tiles">
-        <div className="ov-tile"><b>{fmt(s.total)}</b><span>моя ЗП · {st}</span></div>
-        <div className="ov-tile"><b>{s.submitted} / {s.salonTotal}</b><span>салони подали ЗП</span></div>
-        <div className="ov-tile"><b>{s.pct.toFixed(0)}%</b><span>план по ТО</span></div>
+        <div className="ov-tile ov-tile-kpi">
+          <b>{fmt(s.total)}</b>
+          <span>моя ЗП · {st}</span>
+          {s.curFinal ? <Delta value={dZP} suffix="до місяця" /> : <span className="kpi-delta flat">чернетка · дельта після подачі</span>}
+          <Spark data={sparkZP} />
+        </div>
+        <div className="ov-tile ov-tile-kpi">
+          <b>{s.hasPct ? `${s.pct.toFixed(0)}%` : "—"}</b>
+          <span>план по ТО{s.hasPct && !s.curFinal ? " · чернетка" : ""}</span>
+          {s.curFinal ? <Delta value={dPct} unit=" п.п." suffix="до місяця" /> : <span className="kpi-delta flat">за поточний місяць</span>}
+          <Spark data={sparkPct} />
+        </div>
+        <div className={`ov-tile ${notSubmitted > 0 ? "ov-tile-attn" : ""}`}>
+          <b>{s.submitted} / {s.salonTotal}</b>
+          <span>{notSubmitted > 0 ? `салони подали ЗП · ${notSubmitted} чекаємо` : "усі салони подали ЗП"}</span>
+        </div>
         <div className="ov-tile"><b>{fmt(s.salonPayroll)}</b><span>ФОП салонів за місяць</span></div>
         <div className="ov-tile"><b>{invMoney(s.invIssued)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
         <div className="ov-tile"><b>{invMoney(s.invPaid)}</b><span>з них оплачено+</span></div>
@@ -4334,6 +5484,43 @@ function TmOverview({ tmKey }) {
           {s.dl.overdue ? `Термін подачі ЗП минув (був до ${s.dl.dueLabel})` : `Подайте ЗП за ${monthLabel(nowYm())} до ${s.dl.dueLabel}`}
         </div>
       )}
+
+      <div className="ov-charts">
+        <div className="chart-wrap">
+          <div className="ov-card-h">Моя ЗП по блоках · {chartData ? `${chartData.length} міс` : "історія накопичується"}</div>
+          {chartData ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={chartData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="g-b1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#6E8DAA" stopOpacity="0.5" /><stop offset="1" stopColor="#6E8DAA" stopOpacity="0.05" /></linearGradient>
+                  <linearGradient id="g-b2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#5AA6A0" stopOpacity="0.5" /><stop offset="1" stopColor="#5AA6A0" stopOpacity="0.05" /></linearGradient>
+                  <linearGradient id="g-b3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#DCA94A" stopOpacity="0.55" /><stop offset="1" stopColor="#DCA94A" stopOpacity="0.05" /></linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="2 5" stroke="#D9D2BE" vertical={false} />
+                <XAxis dataKey="m" tick={{ fontSize: 11, fill: "#8A8069" }} tickMargin={8} axisLine={{ stroke: "#D9D2BE" }} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: "#8A8069" }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} width={40} />
+                <Tooltip formatter={(v, n) => [fmt(v), n]}
+                  contentStyle={{ borderRadius: 10, border: "1px solid #E1D9C1", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }} />
+                <Legend wrapperStyle={{ fontSize: 12, paddingTop: 6 }} iconType="circle" />
+                <Area type="monotone" dataKey="b3" name="Блок 3 · управління" stackId="1" stroke="#DCA94A" fill="url(#g-b3)" strokeWidth={2} />
+                <Area type="monotone" dataKey="b2" name="Блок 2 · економіка" stackId="1" stroke="#5AA6A0" fill="url(#g-b2)" strokeWidth={2} />
+                <Area type="monotone" dataKey="b1" name="Блок 1 · продажі" stackId="1" stroke="#6E8DAA" fill="url(#g-b1)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="chart-note">Графік зʼявиться, коли буде щонайменше 2 місяці розрахунків.</p>
+          )}
+        </div>
+
+        {s.whatif
+          ? <TmWhatIf base={s.whatif} />
+          : (
+            <div className="chart-wrap ov-whatif">
+              <div className="ov-card-h">Калькулятор «що якщо»</div>
+              <p className="chart-note">Внесіть <b>План продажів</b> у розрахунку ЗП (п. 1.1) — і тут зʼявиться прогноз: скільки буде ЗП за різного виконання плану.</p>
+            </div>
+          )}
+      </div>
     </div>
   );
 }
@@ -4385,7 +5572,9 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
     { key: "salons", label: "ЗП салонів", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
     { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <ModuleStub name="Показники території" /> },
+    { key: "planner", label: "Планер", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={tmKey} /> },
+    { key: "regionsheet", label: "Офіційні виплати", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
+    { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "team", label: "Команда", icon: <Users size={16} />, divider: true, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "archive", label: "Архів", icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
@@ -4397,62 +5586,58 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
 }
 
 function ManagerCabinet({ onExit, onLogout }) {
-  const [tab, setTab] = useState("byTm");
-  return (
-    <div className="view">
-      <TopBar title={MANAGER.name} onBack={onExit} onLogout={onLogout} cabKey="manager" />
-      <div className="cab-nav">
-        <button className={tab === "byTm" ? "active" : ""} onClick={() => setTab("byTm")}><Users size={14} /> По ТМ</button>
-        <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
-        <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}><CheckSquare size={14} /> Задачі</button>
-        <button className={tab === "inv" ? "active" : ""} onClick={() => setTab("inv")}><CreditCard size={14} /> Рахунки</button>
-        <button className={tab === "team" ? "active" : ""} onClick={() => setTab("team")}><Users size={14} /> Команда</button>
-        <button className={tab === "shifts" ? "active" : ""} onClick={() => setTab("shifts")}><Calendar size={14} /> Графік</button>
-      </div>
-      {tab === "byTm" && <ManagerView embedded />}
-      {tab === "consol" && <ConsolidationPanel role="manager" />}
-      {tab === "tasks" && <TasksModule cab={{ key: "manager", type: "manager" }} />}
-      {tab === "inv" && <InvoicesModule cab={{ key: "manager", type: "manager" }} />}
-      {tab === "shifts" && <ShiftScheduleModule cab={{ key: "manager", type: "manager" }} />}
-      {tab === "team" && (
-        <>
-          <EmployeesModule cab={{ key: "manager", type: "manager" }} />
-          <EmployeesModule cab={{ key: "manager", type: "manager" }} archive />
-        </>
-      )}
-    </div>
-  );
+  const cab = { key: "manager", type: "manager" };
+  const modules = [
+    { key: "home", label: "Головна", icon: <LayoutGrid size={16} />, render: () => <ManagerCashOverview /> },
+    { key: "byTm", label: "По ТМ", icon: <Users size={16} />, render: () => <ManagerView embedded /> },
+    { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="manager" /> },
+    { key: "cash", label: "Готівка", icon: <Banknote size={16} />, render: () => <ManagerCashTab /> },
+    { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, divider: true, render: () => <TasksModule cab={cab} /> },
+    { key: "inv", label: "Рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
+    { key: "team", label: "Команда", icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
+    { key: "shifts", label: "Графік", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={cab} /> },
+    { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={cab} /> },
+    { key: "sheet", label: "Офіційні виплати", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
+  ];
+  return <CabinetShell title={MANAGER.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="manager" />;
 }
 
 function AccountantCabinet({ onExit, onLogout }) {
-  const [tab, setTab] = useState("consol");
-  return (
-    <div className="view">
-      <TopBar title={ACCOUNTANT.name} onBack={onExit} onLogout={onLogout} cabKey="accountant" />
-      <div className="cab-nav">
-        <button className={tab === "consol" ? "active" : ""} onClick={() => setTab("consol")}><Wallet size={14} /> Зведення ЗП</button>
-        <button className={tab === "inv" ? "active" : ""} onClick={() => setTab("inv")}><CreditCard size={14} /> Безнальні рахунки</button>
-      </div>
-      {tab === "consol" && <ConsolidationPanel role="accountant" />}
-      {tab === "inv" && <InvoicesModule cab={{ key: "accountant", type: "accountant" }} />}
-    </div>
-  );
+  const cab = { key: "accountant", type: "accountant" };
+  const modules = [
+    { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="accountant" /> },
+    { key: "inv", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
+  ];
+  return <CabinetShell title={ACCOUNTANT.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="accountant" />;
 }
+
+const checkinFlag = (salonKey) => `dnipro-m-checkin:${salonKey}:${todayISO()}`;
+const markCheckedInLocal = (salonKey) => { try { localStorage.setItem(checkinFlag(salonKey), "1"); } catch { /* ignore */ } };
 
 function SmCabinet({ salonKey, onExit, onLogout }) {
   const salon = salonByKey(salonKey);
-  const [checkedIn, setCheckedIn] = useState(null); // null=loading, false=треба, true=ок
+  // локальна відмітка → миттєво пропускаємо гейт (без запиту), навіть якщо БД гальмує
+  const [checkedIn, setCheckedIn] = useState(() => {
+    try { return localStorage.getItem(checkinFlag(salonKey)) === "1" ? true : null; } catch { return null; }
+  });
 
   useEffect(() => {
+    if (checkedIn) return undefined;
     let a = true;
     getStoreDay(salonKey, todayISO())
-      .then((d) => { if (a) setCheckedIn(!!(d && (d.opened_at || d.closed))); })
+      .then((d) => {
+        if (!a) return;
+        const done = !!(d && (d.opened_at || d.closed));
+        if (done) markCheckedInLocal(salonKey);
+        setCheckedIn(done);
+      })
       .catch(() => { if (a) setCheckedIn(true); }); // якщо помилка — не блокуємо
     return () => { a = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [salonKey]);
 
   if (checkedIn === false) {
-    return <DailyCheckIn salon={salon} onDone={() => setCheckedIn(true)} />;
+    return <DailyCheckIn salon={salon} onDone={() => { markCheckedInLocal(salonKey); setCheckedIn(true); }} />;
   }
 
   const modules = [
@@ -4461,6 +5646,9 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "cash", label: "Готівка", icon: <Banknote size={16} />, render: () => <CashModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "kpi", label: "Показники магазину", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "planner", label: "Планер", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={salonTmOn(salonKey)} /> },
     { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
     { key: "reports", label: "Звіти", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
     { key: "standards", label: "Стандарти й навчання", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
@@ -4518,7 +5706,7 @@ const CSS = `
   --bg:#161E29; --bg-2:#1E2836;
   --surface:#FBF8F0; --surface-alt:#F1EBDA; --surface-sink:#EDE6D2;
   --ink:#221F1A; --ink-soft:#4A4437; --muted:#8A8069; --faint:#B8AF97;
-  --on-dark:#F7F4EA; --on-dark-2:#C4BCA6;
+  --on-dark:#F7F4EA; --on-dark-2:#C4BCA6; --on-dark-3:#8E856F;
   --gold:#BE8A2E; --gold-bright:#DCA94A; --gold-ink:#5C4113;
   --positive:#3C6B49; --positive-bright:#7FBF8F;
   --negative:#A03A2A; --negative-bright:#E0917F;
@@ -4578,6 +5766,10 @@ const CSS = `
 /* ---------- shell ---------- */
 .view{max-width:900px;margin:0 auto;padding:8px 22px 96px;animation:fadeIn .3s ease both;}
 .topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;padding:16px 22px 14px;margin:0 -22px 10px;background:var(--bg-2);border-bottom:1px solid var(--line-dark);box-shadow:0 10px 22px -14px rgba(0,0,0,.6);}
+.topbar-menu{display:none;background:rgba(247,244,234,.05);border:1px solid var(--line-dark);color:var(--on-dark-2);width:36px;height:36px;border-radius:999px;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
+.topbar-menu:hover{color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.cab-scrim{display:none;position:fixed;inset:0;z-index:65;background:rgba(6,10,14,.6);opacity:0;pointer-events:none;transition:opacity .2s var(--ease);}
+.cab-scrim.on{opacity:1;pointer-events:auto;}
 .topbar-back{background:rgba(247,244,234,.05);border:1px solid var(--line-dark);color:var(--on-dark-2);display:flex;align-items:center;gap:3px;cursor:pointer;font-size:12.5px;padding:7px 12px 7px 8px;border-radius:999px;transition:background .15s var(--ease),color .15s var(--ease);}
 .topbar-back:hover{background:rgba(247,244,234,.1);color:var(--on-dark);}
 .topbar-title{font-family:'Fraunces',serif;font-size:21px;color:var(--on-dark);font-weight:600;letter-spacing:-.01em;}
@@ -4701,6 +5893,18 @@ const CSS = `
 .modal-content img{max-width:90vw;max-height:88vh;border-radius:var(--radius-md);box-shadow:var(--sh-3);}
 .modal-close{position:absolute;top:-15px;right:-15px;background:var(--surface);border:none;border-radius:50%;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:var(--sh-2);}
 
+/* перегляд скріншота — по центру, ~55% екрана, з масштабуванням */
+.img-modal{position:relative;width:min(58vw,760px);height:min(72vh,720px);background:var(--surface);border-radius:var(--radius-md);box-shadow:var(--sh-3);overflow:hidden;}
+@media(max-width:640px){.img-modal{width:92vw;height:70vh;}}
+.img-modal-stage{width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;background:repeating-conic-gradient(rgba(120,110,90,.06) 0% 25%,transparent 0% 50%) 50%/22px 22px;}
+.img-modal-stage img{max-width:100%;max-height:100%;user-select:none;-webkit-user-drag:none;transition:transform .12s var(--ease);will-change:transform;}
+.img-modal-tools{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:4px;background:rgba(20,16,10,.82);backdrop-filter:blur(6px);border-radius:999px;padding:4px 6px;box-shadow:var(--sh-2);}
+.img-modal-tools button{width:28px;height:28px;border:none;border-radius:50%;background:rgba(247,244,234,.1);color:var(--on-dark);font-size:15px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.img-modal-tools button:hover:not(:disabled){background:var(--gold);color:#1a1206;}
+.img-modal-tools button:disabled{opacity:.35;cursor:default;}
+.img-modal-z{min-width:44px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--on-dark);}
+.img-modal .modal-close{top:10px;right:10px;z-index:3;width:30px;height:30px;}
+
 /* ---------- info / умови modal ---------- */
 .info-modal{position:relative;background:var(--surface);border-radius:var(--radius);max-width:520px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:var(--sh-3);overflow:hidden;animation:fadeIn .2s ease both;}
 .info-modal-head{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);background:var(--surface-alt);}
@@ -4814,8 +6018,10 @@ const CSS = `
 /* ---------- responsive ---------- */
 @media (max-width:640px){
   .view{padding:4px 13px 84px;}
-  .topbar{padding:12px 13px;margin:0 -13px 10px;}
-  .topbar-title{font-size:17px;}
+  .topbar{padding:12px 13px;margin:0 -13px 10px;gap:8px;}
+  .topbar-title{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+  .topbar-back{padding:7px 9px;font-size:0;}
+  .topbar-back svg{width:17px;height:17px;}
   .role-select-inner h1{font-size:27px;}
   .item-body{flex-direction:column;}
   .shot-slot{align-self:flex-start;}
@@ -4922,11 +6128,23 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
   .deck-office{flex-direction:row;flex-wrap:wrap;}
   .deck-office .deck-hd{width:100%;}
   .deck-orow{flex:1 1 180px;}
-  .cab-layout{grid-template-columns:1fr;gap:14px;}
-  .cab-side{position:static;flex-direction:row;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:6px;}
-  .cab-side-item{white-space:nowrap;flex-shrink:0;}
-  .cab-side-item .badge{margin-left:6px;}
-  .cab-side-sep{display:none;}
+  .cab-layout{grid-template-columns:1fr;gap:0;}
+  .topbar-menu{display:flex;}
+  .cab-scrim{display:block;}
+  /* ліва навігація як шухляда (вища специфічність — щоб перекрити базове правило нижче) */
+  .cab-shell .cab-side{
+    position:fixed;top:0;left:0;bottom:0;z-index:70;
+    width:min(82vw,300px);
+    flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    border-radius:0;border:none;border-right:1px solid var(--line-dark);
+    background:linear-gradient(180deg,var(--bg-2),var(--bg));
+    box-shadow:0 0 60px rgba(0,0,0,.5);
+    padding:14px 10px calc(14px + env(safe-area-inset-bottom));
+    transform:translateX(-100%);
+    transition:transform .24s var(--ease);
+  }
+  .cab-shell .cab-side.open{transform:translateX(0);}
+  .cab-side-item{white-space:normal;}
 }
 
 /* ---------- вхід ---------- */
@@ -5301,7 +6519,7 @@ td.sh.sh-plan{font-weight:400;}
 .embedded{animation:fadeIn .28s ease both;}
 
 /* ---------- оболонка кабінету з лівою панеллю ---------- */
-.cab-shell{max-width:1120px;}
+.cab-shell{max-width:1120px;animation:none;}  /* без transform — щоб мобільна шухляда позиціонувалась від краю екрана */
 .cab-layout{display:grid;grid-template-columns:232px 1fr;gap:22px;align-items:start;}
 .cab-side{position:sticky;top:78px;display:flex;flex-direction:column;gap:2px;padding:8px;background:rgba(247,244,234,.03);border:1px solid var(--line-dark);border-radius:var(--radius-md);}
 .cab-side-item{display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;border:none;border-radius:var(--radius-sm);background:none;color:var(--on-dark-2);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;text-align:left;transition:background .14s var(--ease),color .14s var(--ease);}
@@ -5314,6 +6532,206 @@ td.sh.sh-plan{font-weight:400;}
 .cab-content{min-width:0;}
 .cab-content .embedded{animation:none;}
 
+/* налаштування навігації */
+.cab-side-row{display:flex;align-items:center;gap:2px;border-radius:var(--radius-sm);}
+.cab-side-row .cab-side-item{flex:1;}
+.cab-side.editing .cab-side-row{background:rgba(247,244,234,.03);cursor:grab;}
+.cab-side.editing .cab-side-row.dragging{opacity:.4;}
+.cab-side-grip{display:flex;align-items:center;color:var(--on-dark-3);padding-left:4px;flex-shrink:0;}
+.cab-side-eye{margin-left:auto;display:flex;align-items:center;color:var(--on-dark-3);flex-shrink:0;}
+.cab-side-item.is-hidden{opacity:.4;}
+.cab-side-item.is-hidden .cab-side-label{text-decoration:line-through;}
+.cab-side.editing .cab-side-item:hover{background:rgba(247,244,234,.06);}
+.cab-side-cfg{display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:none;border-radius:var(--radius-sm);background:none;color:var(--on-dark-3);font-family:inherit;font-size:11.5px;font-weight:500;cursor:pointer;text-align:left;transition:color .14s var(--ease),background .14s var(--ease);}
+.cab-side-cfg:hover{background:rgba(247,244,234,.05);color:var(--on-dark);}
+.cab-side-cfg.subtle{font-size:11px;color:var(--on-dark-3);}
+.cab-side-tip{font-size:10.5px;line-height:1.45;color:var(--on-dark-3);padding:4px 12px 6px;margin:0;}
+@media (max-width:880px){
+  .cab-side.editing{flex-direction:column;}
+}
+
+/* ---------- вбудований планер ---------- */
+.planner-embed{display:flex;flex-direction:column;gap:10px;animation:fadeIn .28s ease both;}
+.planner-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.planner-hint{font-size:12px;color:var(--on-dark-2);line-height:1.4;}
+.planner-actions{display:flex;gap:8px;flex-shrink:0;}
+.planner-btn{display:inline-flex;align-items:center;gap:6px;background:rgba(247,244,234,.05);border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:7px 13px;font-size:12px;font-family:inherit;cursor:pointer;text-decoration:none;transition:border-color .15s var(--ease),color .15s var(--ease);}
+.planner-btn:hover{border-color:var(--gold);color:var(--gold-bright);}
+.planner-frame{width:100%;height:calc(100vh - 210px);min-height:520px;border:1px solid var(--line-dark);border-radius:var(--radius-md);background:#fff;box-shadow:var(--sh-2);}
+@media (max-width:720px){.planner-frame{height:calc(100vh - 260px);}}
+
+/* ---------- показники території ---------- */
+.tm-mod{animation:fadeIn .28s ease both;}
+.tm-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
+.tm-head .ov-h{margin:0;}
+.tm-head-actions{display:flex;gap:8px;align-items:center;}
+.tm-sync-note{font-size:11.5px;color:var(--on-dark-2);margin:0 0 12px;font-family:'IBM Plex Mono',monospace;}
+.tm-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0;}
+.tm-strip-tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 14px;box-shadow:var(--sh-1);}
+.tm-strip-lab{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.03em;text-transform:uppercase;}
+.tm-strip-tile b{display:block;font-family:'IBM Plex Mono',monospace;font-size:17px;font-weight:600;color:var(--ink);margin:3px 0 2px;font-variant-numeric:tabular-nums;}
+.tm-strip-sub{font-size:10.5px;color:var(--muted);}
+.tm-pct{font-style:normal;font-weight:600;}
+.tm-pct.good{color:var(--positive);}
+.tm-pct.warn{color:var(--gold);}
+.tm-pct.bad{color:var(--negative);}
+.tm-all{overflow-x:auto;margin-bottom:14px;border:1px solid var(--line);border-radius:var(--radius-md);}
+.tm-all-tbl{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--surface);}
+.tm-all-tbl th{text-align:right;padding:9px 12px;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);}
+.tm-all-tbl th:first-child{text-align:left;}
+.tm-all-tbl td{padding:9px 12px;border-bottom:1px solid var(--line);color:var(--ink);}
+.tm-all-tbl td.num{text-align:right;font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;}
+.tm-all-tbl td.muted{color:var(--muted);}
+.tm-all-tbl tr:last-child td{border-bottom:none;}
+.tm-all-tbl tbody tr{cursor:pointer;}
+.tm-all-tbl tbody tr:hover{background:var(--surface-alt);}
+.tm-all-tbl tbody tr.active{background:rgba(190,138,46,.1);}
+.tm-salon-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+.tm-salon-chips .chip{font-size:11.5px;padding:6px 11px;border-radius:999px;border:1px solid var(--line-dark);background:rgba(247,244,234,.04);color:var(--on-dark-2);cursor:pointer;}
+.tm-salon-chips .chip.active{background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);border-color:transparent;font-weight:600;}
+.tm-grid-cap{font-size:12px;color:var(--on-dark-2);margin:0 0 8px;}
+.tm-grid-wrap{overflow:auto;max-height:calc(100vh - 340px);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
+.tm-grid{width:100%;border-collapse:collapse;font-size:12.5px;}
+.tm-grid th{position:sticky;top:0;z-index:1;background:var(--surface-alt);color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:8px 8px;text-align:right;border-bottom:1px solid var(--line-strong);}
+.tm-grid th.tm-c-day{text-align:left;left:0;z-index:2;}
+.tm-grid td{padding:3px 6px;border-bottom:1px solid var(--line);text-align:right;color:var(--ink);font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;}
+.tm-grid td.tm-c-day{position:sticky;left:0;background:var(--surface);text-align:left;color:var(--muted);font-weight:600;}
+.tm-grid td.muted{color:var(--muted);}
+.tm-grid tr.tm-future td{opacity:.5;}
+.tm-in{width:78px;border:1px solid transparent;background:none;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink);text-align:right;padding:5px 6px;border-radius:6px;}
+.tm-in:hover{border-color:var(--line-strong);}
+.tm-in:focus{outline:none;border-color:var(--gold);background:#fff;}
+.tm-grid td.tm-edited{background:rgba(190,138,46,.12);}
+.tm-grid td.tm-edited .tm-in{color:var(--gold-ink);font-weight:600;}
+.tm-c-rst{width:26px;padding:0;}
+.tm-rst{border:none;background:none;color:var(--muted);cursor:pointer;font-size:13px;padding:2px 4px;border-radius:4px;}
+.tm-rst:hover{color:var(--gold);background:rgba(190,138,46,.12);}
+.tm-grid tfoot td{position:sticky;bottom:0;background:var(--surface-alt);border-top:2px solid var(--line-strong);border-bottom:none;}
+.tm-grid tfoot tr.tm-tot td{font-weight:700;color:var(--ink);}
+.tm-grid tfoot tr.tm-plan td{color:var(--muted);font-weight:500;border-top:1px solid var(--line);}
+.tm-grid td.num{text-align:right;}
+
+/* ---------- технічна перерва ---------- */
+.maint-screen{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(1000px 500px at 50% 0%,rgba(190,138,46,.14),transparent 60%),var(--bg-deep,#14100a);}
+.maint-card{max-width:420px;width:100%;text-align:center;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:36px 28px 30px;box-shadow:var(--sh-3);}
+.maint-ic{display:inline-flex;align-items:center;justify-content:center;width:72px;height:72px;border-radius:50%;background:rgba(190,138,46,.12);color:var(--gold);margin-bottom:16px;animation:maint-tick 3s ease-in-out infinite;}
+@keyframes maint-tick{0%,100%{transform:rotate(-6deg);}50%{transform:rotate(6deg);}}
+.maint-card h1{font-family:'Fraunces',serif;font-size:22px;color:var(--ink);margin:0 0 8px;font-weight:600;}
+.maint-card p{color:var(--muted);font-size:13.5px;line-height:1.5;margin:0 0 20px;}
+.maint-card .btn-secondary{color:var(--ink-soft);border-color:var(--line-strong);background:var(--surface-alt);}
+.maint-card .btn-secondary:hover{color:var(--gold);border-color:var(--gold);}
+.maint-toggle{display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none;padding:12px 14px;border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--surface);}
+.maint-toggle.on{border-color:var(--negative);background:rgba(160,58,42,.08);}
+.maint-toggle input{position:absolute;opacity:0;pointer-events:none;}
+.maint-switch{flex-shrink:0;width:42px;height:24px;border-radius:999px;background:var(--line-strong);position:relative;transition:background .18s var(--ease);}
+.maint-switch::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:var(--sh-1);transition:transform .18s var(--ease);}
+.maint-toggle.on .maint-switch{background:var(--negative);}
+.maint-toggle.on .maint-switch::after{transform:translateX(18px);}
+.maint-label{font-size:13px;font-weight:600;color:var(--ink);}
+.maint-label em{font-style:normal;font-weight:500;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:11px;}
+
+/* ---------- звернення ---------- */
+.topbar-fb{position:relative;background:rgba(247,244,234,.05);border:1px solid var(--line-dark);color:var(--on-dark-2);width:36px;height:36px;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease);}
+.topbar-fb:hover{color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.fb-modal{position:relative;background:var(--surface);border-radius:var(--radius);max-width:440px;width:100%;box-shadow:var(--sh-3);overflow:hidden;animation:fadeIn .2s ease both;}
+.fb-modal-head{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--line);font-family:'Fraunces',serif;font-size:16px;color:var(--ink);font-weight:600;}
+.fb-modal-head .modal-close{position:static;width:28px;height:28px;top:auto;right:auto;}
+.fb-modal-body{padding:16px 18px 18px;display:flex;flex-direction:column;gap:12px;}
+.fb-kind{display:flex;gap:8px;}
+.fb-kind button{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);color:var(--muted);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;}
+.fb-kind button.active{border-color:var(--gold);background:rgba(190,138,46,.1);color:var(--gold);}
+.fb-ta{width:100%;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:10px 12px;font-family:inherit;font-size:13px;resize:vertical;background:#fff;color:var(--ink);}
+.fb-ta:focus{outline:none;border-color:var(--gold);}
+.fb-attach{display:inline-flex;align-items:center;gap:7px;align-self:flex-start;padding:7px 12px;border:1px dashed var(--line-strong);border-radius:var(--radius-sm);color:var(--muted);font-size:12px;cursor:pointer;}
+.fb-attach:hover{border-color:var(--gold);color:var(--gold);}
+.fb-shot{position:relative;align-self:flex-start;max-width:180px;}
+.fb-shot img{width:100%;border-radius:var(--radius-sm);border:1px solid var(--line);display:block;}
+.fb-shot button{position:absolute;top:-8px;right:-8px;width:22px;height:22px;border-radius:50%;background:var(--surface);border:1px solid var(--line-strong);color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:var(--sh-1);}
+.fb-hint{font-size:11px;color:var(--faint);margin:0;}
+.fb-done{padding:34px 18px;text-align:center;color:var(--positive);font-weight:600;font-size:14px;display:flex;flex-direction:column;align-items:center;gap:10px;}
+.fb-filter{display:flex;gap:6px;margin-bottom:12px;}
+.fb-filter button{padding:6px 12px;border:1px solid var(--line-strong);border-radius:999px;background:var(--surface);color:var(--muted);font-family:inherit;font-size:11.5px;cursor:pointer;}
+.fb-filter button.active{background:var(--ink);color:var(--surface);border-color:var(--ink);}
+.fb-list{display:flex;flex-direction:column;gap:10px;}
+.fb-item{border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 14px;background:var(--surface);}
+.fb-item.new{border-left:3px solid var(--gold);}
+.fb-item.done{opacity:.72;}
+.fb-item-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
+.fb-tag{font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:3px 8px;border-radius:6px;}
+.fb-tag.problem{background:rgba(160,58,42,.14);color:var(--negative);}
+.fb-tag.proposal{background:rgba(60,107,74,.14);color:var(--positive);}
+.fb-from{font-size:12px;font-weight:600;color:var(--ink);}
+.fb-time{margin-left:auto;font-size:11px;color:var(--faint);font-family:'IBM Plex Mono',monospace;}
+.fb-body{font-size:13px;color:var(--ink-soft);line-height:1.5;margin:0 0 8px;white-space:pre-wrap;}
+.fb-thumb{padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer;background:none;display:block;max-width:160px;margin-bottom:8px;}
+.fb-thumb img{width:100%;display:block;}
+.fb-actions{display:flex;align-items:center;gap:8px;}
+.fb-del{margin-left:auto;background:none;border:none;color:var(--faint);cursor:pointer;padding:4px;border-radius:6px;}
+.fb-del:hover{color:var(--negative);background:rgba(160,58,42,.1);}
+.fb-reply{background:var(--surface-alt);border-radius:var(--radius-sm);padding:8px 11px;font-size:12px;color:var(--ink-soft);margin-bottom:8px;line-height:1.45;}
+.fb-reply b{color:var(--ink);font-weight:600;}
+.fb-resolve{margin-top:10px;display:flex;flex-direction:column;gap:8px;}
+.fb-resolve textarea{width:100%;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:9px 11px;font-family:inherit;font-size:12.5px;resize:vertical;background:#fff;color:var(--ink);}
+.fb-resolve textarea:focus{outline:none;border-color:var(--gold);}
+.fb-resolve .btn-primary{align-self:flex-start;}
+
+/* ---------- готівка ---------- */
+.cash-mod,.cash-ov{animation:fadeIn .28s ease both;}
+.cash-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:14px 0 20px;}
+.cash-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:16px 18px;box-shadow:var(--sh-1);display:flex;flex-direction:column;gap:4px;}
+.cash-card.big{border-color:rgba(220,169,74,.35);background:linear-gradient(180deg,rgba(190,138,46,.08),var(--surface));}
+.cash-lab{font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);}
+.cash-card b{font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
+.cash-card.big b{color:var(--gold-ink);}
+.cash-sub{font-size:11.5px;color:var(--muted);}
+.cash-card .btn-primary{margin-top:10px;}
+.cash-in{width:100%;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:10px 12px;font-family:'IBM Plex Mono',monospace;font-size:17px;color:var(--ink);background:#fff;text-align:right;}
+.cash-in:focus{outline:none;border-color:var(--gold);}
+.cash-hist{margin-bottom:18px;}
+.cash-hist h4{font-family:Inter,sans-serif;font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;}
+.cash-tbl{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;}
+.cash-tbl td{padding:9px 12px;border-bottom:1px solid var(--line);color:var(--ink);}
+.cash-tbl tr:last-child td{border-bottom:none;}
+.cash-tbl td.num{font-family:'IBM Plex Mono',monospace;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;}
+.cash-tbl td.st{color:var(--muted);font-size:11px;text-align:right;}
+.cash-tbl tr.done td{color:var(--faint);}
+.cash-tbl tr.done td.num{color:var(--muted);font-weight:500;}
+
+/* теплова сітка готівки (головний екран Віктора) */
+.cash-bento{
+  --cw:#C98A2E;            /* свіже/увага */
+  --cw-soft:rgba(201,138,46,.15);
+  --cb:#C05A3C;            /* критично */
+  animation:fadeIn .28s ease both;
+  display:grid;grid-template-columns:repeat(4,1fr);gap:12px;align-items:start;
+}
+@media(max-width:900px){.cash-bento{grid-template-columns:repeat(2,1fr);}}
+.cash-hero{grid-column:span 2;grid-row:span 2;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:var(--radius);padding:22px;box-shadow:var(--sh-1);display:flex;flex-direction:column;justify-content:space-between;min-height:196px;}
+.cash-hero.calm{background:linear-gradient(180deg,#F1F6EE,var(--surface));}
+.cash-hero-lab{font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);}
+.cash-hero-v{font-family:'IBM Plex Mono',monospace;font-size:clamp(30px,5vw,46px);font-weight:600;letter-spacing:-.03em;line-height:1;margin-top:8px;color:var(--ink);font-variant-numeric:tabular-nums;}
+.cash-hero-v.calm{font-family:'Fraunces',serif;font-size:24px;color:var(--positive);letter-spacing:-.01em;}
+.cash-hero-note{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.4;}
+.cash-hero-terrs{display:flex;gap:22px;margin-top:16px;padding-top:16px;border-top:1px solid var(--line);}
+.cash-hero-terrs .n{font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:600;color:var(--ink);}
+.cash-hero-terrs .l{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin-top:2px;}
+.cash-tile{border-radius:var(--radius-md);padding:14px;min-height:92px;display:flex;flex-direction:column;justify-content:space-between;gap:8px;border:1px solid transparent;}
+.cash-tile-nm{font-size:12px;font-weight:600;line-height:1.25;}
+.cash-tile-v{font-family:'IBM Plex Mono',monospace;font-size:19px;font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums;}
+.cash-tile-d{font-family:'IBM Plex Mono',monospace;font-size:10px;opacity:.82;margin-top:2px;}
+.cash-tile.lvl0{background:rgba(247,244,234,.04);border-color:var(--line-dark);color:var(--on-dark-2);}
+.cash-tile.lvl0 .cash-tile-v{color:var(--on-dark-3);}
+.cash-tile.lvl1{background:rgba(201,138,46,.16);border-color:rgba(201,138,46,.4);color:var(--on-dark);}
+.cash-tile.lvl1 .cash-tile-v{color:var(--gold-bright);}
+.cash-tile.lvl2{background:var(--cw);color:#241905;}
+.cash-tile.lvl3{background:var(--cb);color:#fff;box-shadow:0 6px 20px -6px rgba(192,90,60,.5);}
+.cash-bento-note{grid-column:1/-1;font-size:11px;color:var(--on-dark-3);line-height:1.45;margin:4px 0 0;}
+
+.ci-cash{text-align:center;padding:22px 4px 6px;}
+.ci-cash-ic{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:50%;background:rgba(190,138,46,.12);color:var(--gold);margin-bottom:12px;}
+.ci-cash p{margin:2px 0;font-size:14px;color:var(--ink);}
+.ci-cash p.hint{font-size:12.5px;color:var(--muted);margin-top:8px;}
+
 /* ---------- огляд ---------- */
 .ov{animation:fadeIn .28s ease both;}
 .ov-h{font-family:'Fraunces',serif;font-size:20px;font-weight:600;color:var(--on-dark);margin:0 0 2px;}
@@ -5322,6 +6740,32 @@ td.sh.sh-plan{font-weight:400;}
 .ov-tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:16px;box-shadow:var(--sh-1);}
 .ov-tile b{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;color:var(--ink);display:block;font-variant-numeric:tabular-nums;}
 .ov-tile span{font-size:11px;color:var(--muted);}
+.ov-tile-kpi{position:relative;overflow:hidden;}
+.kpi-spark{position:absolute;right:12px;bottom:12px;opacity:.9;}
+.kpi-delta{display:block;margin-top:5px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;letter-spacing:.01em;}
+.kpi-delta.up{color:var(--positive);}
+.kpi-delta.down{color:var(--negative);}
+.kpi-delta.flat{color:var(--muted);}
+.ov-tile-attn{background:linear-gradient(180deg,rgba(190,138,46,.1),var(--surface));border-color:rgba(220,169,74,.3);}
+.ov-tile-attn b{color:var(--gold);}
+
+.ov-charts{display:grid;grid-template-columns:1.35fr 1fr;gap:14px;margin-top:16px;}
+@media(max-width:820px){.ov-charts{grid-template-columns:1fr;}}
+.ov-card-h{font-family:Inter,sans-serif;font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);margin-bottom:12px;}
+.ov-card-sub{font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.45;}
+.ov-card-sub b{color:var(--ink);}
+
+.ov-whatif{display:flex;flex-direction:column;}
+.wi-value{font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
+.wi-diff{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;margin-top:3px;}
+.wi-diff.up{color:var(--positive);}
+.wi-diff.down{color:var(--negative);}
+.wi-diff.flat{color:var(--muted);font-weight:500;font-family:Inter,sans-serif;line-height:1.4;}
+.wi-slider{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:999px;margin:16px 0 4px;background:linear-gradient(90deg,var(--negative-bright),var(--gold-bright) 50%,var(--positive-bright));outline:none;}
+.wi-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:var(--surface);border:2px solid var(--gold);box-shadow:var(--sh-2);cursor:pointer;}
+.wi-slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--surface);border:2px solid var(--gold);box-shadow:var(--sh-2);cursor:pointer;}
+.wi-scale{display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:6px;}
+.wi-chart{margin-top:6px;}
 
 /* ---------- детальний перегляд салону ---------- */
 .detail-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
@@ -5350,11 +6794,35 @@ td.sh.sh-plan{font-weight:400;}
 const KEEP_KEY = "dnipro-m-keep";   // «Не виходити» відмічено
 const ALIVE_KEY = "dnipro-m-alive"; // sessionStorage: жива вкладка (переживає reload, не переживає закриття)
 
+function MaintenanceScreen({ message }) {
+  return (
+    <div className="maint-screen">
+      <div className="maint-card">
+        <span className="maint-ic"><Clock size={40} /></span>
+        <h1>Тривають технічні роботи</h1>
+        <p>{message || "Оновлюємо застосунок. Спробуйте зайти за кілька хвилин."}</p>
+        <button className="btn-secondary" onClick={() => window.location.reload()}>
+          <RefreshCw size={14} /> Оновити сторінку
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);      // активний кабінет { key, type, tmKey, label }
   const [remembered, setRemembered] = useState(null); // збережений вхід (для смужки на головній)
   const [pending, setPending] = useState(null);
   const [ready, setReady] = useState(false);
+  const [, setRefsV] = useState(0); // ре-рендер після завантаження текстів «Умови»/лейблів
+  const bumpRefs = () => setRefsV((v) => v + 1);
+  const [maint, setMaint] = useState(null); // { on, message } | null
+
+  useEffect(() => {
+    let a = true;
+    getMaintenance().then((f) => { if (a && f) setMaint(f); });
+    return subscribeFlags(() => getMaintenance().then((f) => { if (a && f) setMaint(f); }));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -5371,7 +6839,7 @@ export default function App() {
       sessionStorage.setItem(ALIVE_KEY, "1");
       if (cab) {
         await initAfterAuth();
-        loadCalcRefs();
+        loadCalcRefs().then(() => { if (active) bumpRefs(); });
         if (active) { setSession(cab); if (keep) setRemembered(cab); }
       }
       if (active) setReady(true);
@@ -5385,7 +6853,7 @@ export default function App() {
     localStorage.setItem(KEEP_KEY, remember ? "1" : "0");
     sessionStorage.setItem(ALIVE_KEY, "1");
     setRemembered(remember ? cab : null);
-    loadCalcRefs();
+    loadCalcRefs().then(bumpRefs);
   };
   const goHome = () => setSession(null);            // на головну, сесія Supabase лишається
   const logout = async () => { await signOutCab(); localStorage.removeItem(KEEP_KEY); setSession(null); setRemembered(null); };
@@ -5414,7 +6882,10 @@ export default function App() {
           verify={(login, password) => verifyLogin(pending.key, login, password)}
         />
       )}
-      {ready && session && (
+      {ready && session && maint?.on && session.key !== ADMIN_KEY && (
+        <MaintenanceScreen message={maint.message} />
+      )}
+      {ready && session && !(maint?.on && session.key !== ADMIN_KEY) && (
         <CabinetRouter cabinet={session} onExit={goHome} onLogout={logout} />
       )}
     </div>
