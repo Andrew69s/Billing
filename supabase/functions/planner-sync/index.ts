@@ -30,6 +30,18 @@ const STORE_MAP: Record<string, string> = {
   "Львів, ФФМ вул. Кавалерідзе": "lviv-kavaleridze",
 };
 
+// базові плани (fallback, якщо в plans:Боровик немає точки)
+const BASE_PLAN: Record<string, any> = {
+  "gorodok-peremyshlska": { assort: 1400000, ez: 112000, cheky: 630, bn: 400000, dzvinky: 1000 },
+  "mostyska-rynok": { assort: 900000, ez: 72000, cheky: 350, bn: 10000, dzvinky: 400 },
+  "turka-sheptytskoho": { assort: 900000, ez: 72000, cheky: 444, bn: 100000, dzvinky: 500 },
+  "lviv-lypynskoho": { assort: 1500000, ez: 120000, cheky: 660, bn: 200000, dzvinky: 750 },
+  "lviv-shyretska": { assort: 1400000, ez: 112000, cheky: 608, bn: 100000, dzvinky: 810 },
+  "lviv-shevchenka": { assort: 800000, ez: 64000, cheky: 400, bn: 100000, dzvinky: 400 },
+  "lviv-vashyngtona": { assort: 900000, ez: 72000, cheky: 400, bn: 100000, dzvinky: 500 },
+  "lviv-kavaleridze": { assort: 800000, ez: 64000, cheky: 345, bn: 30000, dzvinky: 500 },
+};
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -79,6 +91,35 @@ Deno.serve(async (req) => {
   const perMonth: Record<string, number> = {};
   let total = 0;
 
+  // --- плани салонів: plans:Боровик (override) з fallback на BASE_PLAN ---
+  let plansApplied = 0;
+  try {
+    const pr = await fetch(
+      `${PLANNER_URL}/rest/v1/kv?select=value&key=eq.${encodeURIComponent(`plans:${PLANNER_TERRITORY}`)}`,
+      { headers: { apikey: PLANNER_KEY, Authorization: `Bearer ${PLANNER_KEY}` } },
+    );
+    let ov: any = (await pr.json())?.[0]?.value ?? {};
+    if (typeof ov === "string") { try { ov = JSON.parse(ov); } catch { ov = {}; } }
+    const nameToKey: Record<string, string> = STORE_MAP;
+    const planRows = Object.keys(BASE_PLAN).map((salonKey) => {
+      const storeName = Object.keys(nameToKey).find((n) => nameToKey[n] === salonKey);
+      const o = storeName && ov[storeName] ? ov[storeName] : null;
+      const src = o || BASE_PLAN[salonKey];
+      return {
+        salon_key: salonKey,
+        plan: {
+          assort: Math.round(Number(src.assort) || 0),
+          ez: Math.round(Number(src.ez) || 0),
+          cheky: Math.round(Number(src.cheky) || 0),
+          bn: Math.round(Number(src.bn) || 0),
+          dzvinky: Math.round(Number(src.dzvinky) || 0),
+        },
+      };
+    });
+    const { data: pn } = await svc.rpc("tplan_apply", { rows: planRows });
+    plansApplied = Number(pn) || planRows.length;
+  } catch { /* плани не критичні */ }
+
   for (const ym of months) {
     const [y, m] = ym.split("-").map(Number);
     const plannerKey = `entries:${PLANNER_TERRITORY}:${y}-${m}`; // місяць без нуля
@@ -123,5 +164,23 @@ Deno.serve(async (req) => {
     }
   }
 
-  return json({ ok: true, months, rows: total, perMonth });
+  // діагностика планів планера (тимчасово, для розбору «плани за червень»)
+  let plansDump: any = null;
+  if (body.dump) {
+    const keys = [`plans:${PLANNER_TERRITORY}`, ...months.map((ym) => {
+      const [y, m] = ym.split("-").map(Number);
+      return `dayplan:${PLANNER_TERRITORY}:${y}-${m}`;
+    })];
+    plansDump = {};
+    for (const k of keys) {
+      try {
+        const r = await fetch(`${PLANNER_URL}/rest/v1/kv?select=value&key=eq.${encodeURIComponent(k)}`,
+          { headers: { apikey: PLANNER_KEY, Authorization: `Bearer ${PLANNER_KEY}` } });
+        const arr = await r.json();
+        plansDump[k] = arr?.[0]?.value ?? null;
+      } catch (e) { plansDump[k] = "err"; }
+    }
+  }
+
+  return json({ ok: true, months, rows: total, perMonth, plansApplied, plansDump });
 });

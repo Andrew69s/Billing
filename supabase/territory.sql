@@ -53,6 +53,44 @@ do $$ begin
 end $$;
 
 -- =========================================================
+--  Місячні плани салонів (тягнуться з планера: plans:Боровик)
+-- =========================================================
+create table if not exists public.territory_plans (
+  salon_key  text primary key,
+  plan       jsonb not null default '{}'::jsonb,   -- {assort,ez,cheky,bn,dzvinky}
+  updated_at timestamptz not null default now()
+);
+alter table public.territory_plans enable row level security;
+drop policy if exists tplan_select on public.territory_plans;
+create policy tplan_select on public.territory_plans for select using (
+  auth.uid() is not null and (
+    public.is_manager_or_admin()
+    or public.my_cabinet_type() = 'accountant'
+    or salon_key = public.my_cabinet_key()
+    or (public.my_cabinet_type() = 'tm' and public.current_salon_tm(salon_key) = public.my_cabinet_key())
+  )
+);
+do $$ begin
+  if not exists (select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'territory_plans') then
+    alter publication supabase_realtime add table public.territory_plans;
+  end if;
+end $$;
+
+create or replace function public.tplan_apply(rows jsonb)
+returns integer language plpgsql security definer set search_path = public as $$
+declare r jsonb; n int := 0;
+begin
+  for r in select * from jsonb_array_elements(rows) loop
+    insert into public.territory_plans (salon_key, plan, updated_at)
+    values (r->>'salon_key', r->'plan', now())
+    on conflict (salon_key) do update set plan = excluded.plan, updated_at = now();
+    n := n + 1;
+  end loop;
+  return n;
+end $$;
+
+-- =========================================================
 --  Синхронізація з планером: upsert лише поля planner, manual не чіпаємо.
 --  Викликає Edge Function planner-sync (service role).
 -- =========================================================

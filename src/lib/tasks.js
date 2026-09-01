@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { supabase, rtChannel } from "./supabase.js";
 
 export const TASK_STATUS = { open: "Відкрита", in_progress: "В роботі", done: "Виконана" };
 
@@ -47,8 +47,7 @@ export async function markSeen(tasks, cabKey) {
 }
 
 export function subscribeTasks(onChange) {
-  const ch = supabase
-    .channel("tasks-changes")
+  const ch = rtChannel("tasks-changes")
     .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, onChange)
     .subscribe();
   return () => { supabase.removeChannel(ch); };

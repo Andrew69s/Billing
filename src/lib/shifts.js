@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { supabase, rtChannel } from "./supabase.js";
 
 export const ABSENCE_REASONS = {
   vacation: "Відпустка",
@@ -71,7 +71,7 @@ export async function listStoreDays(ym) {
 }
 
 export function subscribeShifts(onChange) {
-  const ch = supabase.channel("shifts-changes")
+  const ch = rtChannel("shifts-changes")
     .on("postgres_changes", { event: "*", schema: "public", table: "shifts" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "store_days" }, onChange)
     .subscribe();

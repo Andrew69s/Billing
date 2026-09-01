@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { supabase, rtChannel } from "./supabase.js";
 
 /* Показники території: денні дані салонів (planner з зовнішнього планера
    + ручні корективи ТМ). Ефективне значення = { ...planner, ...manual }. */
@@ -11,7 +11,8 @@ export const TM_METRICS = [
   { key: "dzvinky", label: "Дзвінки", short: "Дзв.", money: false },
 ];
 
-/* місячні плани салонів (з планера, територія «Боровик») */
+/* місячні плани салонів — базовий fallback (актуальні тягнуться з планера
+   у таблицю territory_plans через planner-sync) */
 export const SALON_MONTH_PLAN = {
   "gorodok-peremyshlska": { assort: 1400000, ez: 112000, cheky: 630, bn: 400000, dzvinky: 1000 },
   "mostyska-rynok": { assort: 900000, ez: 72000, cheky: 350, bn: 10000, dzvinky: 400 },
@@ -38,6 +39,16 @@ export async function listMetrics(ym) {
   if (error) throw error;
   return data || [];
 }
+
+/* актуальні місячні плани салонів (territory_plans); fallback — SALON_MONTH_PLAN */
+export async function listPlans() {
+  const { data, error } = await supabase.from("territory_plans").select("salon_key,plan");
+  if (error) throw error;
+  const out = { ...SALON_MONTH_PLAN };
+  for (const r of data || []) out[r.salon_key] = r.plan || SALON_MONTH_PLAN[r.salon_key] || {};
+  return out;
+}
+export const planOf = (plans, salonKey) => (plans && plans[salonKey]) || SALON_MONTH_PLAN[salonKey] || {};
 
 /* ефективні значення дня: planner перекривається manual по ключах */
 export function effective(row) {
@@ -96,8 +107,9 @@ export async function syncFromPlanner(months) {
 }
 
 export function subscribeMetrics(onChange) {
-  const ch = supabase.channel("territory-metrics-rt")
+  const ch = rtChannel("territory-metrics-rt")
     .on("postgres_changes", { event: "*", schema: "public", table: "territory_metrics" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "territory_plans" }, onChange)
     .subscribe();
   return () => { supabase.removeChannel(ch); };
 }
@@ -117,12 +129,11 @@ export function monthAgg(rows, salonKeys) {
   return { sum, daysBySalon };
 }
 
-/* план за набором салонів (місячний) */
-export function planAgg(salonKeys) {
+/* план за набором салонів (місячний). plans — мапа з listPlans() (опц.) */
+export function planAgg(salonKeys, plans) {
   const sum = { assort: 0, ez: 0, cheky: 0, bn: 0, dzvinky: 0 };
   for (const k of salonKeys) {
-    const p = SALON_MONTH_PLAN[k];
-    if (!p) continue;
+    const p = planOf(plans, k);
     for (const { key } of TM_METRICS) sum[key] += p[key] || 0;
   }
   return sum;

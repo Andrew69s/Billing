@@ -14,3 +14,8 @@ export const supabase = createClient(url, key, {
     storageKey: "dnipro-m-auth",
   },
 });
+
+/* унікальний realtime-канал — щоб два екземпляри одного модуля
+   (напр. «Команда» + «Архів» разом) не билися за спільний канал */
+export const rtChannel = (name) =>
+  supabase.channel(`${name}:${Math.random().toString(36).slice(2)}`);

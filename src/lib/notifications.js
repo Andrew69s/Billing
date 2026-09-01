@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { supabase, rtChannel } from "./supabase.js";
 
 export async function listNotifications(limit = 50) {
   const { data, error } = await supabase
@@ -25,8 +25,7 @@ export async function notify({ recipient, kind, title, body = "", actor = "", li
 }
 
 export function subscribeNotifications(cabKey, onInsert) {
-  const ch = supabase
-    .channel("notif-changes")
+  const ch = rtChannel("notif-changes")
     .on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "notifications", filter: `recipient=eq.${cabKey}` },

@@ -50,7 +50,7 @@ import {
 } from "./lib/notifications.js";
 import {
   TM_METRICS, SALON_MONTH_PLAN, daysInYm, dateOf,
-  listMetrics, effective, saveManual, resetManual, syncFromPlanner, subscribeMetrics, monthAgg, planAgg,
+  listMetrics, listPlans, planOf, effective, saveManual, resetManual, syncFromPlanner, subscribeMetrics, monthAgg, planAgg,
 } from "./lib/territory.js";
 import { getMaintenance, setMaintenance, subscribeFlags } from "./lib/appFlags.js";
 import { submitFeedback, listFeedback, setFeedbackStatus, resolveFeedback, deleteFeedback, subscribeFeedback } from "./lib/feedback.js";
@@ -4704,9 +4704,9 @@ function RegionSheetModule() {
 const tmMoney = (n) => Math.round(n || 0).toLocaleString("uk-UA");
 const rowKey = (sk, d) => `${sk}|${d}`;
 
-function TerritorySummaryStrip({ salonKeys, rows, daysPassed, dim }) {
+function TerritorySummaryStrip({ salonKeys, rows, daysPassed, dim, plans }) {
   const { sum } = monthAgg(rows, salonKeys);
-  const plan = planAgg(salonKeys);
+  const plan = planAgg(salonKeys, plans);
   return (
     <div className="tm-strip">
       {TM_METRICS.map((mt) => {
@@ -4728,7 +4728,7 @@ function TerritorySummaryStrip({ salonKeys, rows, daysPassed, dim }) {
   );
 }
 
-function TerritoryAllSalons({ salons, rows, activeKey, onPick }) {
+function TerritoryAllSalons({ salons, rows, activeKey, onPick, plans }) {
   return (
     <div className="tm-all">
       <table className="tm-all-tbl">
@@ -4738,7 +4738,7 @@ function TerritoryAllSalons({ salons, rows, activeKey, onPick }) {
         <tbody>
           {salons.map((s) => {
             const { sum, daysBySalon } = monthAgg(rows, [s.key]);
-            const plan = SALON_MONTH_PLAN[s.key]?.assort || 0;
+            const plan = planOf(plans, s.key).assort || 0;
             const pct = plan ? Math.round((sum.assort / plan) * 100) : null;
             return (
               <tr key={s.key} className={s.key === activeKey ? "active" : ""} onClick={() => onPick(s.key)}>
@@ -4756,11 +4756,11 @@ function TerritoryAllSalons({ salons, rows, activeKey, onPick }) {
   );
 }
 
-function TerritoryDayTable({ salonKey, ym, rowsMap, editable, by, onPatched }) {
+function TerritoryDayTable({ salonKey, ym, rowsMap, editable, by, onPatched, plans }) {
   const dim = daysInYm(ym);
   const today = todayISO();
   const days = Array.from({ length: dim }, (_, i) => i + 1);
-  const plan = SALON_MONTH_PLAN[salonKey] || {};
+  const plan = planOf(plans, salonKey);
   const totals = { assort: 0, ez: 0, cheky: 0, bn: 0, dzvinky: 0 };
 
   const commit = async (day, metric, val) => {
@@ -4851,6 +4851,7 @@ function TerritoryModule({ cab }) {
   const months = useMemo(() => recentMonths(15), []);
   const [ym, setYm] = useState(nowYm());
   const [rowsMap, setRowsMap] = useState(new Map());
+  const [plans, setPlans] = useState(SALON_MONTH_PLAN);
   const [loading, setLoading] = useState(true);
   const [salonKey, setSalonKey] = useState(scopeSalons[0]?.key || null);
   const [syncing, setSyncing] = useState(false);
@@ -4866,8 +4867,9 @@ function TerritoryModule({ cab }) {
     setRowsMap(m);
     setLoading(false);
   };
+  useEffect(() => { listPlans().then(setPlans).catch(() => {}); }, []);
   useEffect(() => { setLoading(true); localEditAt.current = 0; reload(); /* eslint-disable-next-line */ }, [ym]);
-  useEffect(() => subscribeMetrics(() => reload()), [ym]); // eslint-disable-line
+  useEffect(() => subscribeMetrics(() => { reload(); listPlans().then(setPlans).catch(() => {}); }), [ym]); // eslint-disable-line
 
   const patchLocal = (sk, d, patch) => {
     localEditAt.current = Date.now();
@@ -4924,10 +4926,10 @@ function TerritoryModule({ cab }) {
 
       {loading ? <div className="loading">Завантаження…</div> : (
         <>
-          <TerritorySummaryStrip salonKeys={scopeKeys} rows={rowsArr} daysPassed={daysPassed} dim={dim} />
+          <TerritorySummaryStrip salonKeys={scopeKeys} rows={rowsArr} daysPassed={daysPassed} dim={dim} plans={plans} />
 
           {scopeSalons.length > 1 && (
-            <TerritoryAllSalons salons={scopeSalons} rows={rowsArr} activeKey={activeSalon} onPick={setSalonKey} />
+            <TerritoryAllSalons salons={scopeSalons} rows={rowsArr} activeKey={activeSalon} onPick={setSalonKey} plans={plans} />
           )}
 
           {scopeSalons.length > 1 && (
@@ -4947,7 +4949,7 @@ function TerritoryModule({ cab }) {
                 {editable && <span className="muted"> · клітинку можна відкоригувати вручну, ↩ повертає значення з планера</span>}
               </p>
               <TerritoryDayTable
-                salonKey={activeSalon} ym={ym} rowsMap={rowsMap}
+                salonKey={activeSalon} ym={ym} rowsMap={rowsMap} plans={plans}
                 editable={editable} by={cab.key} onPatched={patchLocal}
               />
             </>

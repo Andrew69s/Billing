@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { supabase, rtChannel } from "./supabase.js";
 
 export const INVOICE_STATUS = {
   issued: "Виставлено",
@@ -69,8 +69,7 @@ export async function deleteInvoice(id) {
 }
 
 export function subscribeInvoices(onChange) {
-  const ch = supabase
-    .channel("invoices-changes")
+  const ch = rtChannel("invoices-changes")
     .on("postgres_changes", { event: "*", schema: "public", table: "invoices" }, onChange)
     .subscribe();
   return () => { supabase.removeChannel(ch); };

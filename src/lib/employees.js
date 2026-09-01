@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { supabase, rtChannel } from "./supabase.js";
 
 export const EMP_ROLES = {
   manager: "Керуючий",
@@ -71,8 +71,7 @@ export async function deleteEmployee(id) {
 }
 
 export function subscribeEmployees(onChange) {
-  const ch = supabase
-    .channel("employees-changes")
+  const ch = rtChannel("employees-changes")
     .on("postgres_changes", { event: "*", schema: "public", table: "employees" }, onChange)
     .subscribe();
   return () => { supabase.removeChannel(ch); };
