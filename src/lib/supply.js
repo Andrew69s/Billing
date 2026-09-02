@@ -32,6 +32,12 @@ export async function upsertItem(patch) {
   if (error) throw error;
   return data;
 }
+/* видалити (якщо позиція ніде не фігурує) або заархівувати позицію */
+export async function deleteItem(itemId) {
+  const { data, error } = await supabase.rpc("supply_delete_item", { p_item: itemId });
+  if (error) throw error;
+  return data; // 'deleted' | 'archived'
+}
 export async function setPrice(itemId, unitCost) {
   const { error } = await supabase.rpc("supply_set_price", { p_item: itemId, p_cost: Number(unitCost) || 0 });
   if (error) throw error;
@@ -105,7 +111,8 @@ export async function doAct(payload) {
     if (/forbidden/i.test(msg)) msg = "Немає прав на цю дію";
     throw new Error(msg);
   }
-  return data;
+  // supply_act повертає { act_id, total, price_changes: [{name, old, new}] }
+  return data || {};
 }
 export const receipt = (warehouse, counterparty, lines) =>
   doAct({ kind: "receipt", warehouse, counterparty, lines });

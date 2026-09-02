@@ -61,7 +61,7 @@ import {
 } from "./lib/cash.js";
 import {
   SUPPLY_CATEGORIES, SUPPLY_UNITS, CENTRAL, ACT_KIND, uah as suah, uahN as suahN,
-  listItems, upsertItem, setPrice, listStock, stockMap, stockState,
+  listItems, upsertItem, deleteItem, setPrice, listStock, stockMap, stockState,
   listActs, actLines, writeoffLines, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
   shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
   subscribeSupply,
@@ -781,6 +781,13 @@ const toastBus = typeof window !== "undefined" ? new EventTarget() : null;
 function pushToast(detail) {
   toastBus?.dispatchEvent(new CustomEvent("toast", { detail }));
 }
+/* шина навігації — клік по сповіщенню відкриває відповідний модуль кабінету */
+const navBus = typeof window !== "undefined" ? new EventTarget() : null;
+function goToModule(key) {
+  navBus?.dispatchEvent(new CustomEvent("nav", { detail: key }));
+}
+/* link сповіщення → ключ модуля кабінету */
+const NOTIF_LINK_MODULE = { tasks: "tasks", salary: "salary", warehouse: "warehouse", invoices: "invoices", feedback: "feedback" };
 
 const notifIcon = (kind) => {
   if (kind === "task_new") return <CheckSquare size={15} />;
@@ -789,8 +796,14 @@ const notifIcon = (kind) => {
   if (kind === "invoice") return <CreditCard size={15} />;
   if (kind === "birthday") return <Cake size={15} />;
   if (kind === "feedback") return <MessageSquare size={15} />;
+  if (kind === "supply") return <Warehouse size={15} />;
   return <Bell size={15} />;
 };
+
+/* кабінети з доступом до основного складу — сюди летять сповіщення по замовленнях */
+const WH_MANAGER_CABS = ["lviv-lypynskoho", "olha"];
+const notifyWhManagers = (exceptKey, payload) =>
+  WH_MANAGER_CABS.filter((k) => k !== exceptKey).forEach((k) => notify({ recipient: k, ...payload }));
 const relTime = (iso) => {
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return "щойно";
@@ -852,16 +865,24 @@ function NotificationCenter({ cabKey }) {
               </div>
               <div className="notif-list">
                 {items.length === 0 && <div className="notif-empty">Поки що порожньо</div>}
-                {items.map((n) => (
-                  <div className={`notif-item ${n.read ? "" : "notif-unread"}`} key={n.id}>
-                    <span className="notif-ic">{notifIcon(n.kind)}</span>
-                    <div className="notif-body">
-                      <b>{n.title}</b>
-                      {n.body && <p>{n.body}</p>}
-                      <time>{relTime(n.created_at)}</time>
-                    </div>
-                  </div>
-                ))}
+                {items.map((n) => {
+                  const target = NOTIF_LINK_MODULE[n.link] || NOTIF_LINK_MODULE[n.kind];
+                  const onClick = async () => {
+                    setItems((p) => p.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
+                    await markRead(n.id).catch(() => {});
+                    if (target) { goToModule(target); setOpen(false); }
+                  };
+                  return (
+                    <button className={`notif-item ${n.read ? "" : "notif-unread"} ${target ? "is-link" : ""}`} key={n.id} onClick={onClick}>
+                      <span className="notif-ic">{notifIcon(n.kind)}</span>
+                      <div className="notif-body">
+                        <b>{n.title}</b>
+                        {n.body && <p>{n.body}</p>}
+                        <time>{relTime(n.created_at)}{target ? " · відкрити →" : ""}</time>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </>
@@ -5311,7 +5332,7 @@ function SupplyLineRow({ items, line, exclude, onChange, onRemove, priceCol }) {
 }
 
 /* --- Основний склад --- */
-function SupplyCentral({ items, stock, canManage, onReload }) {
+function SupplyCentral({ items, stock, canManage, cabKey, onReload }) {
   const [cat, setCat] = useState("");
   const [q, setQ] = useState("");
   const [lowOnly, setLowOnly] = useState(false);
@@ -5378,7 +5399,7 @@ function SupplyCentral({ items, stock, canManage, onReload }) {
       </div>
 
       {receiptFrom && (
-        <SupplyReceipt items={items} warehouse={CENTRAL} prefill={receiptFrom.length ? receiptFrom : null}
+        <SupplyReceipt items={items} warehouse={CENTRAL} cabKey={cabKey} prefill={receiptFrom.length ? receiptFrom : null}
           onClose={() => setReceiptFrom(null)} onDone={() => { setReceiptFrom(null); onReload(); }} />
       )}
     </div>
@@ -5386,7 +5407,7 @@ function SupplyCentral({ items, stock, canManage, onReload }) {
 }
 
 /* --- Прихід (модалка) --- */
-function SupplyReceipt({ items, warehouse, prefill, onClose, onDone }) {
+function SupplyReceipt({ items, warehouse, cabKey, prefill, onClose, onDone }) {
   const [cp, setCp] = useState("");
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
   const [lines, setLines] = useState(() =>
@@ -5409,8 +5430,16 @@ function SupplyReceipt({ items, warehouse, prefill, onClose, onDone }) {
     }));
     if (!good.length) return;
     setBusy(true);
-    try { await whReceipt(warehouse, cp.trim(), good); pushToast({ title: "Прихід оформлено", body: suah(total) }); onDone(); }
-    catch (e) { alert(e.message || e); setBusy(false); }
+    try {
+      const res = await whReceipt(warehouse, cp.trim(), good);
+      pushToast({ title: "Прихід оформлено", body: suah(total) });
+      (res?.price_changes || []).forEach((c) =>
+        pushToast({ title: `Ціну перераховано: ${c.name}`, body: `${suahN(c.old)} → ${suahN(c.new)} ₴ (середньозважена по залишку)` }));
+      if (warehouse === CENTRAL) {
+        notifyWhManagers(cabKey, { kind: "supply", title: "Прихід на основний склад", body: `${good.length} поз. · ${suah(total)}`, actor: cabKey || "", link: "warehouse" });
+      }
+      onDone();
+    } catch (e) { pushToast({ title: "Не вдалося оформити прихід", body: String(e.message || e) }); setBusy(false); }
   };
   return createPortal(
     <div className="modal-overlay" onClick={() => !busy && onClose()}>
@@ -5436,27 +5465,53 @@ function SupplyReceipt({ items, warehouse, prefill, onClose, onDone }) {
 }
 
 /* --- Довідник --- */
-function SupplyItemsView({ items, canManage, onReload }) {
+function SupplyItemsView({ canManage, onReload }) {
   const [form, setForm] = useState(null); // null | 'new' | item
+  const [list, setList] = useState(null);
+  const [showArch, setShowArch] = useState(false);
+  const load = () => listItems({ includeArchived: true }).then(setList).catch(() => setList([]));
+  useEffect(() => { load(); }, []);
+  const refresh = () => { load(); onReload(); };
+
+  const del = async (i) => {
+    if (!confirm(`Позиція «${i.name}»: видалити з довідника? Якщо вона вже фігурує в актах/залишках — буде заархівована.`)) return;
+    try {
+      const r = await deleteItem(i.id);
+      pushToast({ title: r === "deleted" ? "Позицію видалено" : "Позицію заархівовано", body: i.name });
+      refresh();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+  };
+
+  if (list === null) return <div className="loading">Завантаження…</div>;
+  const rows = [...list]
+    .filter((i) => showArch || i.active !== false)
+    .sort((a, b) => catRank(a.category) - catRank(b.category) || a.sort - b.sort);
+
   return (
     <div className="wh-view">
-      {canManage && !form && <button className="btn-secondary small" style={{ marginBottom: 12 }} onClick={() => setForm("new")}><Plus size={14} /> Нова позиція</button>}
-      {form && <SupplyItemForm item={form === "new" ? null : form} onClose={() => setForm(null)} onSaved={() => { setForm(null); onReload(); }} />}
+      <div className="wh-bar">
+        {canManage && !form && <button className="btn-secondary small" onClick={() => setForm("new")}><Plus size={14} /> Нова позиція</button>}
+        <label className="wh-check"><input type="checkbox" checked={showArch} onChange={(e) => setShowArch(e.target.checked)} /> показати архівні</label>
+      </div>
+      {form && <SupplyItemForm item={form === "new" ? null : form} onClose={() => setForm(null)} onSaved={() => { setForm(null); refresh(); }} />}
       <div className="wh-tw">
         <table className="wh-tbl">
           <thead><tr><th>Позиція</th><th>Категорія</th><th>Од.</th><th>Ціна</th><th>Мін центр</th><th>Мін салон</th><th /></tr></thead>
           <tbody>
-            {[...items].sort((a, b) => catRank(a.category) - catRank(b.category) || a.sort - b.sort).map((i) => (
-              <tr key={i.id}>
-                <td className="wh-nm">{i.name}</td>
+            {rows.map((i) => (
+              <tr key={i.id} className={i.active === false ? "wh-arch" : ""}>
+                <td className="wh-nm">{i.name}{i.active === false && <span className="wh-cat">архів</span>}</td>
                 <td className="muted">{i.category}</td>
                 <td>{i.unit}</td>
                 <td className="num">{canManage
-                  ? <NumInput className="wh-price" value={i.unit_cost} onChange={(v) => setPrice(i.id, v).then(onReload).catch((e) => alert(e.message))} />
+                  ? <NumInput className="wh-price" value={i.unit_cost} onChange={(v) => setPrice(i.id, v).then(refresh).catch((e) => pushToast({ title: "Ціна не збережена", body: String(e.message || e) }))} />
                   : suahN(i.unit_cost)}</td>
                 <td className="num muted">{i.min_central}</td>
                 <td className="num muted">{i.min_salon}</td>
-                <td>{canManage && <button className="wh-link" onClick={() => setForm(i)}>ред.</button>}</td>
+                <td className="wh-row-act">{canManage && <>
+                  <button className="wh-link" onClick={() => setForm(i)}>ред.</button>
+                  <button className="wh-link danger" onClick={() => del(i)}>видалити</button>
+                </>}</td>
               </tr>
             ))}
           </tbody>
@@ -5477,9 +5532,16 @@ function SupplyItemForm({ item, onClose, onSaved }) {
       if (!item && startQty !== "" && Number(startQty) > 0) {
         await whAdjust(CENTRAL, "стартовий залишок нової позиції", [{ item_id: saved.id, qty: Number(startQty) }]);
       }
-      pushToast({ title: item ? "Позицію оновлено" : "Позицію додано" });
+      pushToast({ title: item ? "Позицію оновлено" : "Позицію додано", body: f.name.trim() });
       onSaved();
-    } catch (e) { alert(e.message || e); setBusy(false); }
+    } catch (e) { pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) }); setBusy(false); }
+  };
+  const toggleArchive = async () => {
+    try {
+      await upsertItem({ ...item, active: item.active === false });
+      pushToast({ title: item.active === false ? "Повернено з архіву" : "Заархівовано", body: item.name });
+      onSaved();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
   };
   return (
     <div className="wh-form">
@@ -5498,6 +5560,7 @@ function SupplyItemForm({ item, onClose, onSaved }) {
       </div>
       <div className="wh-form-act">
         <button className="btn-secondary small" onClick={onClose}>Скасувати</button>
+        {item && <button className="btn-secondary small" onClick={toggleArchive}>{item.active === false ? "Повернути з архіву" : "Заархівувати"}</button>}
         <button className="btn-primary small" onClick={save} disabled={busy}>{busy ? "…" : "Зберегти"}</button>
       </div>
     </div>
@@ -5564,10 +5627,18 @@ function SupplyOrderBuilder({ salonKey, items, stock, order, prefill, onDone }) 
       let id = order?.id;
       if (id) await saveOrderLines(id, ls);
       else { const o = await createOrder(salonKey, salonKey, ls); id = o.id; }
-      if (submit) await submitOrder(id);
+      if (submit) {
+        await submitOrder(id);
+        notifyWhManagers(null, {
+          kind: "supply",
+          title: `Нове замовлення на склад: ${salonByKey(salonKey)?.city}`,
+          body: `${ls.length} поз. · ${suah(sum)}`,
+          actor: salonKey, link: "warehouse",
+        });
+      }
       pushToast({ title: submit ? "Замовлення подано" : "Чернетку збережено", body: `${ls.length} поз. · ${suah(sum)}` });
       onDone();
-    } catch (e) { alert(e.message || e); setBusy(false); }
+    } catch (e) { pushToast({ title: "Не вдалося зберегти замовлення", body: String(e.message || e) }); setBusy(false); }
   };
 
   return (
@@ -5603,7 +5674,10 @@ function SupplyOrderBuilder({ salonKey, items, stock, order, prefill, onDone }) 
 }
 
 /* --- Замовлення (списки) --- */
-function SupplyOrders({ scope, salonKey, tmKey, items, stock, onReload, onEditDraft }) {
+const ORDER_ST_TONE = { draft: "st-draft", submitted: "st-sub", shipped: "st-ship", received: "st-recv" };
+const lineMismatch = (l) => l.qty_shipped != null && Number(l.qty_shipped) !== Number(l.qty_req);
+
+function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, onEditDraft }) {
   const [orders, setOrders] = useState(null);
   const [open, setOpen] = useState(null); // { order, lines }
   const [ship, setShip] = useState(null); // order being shipped
@@ -5613,19 +5687,32 @@ function SupplyOrders({ scope, salonKey, tmKey, items, stock, onReload, onEditDr
     if (scope === "mine") list = await listOrders({ salonKey });
     else if (scope === "incoming") list = (await listOrders({})).filter((o) => o.status !== "draft");
     else list = (await listOrders({})).filter((o) => salonsOfTm(tmKey).some((s) => s.key === o.salon_key));
-    setOrders(list);
+    // для відправлених/отриманих підтягуємо рядки — щоб показати к-ть і розбіжності
+    const withLines = await Promise.all(list.map(async (o) => {
+      if (o.status === "draft") return o;
+      const ls = await orderLines(o.id).catch(() => []);
+      return { ...o, _lines: ls, _mismatch: ls.some(lineMismatch), _count: ls.length };
+    }));
+    setOrders(withLines);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [scope, salonKey]);
   if (orders === null) return <div className="loading">Завантаження…</div>;
   if (!orders.length) return <div className="admin-empty">Замовлень немає.</div>;
 
-  const openOrder = async (o) => setOpen({ order: o, lines: await orderLines(o.id) });
+  const openOrder = async (o) => setOpen({ order: o, lines: o._lines || await orderLines(o.id) });
   const receive = async (o) => {
-    const ls = await orderLines(o.id);
+    const ls = o._lines || await orderLines(o.id);
     const recv = ls.map((l) => ({ item_id: l.item_id, qty: Number(l.qty_shipped ?? l.qty_req) || 0 }));
     if (!confirm(`Підтвердити отримання замовлення (${recv.length} поз.)?`)) return;
-    try { await receiveOrder(o.id, o.salon_key, recv); pushToast({ title: "Отримання підтверджено" }); load(); onReload && onReload(); }
-    catch (e) { alert(e.message || e); }
+    try {
+      await receiveOrder(o.id, o.salon_key, recv);
+      pushToast({ title: "Отримання підтверджено", body: salonByKey(o.salon_key)?.city });
+      notifyWhManagers(null, {
+        kind: "supply", title: `Салон прийняв замовлення: ${salonByKey(o.salon_key)?.city}`,
+        body: `${recv.length} поз.`, actor: o.salon_key, link: "warehouse",
+      });
+      load(); onReload && onReload();
+    } catch (e) { pushToast({ title: "Не вдалося підтвердити", body: String(e.message || e) }); }
   };
 
   return (
@@ -5634,9 +5721,13 @@ function SupplyOrders({ scope, salonKey, tmKey, items, stock, onReload, onEditDr
         {orders.map((o) => (
           <div className={`wh-ord ${o.status}`} key={o.id}>
             <div className="wh-ord-top">
-              <span className="wh-ord-nm">{scope === "mine" ? monthLabel(o.created_at.slice(0, 7)) : salonByKey(o.salon_key)?.city}</span>
-              <span className="wh-ord-st">{ORDER_ST[o.status]}</span>
+              <span className="wh-ord-nm">
+                {scope === "mine" ? monthLabel(o.created_at.slice(0, 7)) : salonByKey(o.salon_key)?.city}
+                {o._count != null && <span className="wh-ord-cnt"> · {o._count} поз.</span>}
+                {o._mismatch && <span className="wh-ord-warn"><AlertTriangle size={12} /> розбіжність</span>}
+              </span>
               <span className="wh-ord-at">{fmtDate(o.created_at)}</span>
+              <span className={`wh-ord-st ${ORDER_ST_TONE[o.status] || ""}`}>{ORDER_ST[o.status]}</span>
             </div>
             <div className="wh-ord-act">
               <button className="wh-link" onClick={() => openOrder(o)}>позиції</button>
@@ -5656,22 +5747,23 @@ function SupplyOrders({ scope, salonKey, tmKey, items, stock, onReload, onEditDr
             <div className="wh-modal-b">
               <table className="wh-tbl"><tbody>
                 {open.lines.map((l) => (
-                  <tr key={l.item_id}><td className="wh-nm">{byId[l.item_id]?.name}</td>
+                  <tr key={l.item_id} className={lineMismatch(l) ? "wh-mismatch" : ""}><td className="wh-nm">{byId[l.item_id]?.name}</td>
                     <td className="num">замовлено {l.qty_req}</td>
                     <td className="num">{l.qty_shipped != null ? `відправлено ${l.qty_shipped}` : ""}</td></tr>
                 ))}
               </tbody></table>
+              {open.lines.some(lineMismatch) && <p className="hint wh-mismatch-note"><AlertTriangle size={13} /> Червоним — позиції, відправлені не в тій кількості, що замовляли.</p>}
             </div>
           </div>
         </div>,
         document.body
       )}
-      {ship && <SupplyShip order={ship} items={items} stock={stock} onClose={() => setShip(null)} onDone={() => { setShip(null); load(); onReload && onReload(); }} />}
+      {ship && <SupplyShip order={ship} items={items} stock={stock} cabKey={cabKey} onClose={() => setShip(null)} onDone={() => { setShip(null); load(); onReload && onReload(); }} />}
     </div>
   );
 }
 
-function SupplyShip({ order, items, stock, onClose, onDone }) {
+function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
   const [lines, setLines] = useState(null);
   const [qty, setQty] = useState({});
   const [busy, setBusy] = useState(false);
@@ -5681,9 +5773,23 @@ function SupplyShip({ order, items, stock, onClose, onDone }) {
   if (!lines) return null;
   const send = async () => {
     const ls = lines.map((l) => ({ item_id: l.item_id, qty: Number(qty[l.item_id]) || 0 })).filter((l) => l.qty > 0);
+    const partial = lines.some((l) => Number(qty[l.item_id] || 0) !== Number(l.qty_req));
     setBusy(true);
-    try { await shipOrder(order.id, order.salon_key, ls); pushToast({ title: "Відправлено", body: salonByKey(order.salon_key)?.city }); onDone(); }
-    catch (e) { alert(e.message || e); setBusy(false); }
+    try {
+      await shipOrder(order.id, order.salon_key, ls);
+      pushToast({ title: "Відправлено", body: salonByKey(order.salon_key)?.city });
+      notify({
+        recipient: order.salon_key, kind: "supply",
+        title: "Замовлення зі складу відправлено",
+        body: `${ls.length} поз.${partial ? " · є розбіжності з замовленням" : ""} — прийміть у «Мої замовлення»`,
+        actor: cabKey || "", link: "warehouse",
+      });
+      notifyWhManagers(cabKey, {
+        kind: "supply", title: `Замовлення відправлено: ${salonByKey(order.salon_key)?.city}`,
+        body: `${ls.length} поз.`, actor: cabKey || "", link: "warehouse",
+      });
+      onDone();
+    } catch (e) { pushToast({ title: "Не вдалося відправити", body: String(e.message || e) }); setBusy(false); }
   };
   return createPortal(
     <div className="modal-overlay" onClick={() => !busy && onClose()}>
@@ -5785,12 +5891,17 @@ function SupplyActsView({ warehouse, items }) {
   const byId = Object.fromEntries((items || []).map((i) => [i.id, i]));
   useEffect(() => { listActs({ warehouse, kind: kind || undefined }).then(setActs).catch(() => setActs([])); }, [warehouse, kind]);
   const signOf = (k) => (k === "writeoff" || k === "shipment" ? "−" : k === "adjust" ? "" : "+");
+  const isSalon = warehouse && warehouse !== CENTRAL;
+  const kinds = isSalon
+    ? Object.entries(ACT_KIND).filter(([k]) => k !== "shipment")
+    : Object.entries(ACT_KIND);
   return (
     <div className="wh-view">
+      {isSalon && <p className="ov-sub">Прихід зі складу, списання та коригування по вашому салону</p>}
       <div className="wh-bar">
         <select className="inv-toolbar-sel" value={kind} onChange={(e) => setKind(e.target.value)}>
           <option value="">усі акти</option>
-          {Object.entries(ACT_KIND).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          {kinds.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
       </div>
       {acts === null ? <div className="loading">…</div> : acts.length === 0 ? <p className="hint">Актів немає.</p> : (
@@ -5800,7 +5911,7 @@ function SupplyActsView({ warehouse, items }) {
               <div className="wh-act-top">
                 <span className="wh-act-kind">{ACT_KIND[a.kind]}</span>
                 <span className="wh-act-sum">{signOf(a.kind)}{suahN(a.total)} ₴</span>
-                <span className="wh-act-reason">{a.counterparty || a.reason || (a.order_id ? "замовлення салону" : "")}</span>
+                <span className="wh-act-reason">{whName(a.counterparty) || a.reason || (a.order_id ? "замовлення салону" : "")}</span>
                 <span className="wh-act-at">{fmtDate(a.created_at)}</span>
               </div>
               {open === a.id && <WhActLines actId={a.id} byId={byId} sign={signOf(a.kind)} />}
@@ -5837,7 +5948,7 @@ function SupplyModule({ cab }) {
 
   const subs = [];
   if (manageWh) subs.push(["central", "Основний склад"], ["incoming", "Замовлення салонів"], ["acts", "Складські акти"], ["items", "Довідник"]);
-  if (salonKey) subs.push(["mine", "Мій склад"], ["order", "Замовити"], ["myorders", "Мої замовлення"], ["writeoff", "Акт списання"]);
+  if (salonKey) subs.push(["mine", "Мій склад"], ["order", "Замовити"], ["myorders", "Мої замовлення"], ["writeoff", "Акт списання"], ["salonacts", "Рух складу"]);
   if (isTm) subs.push(["terr", "Склади території"], ["torders", "Замовлення території"]);
   const [tab, setTab] = useState(subs[0]?.[0] || "central");
 
@@ -5851,14 +5962,15 @@ function SupplyModule({ cab }) {
         {subs.map(([k, l]) => <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>)}
       </div>
 
-      {tab === "central" && <SupplyCentral items={items} stock={stock} canManage={manageWh} onReload={reload} />}
-      {tab === "items" && <SupplyItemsView items={items} canManage={manageWh} onReload={reload} />}
+      {tab === "central" && <SupplyCentral items={items} stock={stock} canManage={manageWh} cabKey={cab.key} onReload={reload} />}
+      {tab === "items" && <SupplyItemsView canManage={manageWh} onReload={reload} />}
       {tab === "acts" && <SupplyActsView warehouse={CENTRAL} items={items} />}
-      {tab === "incoming" && <SupplyOrders scope="incoming" items={items} stock={stock} onReload={reload} onEditDraft={() => {}} />}
+      {tab === "incoming" && <SupplyOrders scope="incoming" cabKey={cab.key} items={items} stock={stock} onReload={reload} onEditDraft={() => {}} />}
       {tab === "mine" && <SupplySalonStock salonKey={salonKey} items={items} stock={stock} onOrderAll={goOrder} />}
       {tab === "order" && <SupplyOrderBuilder salonKey={salonKey} items={items} stock={stock} order={editOrder} prefill={orderPrefill} onDone={() => { setOrderPrefill(null); setEditOrder(null); reload(); setTab("myorders"); }} />}
-      {tab === "myorders" && <SupplyOrders scope="mine" salonKey={salonKey} items={items} stock={stock} onReload={reload} onEditDraft={(o) => { orderLines(o.id).then((ls) => { setEditOrder({ ...o, lines: ls }); setOrderPrefill(null); setTab("order"); }); }} />}
+      {tab === "myorders" && <SupplyOrders scope="mine" salonKey={salonKey} cabKey={cab.key} items={items} stock={stock} onReload={reload} onEditDraft={(o) => { orderLines(o.id).then((ls) => { setEditOrder({ ...o, lines: ls }); setOrderPrefill(null); setTab("order"); }); }} />}
       {tab === "writeoff" && <SupplyWriteoff salonKey={salonKey} items={items} stock={stock} onReload={reload} />}
+      {tab === "salonacts" && <SupplyActsView warehouse={salonKey} items={items} />}
       {tab === "terr" && <SupplyTerritory tmKey={cab.tmKey || cab.key} items={items} stock={stock} />}
       {tab === "torders" && <SupplyOrders scope="territory" tmKey={cab.tmKey || cab.key} items={items} stock={stock} onReload={reload} onEditDraft={() => {}} />}
     </div>
@@ -6042,6 +6154,16 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
 
   const [activeReq, setActive] = useState(items[0].key);
   const [navOpen, setNavOpen] = useState(false); // мобільна шухляда
+
+  // клік по сповіщенню → відкрити відповідний модуль
+  useEffect(() => {
+    const onNav = (e) => {
+      const key = e.detail;
+      if (key && byKey[key]) { setActive(key); setNavOpen(false); if (nav.hidden.includes(key)) nav.toggleHidden(key); }
+    };
+    navBus?.addEventListener("nav", onNav);
+    return () => navBus?.removeEventListener("nav", onNav);
+  }, [byKey, nav]);
   // якщо обраний пункт приховано — показуємо перший видимий (без ефекту, прямо при рендері)
   const active = (!editNav && !visibleItems.some((m) => m.key === activeReq))
     ? (visibleItems[0]?.key ?? activeReq)
@@ -7025,9 +7147,12 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .notif-clear{background:none;border:none;color:var(--gold);font-size:12px;cursor:pointer;font-family:inherit;}
 .notif-list{display:flex;flex-direction:column;}
 .notif-empty{padding:26px 15px;text-align:center;color:var(--muted);font-size:13px;}
-.notif-item{display:flex;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line);align-items:flex-start;}
+.notif-item{display:flex;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line);align-items:flex-start;width:100%;text-align:left;background:none;border-left:none;border-right:none;border-top:none;font-family:inherit;cursor:default;}
 .notif-item:last-child{border-bottom:none;}
 .notif-item.notif-unread{background:rgba(190,138,46,.07);}
+.notif-item.is-link{cursor:pointer;}
+.notif-item.is-link:hover{background:rgba(190,138,46,.12);}
+.notif-item.is-link .notif-body time{color:var(--gold);}
 .notif-ic{color:var(--gold);flex-shrink:0;margin-top:1px;}
 .notif-body{min-width:0;}
 .notif-body b{display:block;font-size:13px;color:var(--ink);font-weight:600;}
@@ -7641,12 +7766,21 @@ td.sh.sh-plan{font-weight:400;}
 .wh-ord.submitted{border-left:3px solid var(--gold);}
 .wh-ord.shipped{border-left:3px solid var(--positive);}
 .wh-ord-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
-.wh-ord-nm{font-weight:600;color:var(--ink);font-size:13px;}
-.wh-ord-st{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:999px;background:var(--surface-alt);color:var(--muted);text-transform:uppercase;letter-spacing:.03em;}
-.wh-ord.submitted .wh-ord-st{background:rgba(190,138,46,.14);color:var(--gold);}
-.wh-ord.shipped .wh-ord-st{background:rgba(60,107,74,.14);color:var(--positive);}
+.wh-ord-nm{font-weight:600;color:var(--ink);font-size:13px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.wh-ord-cnt{font-weight:400;color:var(--faint);font-family:'IBM Plex Mono',monospace;font-size:11px;}
+.wh-ord-warn{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:var(--negative);background:rgba(179,58,58,.12);padding:2px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.02em;}
+.wh-ord-st{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;padding:3px 10px;border-radius:999px;background:var(--surface-alt);color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+.wh-ord-st.st-draft{background:var(--surface-alt);color:var(--faint);}
+.wh-ord-st.st-sub{background:rgba(190,138,46,.16);color:var(--gold);}
+.wh-ord-st.st-ship{background:rgba(46,120,180,.16);color:#3c8dc9;}
+.wh-ord-st.st-recv{background:rgba(60,107,74,.16);color:var(--positive);}
 .wh-ord-at{margin-left:auto;font-size:11px;color:var(--faint);font-family:'IBM Plex Mono',monospace;}
 .wh-ord-act{display:flex;gap:10px;align-items:center;margin-top:7px;}
+.wh-mismatch>td{background:rgba(179,58,58,.09);color:var(--negative);}
+.wh-mismatch-note{display:flex;align-items:center;gap:6px;color:var(--negative);}
+.wh-arch{opacity:.5;}
+.wh-row-act{display:flex;gap:8px;justify-content:flex-end;}
+.wh-link.danger{color:var(--negative);}
 
 .wh-acts{display:flex;flex-direction:column;gap:6px;}
 .wh-act{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px 13px;cursor:pointer;}
