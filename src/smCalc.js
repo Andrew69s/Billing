@@ -34,7 +34,7 @@ export function emptySmData() {
     ppi: { ppiRevenue: 0, planClosed: false },
     record: { monthlyTo: 0, prevRecord: 0 },
     quarterly: { threeOfThree: false, last3SalarySum: 0 },
-    adj: { amount: 0, comment: "", advance: 0, official: 0, birthdays: 0 },
+    adj: { amount: 0, comment: "", advance: 0, official: 0, birthdays: 0, inventory: 0, ownUse: 0 },
 
     screenshots: {},
     submittedAt: null,

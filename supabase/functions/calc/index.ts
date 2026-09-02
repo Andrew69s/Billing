@@ -281,12 +281,14 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1) {
   const quarterly = calcQuarterly(data.quarterly);
   const adj = data.adj?.amount || 0;
   const advance = data.adj?.advance || 0;
-  const official = data.adj?.official || 0;   // Офіційно на картку
-  const birthdays = data.adj?.birthdays || 0; // Дні народження
+  const official = data.adj?.official || 0;     // Офіційно на картку
+  const birthdays = data.adj?.birthdays || 0;   // Дні народження
+  const inventory = data.adj?.inventory || 0;   // Інвентаризація (нестача)
+  const ownUse = data.adj?.ownUse || 0;         // Товар для власних потреб
   const grossTotal = baseAdjusted + mgr.subtotal + bonus.subtotal + ppi.bonus + record.bonus + quarterly + adj;
-  const deducted = advance + official + birthdays;
+  const deducted = advance + official + birthdays + inventory + ownUse;
   const total = grossTotal - deducted;
-  return { daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate, mgr, bonus, ppi, record, quarterly, adj, advance, official, birthdays, grossTotal, deducted, total };
+  return { daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate, mgr, bonus, ppi, record, quarterly, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total };
 }
 
 // ---------- тексти «Умови» (заповнюються з src/conditions.js) ----------

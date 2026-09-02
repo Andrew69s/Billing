@@ -2122,7 +2122,9 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, deductEditab
   const official = data.adj.official || 0;
   const advance = data.adj.advance || 0;
   const birthdays = data.adj.birthdays || 0;
-  const accrued = calc.grossTotal != null ? calc.grossTotal : grand + advance + official + birthdays;
+  const inventory = data.adj.inventory || 0;
+  const ownUse = data.adj.ownUse || 0;
+  const accrued = calc.grossTotal != null ? calc.grossTotal : grand + advance + official + birthdays + inventory + ownUse;
   const deductFields = editable || deductEditable;
 
   const baseItems = [
@@ -2179,6 +2181,12 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, deductEditab
           </div>
           <div className="adj-row"><span>Дні народження</span>
             <NumInput className="adj-amount" value={data.adj.birthdays} onChange={(v) => onAdjChange({ ...data.adj, birthdays: v })} /><span>грн</span>
+          </div>
+          <div className="adj-row"><span>Інвентаризація</span>
+            <NumInput className="adj-amount" value={data.adj.inventory} onChange={(v) => onAdjChange({ ...data.adj, inventory: v })} /><span>грн</span>
+          </div>
+          <div className="adj-row"><span>Товар для власних потреб</span>
+            <NumInput className="adj-amount" value={data.adj.ownUse} onChange={(v) => onAdjChange({ ...data.adj, ownUse: v })} /><span>грн</span>
             {onSaveAdj && <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>}
           </div>
         </>
@@ -2187,6 +2195,8 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, deductEditab
           {official !== 0 && <div className="summary-row"><span>Офіційно на картку</span><b>-{fmt(official)}</b></div>}
           {advance !== 0 && <div className="summary-row"><span>Аванс готівка</span><b>-{fmt(advance)}</b></div>}
           {birthdays !== 0 && <div className="summary-row"><span>Дні народження</span><b>-{fmt(birthdays)}</b></div>}
+          {inventory !== 0 && <div className="summary-row"><span>Інвентаризація</span><b>-{fmt(inventory)}</b></div>}
+          {ownUse !== 0 && <div className="summary-row"><span>Товар для власних потреб</span><b>-{fmt(ownUse)}</b></div>}
         </>
       )}
 
