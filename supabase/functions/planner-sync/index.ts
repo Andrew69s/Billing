@@ -50,20 +50,26 @@ const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
 
 const CP = ["12", "15", "18", "20"];
-function lastCP(v: any, m: string): number {
-  for (let i = CP.length - 1; i >= 0; i--) {
-    const x = v[`${m}_${CP[i]}`];
-    if (x != null && x !== 0) return Number(x) || 0;
-  }
-  return Number(v[`${m}_20`]) || 0;
+/* максимум по чекпойнтах дня. Планер бере останній заповнений (_lastCP),
+   але накопичувальний підсумок не може падати — якщо пізніший чекпойнт
+   введено меншим за раніший (помилка введення), беремо найбільший. */
+function maxCP(v: any, m: string): number {
+  let mx = 0;
+  for (const cp of CP) { const x = Number(v[`${m}_${cp}`]) || 0; if (x > mx) mx = x; }
+  return mx;
 }
 function dayFact(v: any) {
+  // оборот = ТО осн.асортименту + LiqPay − повернення (як dayFactValue у планері)
+  const assort = maxCP(v, "assort") + maxCP(v, "liqpay") - (Number(v.retOS) || 0);
+  const ez = maxCP(v, "ez") - (Number(v.retEZ) || 0);
+  const cheky = (v.cheky_20 != null || v.cheky_12 != null) ? maxCP(v, "cheky") : (Number(v.cheky) || 0);
+  const dzvinky = (v.dzvinky_20 != null || v.dzvinky_12 != null) ? maxCP(v, "dzvinky") : (Number(v.dzvinky) || 0);
   return {
-    assort: Math.round(lastCP(v, "assort") - (Number(v.retOS) || 0)),
-    ez: Math.round(lastCP(v, "ez") - (Number(v.retEZ) || 0)),
-    cheky: (v.cheky_20 != null || v.cheky_12 != null) ? Math.round(lastCP(v, "cheky")) : Math.round(Number(v.cheky) || 0),
+    assort: Math.round(assort),
+    ez: Math.round(ez),
+    cheky: Math.round(cheky),
     bn: Math.round(Number(v.bn) || 0),
-    dzvinky: (v.dzvinky_20 != null || v.dzvinky_12 != null) ? Math.round(lastCP(v, "dzvinky")) : Math.round(Number(v.dzvinky) || 0),
+    dzvinky: Math.round(dzvinky),
   };
 }
 const isEmpty = (f: ReturnType<typeof dayFact>) =>
