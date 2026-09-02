@@ -1099,12 +1099,13 @@ function SummaryBlock({ id, title, note, total, items, expanded, onToggle }) {
   );
 }
 
-function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl, calc }) {
+function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, deductEditable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl, calc }) {
   const advance = adj.advance || 0;
   const official = adj.official || 0;
   const birthdays = adj.birthdays || 0;
   const accrued = calc.floored + (isLastMonthOfQuarter ? (qbonus.bonus41 + qbonus.bonus42) : 0) + (adj.amount || 0);
   const grandTotal = accrued - advance - official - birthdays;
+  const deductFields = editable || deductEditable;
 
   const b1Items = [
     { label: "1.1 Виконання плану продажів", amount: calc.b1.sales },
@@ -1147,14 +1148,20 @@ function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuart
       )}
 
       {editable ? (
+        <div className="adj-row">
+          <span>Додатково (керівник)</span>
+          <input className="adj-comment" placeholder="напр. премія за ініціативу" value={adj.comment} onChange={(e) => onAdjChange({ ...adj, comment: e.target.value })} />
+          <NumInput className="adj-amount" value={adj.amount} onChange={(v) => onAdjChange({ ...adj, amount: v })} />
+          <span>грн</span>
+        </div>
+      ) : (adj.amount || 0) !== 0 && (
+        <div className="summary-row"><span>Додатково{adj.comment ? ` (${adj.comment})` : ""}</span><b>{fmt(adj.amount)}</b></div>
+      )}
+
+      <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
+
+      {deductFields ? (
         <>
-          <div className="adj-row">
-            <span>Додатково (керівник)</span>
-            <input className="adj-comment" placeholder="напр. премія за ініціативу" value={adj.comment} onChange={(e) => onAdjChange({ ...adj, comment: e.target.value })} />
-            <NumInput className="adj-amount" value={adj.amount} onChange={(v) => onAdjChange({ ...adj, amount: v })} />
-            <span>грн</span>
-          </div>
-          <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
           <div className="adj-row"><span>Офіційно на картку</span>
             <NumInput className="adj-amount" value={adj.official} onChange={(v) => onAdjChange({ ...adj, official: v })} /><span>грн</span>
           </div>
@@ -1163,15 +1170,11 @@ function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuart
           </div>
           <div className="adj-row"><span>Дні народження</span>
             <NumInput className="adj-amount" value={adj.birthdays} onChange={(v) => onAdjChange({ ...adj, birthdays: v })} /><span>грн</span>
-            <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>
+            {onSaveAdj && <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>}
           </div>
         </>
       ) : (
         <>
-          {(adj.amount || 0) !== 0 && (
-            <div className="summary-row"><span>Додатково{adj.comment ? ` (${adj.comment})` : ""}</span><b>{fmt(adj.amount)}</b></div>
-          )}
-          <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
           {official !== 0 && <div className="summary-row"><span>Офіційно на картку</span><b>-{fmt(official)}</b></div>}
           {advance !== 0 && <div className="summary-row"><span>Аванс готівка</span><b>-{fmt(advance)}</b></div>}
           {birthdays !== 0 && <div className="summary-row"><span>Дні народження</span><b>-{fmt(birthdays)}</b></div>}
@@ -1265,6 +1268,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   const [tab, setTab] = useState("form");
   const [expandedBlock, setExpandedBlock] = useState(null);
   const skipSave = React.useRef(true);
+  const skipAdj = React.useRef(true);
 
   const qKey = ymToQuarter(ym);
   const qMonths = quarterMonths(qKey);
@@ -1275,6 +1279,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
     let active = true;
     setLoading(true);
     skipSave.current = true;
+    skipAdj.current = true;
     setTab("form");
     Promise.all([
       loadData(tmKey, ym),
@@ -1311,6 +1316,13 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
     const t = setTimeout(async () => { await saveData(tmKey, ym, data); setSavedAt(new Date()); }, 2500);
     return () => clearTimeout(t);
   }, [data, loading, tmKey, ym]);
+  // автозбереження утримань (Офіційно/Аванс/Дні народження) — окреме сховище adj:*
+  useEffect(() => {
+    if (loading) return undefined;
+    if (skipAdj.current) { skipAdj.current = false; return undefined; }
+    const t = setTimeout(() => { saveAdj(tmKey, ym, adj).catch(() => {}); }, 1200);
+    return () => clearTimeout(t);
+  }, [adj, loading, tmKey, ym]);
 
   const submit = async () => {
     if (!confirm(`Подати ЗП за ${monthLabel(ym)} на погодження керівнику?`)) return;
@@ -1391,7 +1403,8 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
             onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} />
           <SalarySummary
             data={data} grade={grade} tmKey={tmKey} ym={ym} adj={adj} qbonus={qbonus} isLastMonthOfQuarter={isLastMonthOfQuarter}
-            expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)} calc={calc}
+            expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} deductEditable onAdjChange={setAdj}
+            monthLbl={monthLabel(ym)} calc={calc}
           />
           <div className="save-bar">
             <span className="save-hint">
@@ -2104,12 +2117,13 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
 /* =========================================================
    СМ · ЗВЕДЕННЯ ЗП
 ========================================================= */
-function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
+function SmSummary({ data, calc, expandedBlock, onToggle, editable, deductEditable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
   const grand = calc.total;
   const official = data.adj.official || 0;
   const advance = data.adj.advance || 0;
   const birthdays = data.adj.birthdays || 0;
   const accrued = calc.grossTotal != null ? calc.grossTotal : grand + advance + official + birthdays;
+  const deductFields = editable || deductEditable;
 
   const baseItems = [
     { label: `База (${calc.category} · ${planBracketLabel(calc.bracket)})`, amount: calc.baseRaw },
@@ -2143,14 +2157,20 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange,
       )}
 
       {editable ? (
+        <div className="adj-row">
+          <span>Додатково (ТМ)</span>
+          <input className="adj-comment" placeholder="коментар" value={data.adj.comment} onChange={(e) => onAdjChange({ ...data.adj, comment: e.target.value })} />
+          <NumInput className="adj-amount" value={data.adj.amount} onChange={(v) => onAdjChange({ ...data.adj, amount: v })} />
+          <span>грн</span>
+        </div>
+      ) : (data.adj.amount || 0) !== 0 && (
+        <div className="summary-row"><span>Додатково{data.adj.comment ? ` (${data.adj.comment})` : ""}</span><b>{fmt(data.adj.amount)}</b></div>
+      )}
+
+      <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
+
+      {deductFields ? (
         <>
-          <div className="adj-row">
-            <span>Додатково (ТМ)</span>
-            <input className="adj-comment" placeholder="коментар" value={data.adj.comment} onChange={(e) => onAdjChange({ ...data.adj, comment: e.target.value })} />
-            <NumInput className="adj-amount" value={data.adj.amount} onChange={(v) => onAdjChange({ ...data.adj, amount: v })} />
-            <span>грн</span>
-          </div>
-          <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
           <div className="adj-row"><span>Офіційно на картку</span>
             <NumInput className="adj-amount" value={data.adj.official} onChange={(v) => onAdjChange({ ...data.adj, official: v })} /><span>грн</span>
           </div>
@@ -2159,15 +2179,11 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange,
           </div>
           <div className="adj-row"><span>Дні народження</span>
             <NumInput className="adj-amount" value={data.adj.birthdays} onChange={(v) => onAdjChange({ ...data.adj, birthdays: v })} /><span>грн</span>
-            <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>
+            {onSaveAdj && <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>}
           </div>
         </>
       ) : (
         <>
-          {(data.adj.amount || 0) !== 0 && (
-            <div className="summary-row"><span>Додатково{data.adj.comment ? ` (${data.adj.comment})` : ""}</span><b>{fmt(data.adj.amount)}</b></div>
-          )}
-          <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
           {official !== 0 && <div className="summary-row"><span>Офіційно на картку</span><b>-{fmt(official)}</b></div>}
           {advance !== 0 && <div className="summary-row"><span>Аванс готівка</span><b>-{fmt(advance)}</b></div>}
           {birthdays !== 0 && <div className="summary-row"><span>Дні народження</span><b>-{fmt(birthdays)}</b></div>}
@@ -2444,7 +2460,7 @@ function SmView({ salon, embedded }) {
             data={data} update={update} calc={calc} area={salon.area} showAmounts
             onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} isQuarterEnd={isQuarterEnd}
           />
-          <SmSummary data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} monthLbl={monthLabel(ym)} />
+          <SmSummary data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} deductEditable onAdjChange={(a) => setData((p) => ({ ...p, adj: a }))} monthLbl={monthLabel(ym)} />
           <div className="save-bar">
             <span className="save-hint">
               {saving ? "Зберігаю…" : savedAt ? `Збережено о ${savedAt.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}` : "Зміни зберігаються автоматично"}
