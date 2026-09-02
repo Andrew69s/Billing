@@ -12,6 +12,7 @@ import {
   Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
   Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
   Wrench, MessageSquare, Send, Banknote, Menu,
+  Warehouse, PackagePlus, TrendingDown, Minus,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -58,6 +59,13 @@ import {
   listCashDays, outstandingBySalon, setCashDay, cashHandover, listHandovers, subscribeCash,
   yesterdayISO as cashYesterday,
 } from "./lib/cash.js";
+import {
+  SUPPLY_CATEGORIES, SUPPLY_UNITS, CENTRAL, ACT_KIND, uah as suah, uahN as suahN,
+  listItems, upsertItem, setPrice, listStock, stockMap, stockState,
+  listActs, actLines, writeoffLines, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
+  shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
+  subscribeSupply,
+} from "./lib/supply.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
@@ -5191,6 +5199,692 @@ function ManagerCashTab() {
   );
 }
 
+/* ==================== СКЛАД ГОСПОДАРСЬКИХ ПОТРЕБ ==================== */
+const whName = (w) => (w === CENTRAL ? "Основний склад" : salonByKey(w) ? salonLabel(salonByKey(w)) : w);
+const catRank = (c) => { const i = SUPPLY_CATEGORIES.indexOf(c); return i < 0 ? 99 : i; };
+const ORDER_ST = { draft: "чернетка", submitted: "подано", shipped: "відправлено", received: "отримано" };
+
+function useSupply() {
+  const [items, setItems] = useState(null);
+  const [stock, setStock] = useState([]);
+  const reload = async () => {
+    const [it, st] = await Promise.all([listItems().catch(() => []), listStock().catch(() => [])]);
+    setItems(it); setStock(st);
+  };
+  useEffect(() => { reload(); return subscribeSupply(reload); }, []);
+  return { items, stock, reload };
+}
+
+/* --- рядок вводу товару (для приходу / списання / замовлення) --- */
+function SupplyLineRow({ items, line, exclude, onChange, onRemove, priceCol }) {
+  const opts = items.filter((i) => i.id === line.item_id || !exclude.has(i.id));
+  return (
+    <div className="wh-line">
+      <select value={line.item_id} onChange={(e) => onChange({ ...line, item_id: e.target.value })}>
+        <option value="">— позиція —</option>
+        {opts.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+      </select>
+      <NumInput className="wh-line-qty" allowEmpty placeholder="к-ть" value={line.qty} onChange={(v) => onChange({ ...line, qty: v })} />
+      {priceCol && (
+        <NumInput className="wh-line-qty" allowEmpty placeholder="ціна" value={line.unit_cost}
+          onChange={(v) => onChange({ ...line, unit_cost: v })} />
+      )}
+      <button className="wh-line-x" onClick={onRemove}><X size={13} /></button>
+    </div>
+  );
+}
+
+/* --- Основний склад --- */
+function SupplyCentral({ items, stock, canManage, onReload }) {
+  const [cat, setCat] = useState("");
+  const [q, setQ] = useState("");
+  const [lowOnly, setLowOnly] = useState(false);
+  const [receiptFrom, setReceiptFrom] = useState(null); // null | [] | prefill lines
+  const sm = stockMap(stock, CENTRAL);
+  const rows = items
+    .filter((i) => (!cat || i.category === cat) && (!q || i.name.toLowerCase().includes(q.toLowerCase())))
+    .map((i) => {
+      const qty = sm[i.id] || 0;
+      const need = Math.max(0, i.min_central - qty);
+      return { i, qty, need, state: stockState(qty, i.min_central), value: qty * i.unit_cost };
+    })
+    .filter((r) => !lowOnly || r.need > 0)
+    .sort((a, b) => catRank(a.i.category) - catRank(b.i.category) || a.i.sort - b.i.sort);
+  const totalValue = items.reduce((s, i) => s + (sm[i.id] || 0) * i.unit_cost, 0);
+  const reorder = items.map((i) => ({ i, need: Math.max(0, i.min_central - (sm[i.id] || 0)) })).filter((r) => r.need > 0);
+  const reorderSum = reorder.reduce((s, r) => s + r.need * r.i.unit_cost, 0);
+
+  return (
+    <div className="wh-view">
+      <div className="wh-bar">
+        <input className="wh-search" placeholder="Пошук позиції…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="inv-toolbar-sel" value={cat} onChange={(e) => setCat(e.target.value)}>
+          <option value="">усі категорії</option>
+          {SUPPLY_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <label className="wh-check"><input type="checkbox" checked={lowOnly} onChange={(e) => setLowOnly(e.target.checked)} /> лише «горить»</label>
+        {canManage && <button className="btn-secondary small" onClick={() => setReceiptFrom([])}><PackagePlus size={14} /> Прихід</button>}
+      </div>
+
+      {reorder.length > 0 && (
+        <div className="wh-reorder">
+          <b>Потрібно дозамовити:</b> {reorder.length} поз. на <b>{suah(reorderSum)}</b>
+          {canManage && (
+            <button className="wh-link" onClick={() => setReceiptFrom(reorder.map((r) => ({ item_id: r.i.id, qty: String(r.need), unit_cost: "" })))}>
+              Прихід за списком →
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="wh-tw">
+        <table className="wh-tbl">
+          <thead><tr><th>Позиція</th><th>Од.</th><th>Ціна</th><th>Залишок</th><th>Мін</th><th>Дозамовити</th><th>Вартість</th></tr></thead>
+          <tbody>
+            {rows.map(({ i, qty, need, state, value }) => (
+              <tr key={i.id} className={`st-${state}`}>
+                <td className="wh-nm">{i.name}<span className="wh-cat">{i.category}</span></td>
+                <td>{i.unit}</td>
+                <td className="num">
+                  {canManage
+                    ? <NumInput className="wh-price" value={i.unit_cost} onChange={(v) => setPrice(i.id, v).then(onReload).catch((e) => alert(e.message))} />
+                    : suahN(i.unit_cost)}
+                </td>
+                <td className={`num ${qty < 0 ? "wh-neg" : ""}`}>{qty}</td>
+                <td className="num muted">{i.min_central}</td>
+                <td className="num">{need > 0 ? <span className="wh-pill lo">−{need}</span> : "—"}</td>
+                <td className="num">{suahN(value)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr><td>Разом запас центрального складу</td><td /><td /><td /><td /><td className="num">{suahN(reorderSum)}</td><td className="num">{suahN(totalValue)}</td></tr></tfoot>
+        </table>
+      </div>
+
+      {receiptFrom && (
+        <SupplyReceipt items={items} warehouse={CENTRAL} prefill={receiptFrom.length ? receiptFrom : null}
+          onClose={() => setReceiptFrom(null)} onDone={() => { setReceiptFrom(null); onReload(); }} />
+      )}
+    </div>
+  );
+}
+
+/* --- Прихід (модалка) --- */
+function SupplyReceipt({ items, warehouse, prefill, onClose, onDone }) {
+  const [cp, setCp] = useState("");
+  const [lines, setLines] = useState(prefill || [{ item_id: "", qty: "", unit_cost: "" }]);
+  const [busy, setBusy] = useState(false);
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  const set = (idx, ln) => setLines((ls) => ls.map((x, i) => (i === idx ? ln : x)));
+  const total = lines.reduce((s, l) => {
+    const c = l.unit_cost !== "" ? Number(l.unit_cost) : (byId[l.item_id]?.unit_cost || 0);
+    return s + (Number(l.qty) || 0) * c;
+  }, 0);
+  const submit = async () => {
+    const good = lines.filter((l) => l.item_id && Number(l.qty) > 0).map((l) => ({
+      item_id: l.item_id, qty: Number(l.qty),
+      unit_cost: l.unit_cost === "" ? undefined : Number(l.unit_cost),
+    }));
+    if (!good.length) return;
+    setBusy(true);
+    try { await whReceipt(warehouse, cp.trim(), good); pushToast({ title: "Прихід оформлено", body: suah(total) }); onDone(); }
+    catch (e) { alert(e.message || e); setBusy(false); }
+  };
+  return createPortal(
+    <div className="modal-overlay" onClick={() => !busy && onClose()}>
+      <div className="wh-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="wh-modal-h"><span>Прихід на {whName(warehouse)}</span><button className="modal-close" onClick={onClose}><X size={16} /></button></div>
+        <div className="wh-modal-b">
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>Постачальник / № накладної</span>
+            <input value={cp} onChange={(e) => setCp(e.target.value)} placeholder="напр. ФОП Іваненко, накл. №142" />
+          </label>
+          <div className="wh-lines">
+            {lines.map((l, i) => (
+              <SupplyLineRow key={i} items={items} line={l} exclude={new Set(lines.map((x) => x.item_id).filter((_, j) => j !== i))}
+                priceCol onChange={(ln) => set(i, ln)} onRemove={() => setLines((ls) => ls.filter((_, j) => j !== i))} />
+            ))}
+            <button className="wh-add" onClick={() => setLines((ls) => [...ls, { item_id: "", qty: "", unit_cost: "" }])}><Plus size={13} /> Ще позиція</button>
+          </div>
+          <div className="wh-modal-foot"><span>Сума</span><b>{suah(total)}</b></div>
+          <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? "…" : "Оформити прихід"}</button>
+          <p className="hint">Ціну можна лишити порожньою — візьметься з довідника. Якщо ввести іншу — довідник оновиться.</p>
+        </div>
+      </div>
+    </div>, document.body);
+}
+
+/* --- Довідник --- */
+function SupplyItemsView({ items, canManage, onReload }) {
+  const [form, setForm] = useState(null); // null | 'new' | item
+  return (
+    <div className="wh-view">
+      {canManage && !form && <button className="btn-secondary small" style={{ marginBottom: 12 }} onClick={() => setForm("new")}><Plus size={14} /> Нова позиція</button>}
+      {form && <SupplyItemForm item={form === "new" ? null : form} onClose={() => setForm(null)} onSaved={() => { setForm(null); onReload(); }} />}
+      <div className="wh-tw">
+        <table className="wh-tbl">
+          <thead><tr><th>Позиція</th><th>Категорія</th><th>Од.</th><th>Ціна</th><th>Мін центр</th><th>Мін салон</th><th /></tr></thead>
+          <tbody>
+            {[...items].sort((a, b) => catRank(a.category) - catRank(b.category) || a.sort - b.sort).map((i) => (
+              <tr key={i.id}>
+                <td className="wh-nm">{i.name}</td>
+                <td className="muted">{i.category}</td>
+                <td>{i.unit}</td>
+                <td className="num">{canManage
+                  ? <NumInput className="wh-price" value={i.unit_cost} onChange={(v) => setPrice(i.id, v).then(onReload).catch((e) => alert(e.message))} />
+                  : suahN(i.unit_cost)}</td>
+                <td className="num muted">{i.min_central}</td>
+                <td className="num muted">{i.min_salon}</td>
+                <td>{canManage && <button className="wh-link" onClick={() => setForm(i)}>ред.</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function SupplyItemForm({ item, onClose, onSaved }) {
+  const [f, setF] = useState(item || { name: "", category: "інше", unit: "шт", unit_cost: 0, min_central: 0, min_salon: 0, active: true, sort: 100 });
+  const [startQty, setStartQty] = useState("");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!f.name.trim()) return;
+    setBusy(true);
+    try {
+      const saved = await upsertItem({ ...f, name: f.name.trim(), unit_cost: Number(f.unit_cost) || 0, min_central: Number(f.min_central) || 0, min_salon: Number(f.min_salon) || 0 });
+      if (!item && startQty !== "" && Number(startQty) > 0) {
+        await whAdjust(CENTRAL, "стартовий залишок нової позиції", [{ item_id: saved.id, qty: Number(startQty) }]);
+      }
+      pushToast({ title: item ? "Позицію оновлено" : "Позицію додано" });
+      onSaved();
+    } catch (e) { alert(e.message || e); setBusy(false); }
+  };
+  return (
+    <div className="wh-form">
+      <div className="wh-form-grid">
+        <label className="over-field" style={{ gridColumn: "1/-1" }}><span>Назва</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></label>
+        <label className="over-field"><span>Категорія</span>
+          <select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}>{SUPPLY_CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
+        </label>
+        <label className="over-field"><span>Одиниця</span>
+          <select value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })}>{SUPPLY_UNITS.map((u) => <option key={u}>{u}</option>)}</select>
+        </label>
+        <label className="over-field"><span>Ціна, ₴</span><div className="field-input-wrap"><NumInput className="field-input" value={f.unit_cost} onChange={(v) => setF({ ...f, unit_cost: v })} /></div></label>
+        <label className="over-field"><span>Мін. на центр. складі</span><div className="field-input-wrap"><NumInput className="field-input" value={f.min_central} onChange={(v) => setF({ ...f, min_central: v })} /></div></label>
+        <label className="over-field"><span>Мін. на салоні</span><div className="field-input-wrap"><NumInput className="field-input" value={f.min_salon} onChange={(v) => setF({ ...f, min_salon: v })} /></div></label>
+        {!item && <label className="over-field"><span>Стартовий залишок центр. складу</span><div className="field-input-wrap"><NumInput className="field-input" allowEmpty value={startQty} onChange={setStartQty} /></div></label>}
+      </div>
+      <div className="wh-form-act">
+        <button className="btn-secondary small" onClick={onClose}>Скасувати</button>
+        <button className="btn-primary small" onClick={save} disabled={busy}>{busy ? "…" : "Зберегти"}</button>
+      </div>
+    </div>
+  );
+}
+
+/* --- Мій склад (салон) --- */
+function SupplySalonStock({ salonKey, items, stock, onOrderAll }) {
+  const sm = stockMap(stock, salonKey);
+  const rows = items.map((i) => {
+    const qty = sm[i.id] || 0;
+    return { i, qty, need: Math.max(0, i.min_salon - qty), state: stockState(qty, i.min_salon), value: qty * i.unit_cost };
+  }).sort((a, b) => catRank(a.i.category) - catRank(b.i.category) || a.i.sort - b.i.sort);
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  const need = rows.filter((r) => r.need > 0);
+  return (
+    <div className="wh-view">
+      <div className="wh-kpis">
+        <div className="wh-kpi"><span>Вартість мого запасу</span><b>{suah(total)}</b></div>
+        <div className={`wh-kpi ${need.length ? "attn" : ""}`}><span>Треба замовити</span><b>{need.length} поз.</b></div>
+      </div>
+      {need.length > 0 && <button className="btn-secondary small" style={{ margin: "4px 0 12px" }} onClick={() => onOrderAll(need.map((r) => ({ item_id: r.i.id, qty: String(r.need) })))}>Замовити все, що нижче мін</button>}
+      <div className="wh-tw">
+        <table className="wh-tbl">
+          <thead><tr><th>Позиція</th><th>Залишок</th><th>Мін</th><th>Замовити</th><th>Вартість</th></tr></thead>
+          <tbody>
+            {rows.map(({ i, qty, need: n, state, value }) => (
+              <tr key={i.id} className={`st-${state}`}>
+                <td className="wh-nm">{i.name}<span className="wh-cat">{i.category}</span></td>
+                <td className={`num ${qty < 0 ? "wh-neg" : ""}`}>{qty}</td>
+                <td className="num muted">{i.min_salon}</td>
+                <td className="num">{n > 0 ? <span className="wh-pill lo">{n}</span> : "—"}</td>
+                <td className="num">{suahN(value)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* --- Замовити (будівник замовлення) --- */
+function SupplyOrderBuilder({ salonKey, items, stock, order, prefill, onDone }) {
+  const sm = stockMap(stock, salonKey);
+  const [qty, setQty] = useState(() => {
+    const q = {};
+    (order?.lines || []).forEach((l) => { q[l.item_id] = String(l.qty_req); });
+    (prefill || []).forEach((l) => { q[l.item_id] = l.qty; });
+    return q;
+  });
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState("");
+  const lines = () => Object.entries(qty).filter(([, v]) => Number(v) > 0).map(([item_id, v]) => ({ item_id, qty: Number(v) }));
+  const sum = lines().reduce((s, l) => s + l.qty * (items.find((i) => i.id === l.item_id)?.unit_cost || 0), 0);
+  const shown = items.filter((i) => !q || i.name.toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => catRank(a.category) - catRank(b.category) || a.sort - b.sort);
+
+  const save = async (submit) => {
+    const ls = lines();
+    if (!ls.length) return;
+    setBusy(true);
+    try {
+      let id = order?.id;
+      if (id) await saveOrderLines(id, ls);
+      else { const o = await createOrder(salonKey, salonKey, ls); id = o.id; }
+      if (submit) await submitOrder(id);
+      pushToast({ title: submit ? "Замовлення подано" : "Чернетку збережено", body: `${ls.length} поз. · ${suah(sum)}` });
+      onDone();
+    } catch (e) { alert(e.message || e); setBusy(false); }
+  };
+
+  return (
+    <div className="wh-view">
+      <input className="wh-search" placeholder="Пошук позиції…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 10 }} />
+      <div className="wh-tw">
+        <table className="wh-tbl">
+          <thead><tr><th>Позиція</th><th>Залишок</th><th>Мін</th><th>Підказка</th><th>Замовити</th></tr></thead>
+          <tbody>
+            {shown.map((i) => {
+              const s = sm[i.id] || 0;
+              const sug = Math.max(0, i.min_salon - s);
+              return (
+                <tr key={i.id}>
+                  <td className="wh-nm">{i.name}<span className="wh-cat">{i.category}</span></td>
+                  <td className="num muted">{s}</td>
+                  <td className="num muted">{i.min_salon}</td>
+                  <td className="num">{sug > 0 ? <button className="wh-link" onClick={() => setQty((x) => ({ ...x, [i.id]: String(sug) }))}>+{sug}</button> : "—"}</td>
+                  <td className="num"><NumInput className="wh-price" allowEmpty value={qty[i.id] ?? ""} onChange={(v) => setQty((x) => ({ ...x, [i.id]: v }))} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="wh-modal-foot"><span>{lines().length} поз.</span><b>{suah(sum)}</b></div>
+      <div className="wh-form-act">
+        <button className="btn-secondary small" onClick={() => save(false)} disabled={busy}>Зберегти чернетку</button>
+        <button className="btn-primary small" onClick={() => save(true)} disabled={busy}>{busy ? "…" : "Подати замовлення"}</button>
+      </div>
+    </div>
+  );
+}
+
+/* --- Замовлення (списки) --- */
+function SupplyOrders({ scope, salonKey, tmKey, items, stock, onReload, onEditDraft }) {
+  const [orders, setOrders] = useState(null);
+  const [open, setOpen] = useState(null); // { order, lines }
+  const [ship, setShip] = useState(null); // order being shipped
+  const byId = Object.fromEntries((items || []).map((i) => [i.id, i]));
+  const load = async () => {
+    let list = [];
+    if (scope === "mine") list = await listOrders({ salonKey });
+    else if (scope === "incoming") list = (await listOrders({})).filter((o) => o.status !== "draft");
+    else list = (await listOrders({})).filter((o) => salonsOfTm(tmKey).some((s) => s.key === o.salon_key));
+    setOrders(list);
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [scope, salonKey]);
+  if (orders === null) return <div className="loading">Завантаження…</div>;
+  if (!orders.length) return <div className="admin-empty">Замовлень немає.</div>;
+
+  const openOrder = async (o) => setOpen({ order: o, lines: await orderLines(o.id) });
+  const receive = async (o) => {
+    const ls = await orderLines(o.id);
+    const recv = ls.map((l) => ({ item_id: l.item_id, qty: Number(l.qty_shipped ?? l.qty_req) || 0 }));
+    if (!confirm(`Підтвердити отримання замовлення (${recv.length} поз.)?`)) return;
+    try { await receiveOrder(o.id, o.salon_key, recv); pushToast({ title: "Отримання підтверджено" }); load(); onReload && onReload(); }
+    catch (e) { alert(e.message || e); }
+  };
+
+  return (
+    <div className="wh-view">
+      <div className="wh-ord-list">
+        {orders.map((o) => (
+          <div className={`wh-ord ${o.status}`} key={o.id}>
+            <div className="wh-ord-top">
+              <span className="wh-ord-nm">{scope === "mine" ? monthLabel(o.created_at.slice(0, 7)) : salonByKey(o.salon_key)?.city}</span>
+              <span className="wh-ord-st">{ORDER_ST[o.status]}</span>
+              <span className="wh-ord-at">{fmtDate(o.created_at)}</span>
+            </div>
+            <div className="wh-ord-act">
+              <button className="wh-link" onClick={() => openOrder(o)}>позиції</button>
+              {scope === "mine" && o.status === "draft" && <button className="wh-link" onClick={() => onEditDraft(o)}>редагувати</button>}
+              {scope === "mine" && o.status === "draft" && <button className="wh-link" onClick={() => { if (confirm("Видалити чернетку?")) deleteOrder(o.id).then(load); }}>видалити</button>}
+              {scope === "mine" && o.status === "shipped" && <button className="btn-primary small" onClick={() => receive(o)}>Прийняти</button>}
+              {scope === "incoming" && o.status === "submitted" && <button className="btn-primary small" onClick={() => setShip(o)}>Відправити</button>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {open && (
+        <div className="modal-overlay" onClick={() => setOpen(null)}>
+          <div className="wh-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="wh-modal-h"><span>{salonByKey(open.order.salon_key)?.city} · {ORDER_ST[open.order.status]}</span><button className="modal-close" onClick={() => setOpen(null)}><X size={16} /></button></div>
+            <div className="wh-modal-b">
+              <table className="wh-tbl"><tbody>
+                {open.lines.map((l) => (
+                  <tr key={l.item_id}><td className="wh-nm">{byId[l.item_id]?.name}</td>
+                    <td className="num">замовлено {l.qty_req}</td>
+                    <td className="num">{l.qty_shipped != null ? `відправлено ${l.qty_shipped}` : ""}</td></tr>
+                ))}
+              </tbody></table>
+            </div>
+          </div>
+        </div>
+      )}
+      {ship && <SupplyShip order={ship} items={items} stock={stock} onClose={() => setShip(null)} onDone={() => { setShip(null); load(); onReload && onReload(); }} />}
+    </div>
+  );
+}
+
+function SupplyShip({ order, items, stock, onClose, onDone }) {
+  const [lines, setLines] = useState(null);
+  const [qty, setQty] = useState({});
+  const [busy, setBusy] = useState(false);
+  const cs = stockMap(stock, CENTRAL);
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  useEffect(() => { orderLines(order.id).then((ls) => { setLines(ls); const q = {}; ls.forEach((l) => { q[l.item_id] = String(Math.min(l.qty_req, cs[l.item_id] ?? l.qty_req)); }); setQty(q); }); }, [order.id]);
+  if (!lines) return null;
+  const send = async () => {
+    const ls = lines.map((l) => ({ item_id: l.item_id, qty: Number(qty[l.item_id]) || 0 })).filter((l) => l.qty > 0);
+    setBusy(true);
+    try { await shipOrder(order.id, order.salon_key, ls); pushToast({ title: "Відправлено", body: salonByKey(order.salon_key)?.city }); onDone(); }
+    catch (e) { alert(e.message || e); setBusy(false); }
+  };
+  return createPortal(
+    <div className="modal-overlay" onClick={() => !busy && onClose()}>
+      <div className="wh-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="wh-modal-h"><span>Відправити → {salonByKey(order.salon_key)?.city}</span><button className="modal-close" onClick={onClose}><X size={16} /></button></div>
+        <div className="wh-modal-b">
+          <table className="wh-tbl"><thead><tr><th>Позиція</th><th>Замовлено</th><th>На складі</th><th>Відправити</th></tr></thead>
+            <tbody>{lines.map((l) => (
+              <tr key={l.item_id}><td className="wh-nm">{byId[l.item_id]?.name}</td>
+                <td className="num muted">{l.qty_req}</td>
+                <td className={`num ${(cs[l.item_id] || 0) < l.qty_req ? "wh-neg" : "muted"}`}>{cs[l.item_id] || 0}</td>
+                <td className="num"><NumInput className="wh-price" value={qty[l.item_id] ?? ""} onChange={(v) => setQty((x) => ({ ...x, [l.item_id]: v }))} /></td></tr>
+            ))}</tbody>
+          </table>
+          <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "…" : "Відправити й списати з центрального"}</button>
+        </div>
+      </div>
+    </div>, document.body);
+}
+
+/* --- Акт списання (салон) --- */
+function SupplyWriteoff({ salonKey, items, stock, onReload }) {
+  const [reason, setReason] = useState("");
+  const [lines, setLines] = useState([{ item_id: "", qty: "" }]);
+  const [acts, setActs] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(null);
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  const cs = stockMap(stock, salonKey);
+  const load = () => listActs({ warehouse: salonKey, kind: "writeoff" }).then(setActs).catch(() => setActs([]));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [salonKey]);
+
+  const set = (idx, ln) => setLines((ls) => ls.map((x, i) => (i === idx ? ln : x)));
+  const total = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (byId[l.item_id]?.unit_cost || 0), 0);
+  const submit = async () => {
+    const good = lines.filter((l) => l.item_id && Number(l.qty) > 0).map((l) => ({ item_id: l.item_id, qty: Number(l.qty) }));
+    if (!good.length || !reason.trim()) return;
+    setBusy(true);
+    try {
+      await whWriteoff(salonKey, reason.trim(), good);
+      pushToast({ title: "Акт списання створено", body: suah(total) });
+      setReason(""); setLines([{ item_id: "", qty: "" }]); load(); onReload();
+    } catch (e) { alert(e.message || e); setBusy(false); }
+  };
+
+  return (
+    <div className="wh-view">
+      <div className="wh-form">
+        <label className="over-field" style={{ maxWidth: "100%" }}><span>Причина списання (обовʼязково)</span>
+          <textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="напр. використано за вересень / зіпсовано при транспортуванні" />
+        </label>
+        <div className="wh-lines">
+          {lines.map((l, i) => (
+            <SupplyLineRow key={i} items={items} line={l} exclude={new Set(lines.map((x) => x.item_id).filter((_, j) => j !== i))}
+              onChange={(ln) => set(i, ln)} onRemove={() => setLines((ls) => ls.filter((_, j) => j !== i))} />
+          ))}
+          <button className="wh-add" onClick={() => setLines((ls) => [...ls, { item_id: "", qty: "" }])}><Plus size={13} /> Ще позиція</button>
+        </div>
+        <div className="wh-modal-foot"><span>Сума списання</span><b>{suah(total)}</b></div>
+        <button className="btn-primary small" onClick={submit} disabled={busy || !reason.trim()}>{busy ? "…" : "Створити акт списання"}</button>
+      </div>
+
+      <h4 className="wh-h4">Складські акти</h4>
+      {acts === null ? <div className="loading">…</div> : acts.length === 0 ? <p className="hint">Актів ще немає.</p> : (
+        <div className="wh-acts">
+          {acts.map((a) => (
+            <div className="wh-act" key={a.id} onClick={() => setOpen(open === a.id ? null : a.id)}>
+              <div className="wh-act-top">
+                <span className="wh-act-sum">−{suahN(a.total)} ₴</span>
+                <span className="wh-act-reason">{a.reason || "—"}</span>
+                <span className="wh-act-at">{fmtDate(a.created_at)}</span>
+              </div>
+              {open === a.id && <WhActLines actId={a.id} byId={byId} sign="−" />}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function WhActLines({ actId, byId, sign }) {
+  const [ls, setLs] = useState(null);
+  useEffect(() => { actLines(actId).then(setLs).catch(() => setLs([])); }, [actId]);
+  if (!ls) return null;
+  return (
+    <div className="wh-act-lines">
+      {ls.map((l) => (
+        <div key={l.item_id}><span>{byId[l.item_id]?.name || "?"}</span><span className="mono">{sign || ""}{l.qty} · {suahN(l.qty * l.unit_cost)} ₴</span></div>
+      ))}
+    </div>
+  );
+}
+
+/* --- Складські акти центрального складу --- */
+function SupplyActsView({ warehouse, items }) {
+  const [acts, setActs] = useState(null);
+  const [kind, setKind] = useState("");
+  const [open, setOpen] = useState(null);
+  const byId = Object.fromEntries((items || []).map((i) => [i.id, i]));
+  useEffect(() => { listActs({ warehouse, kind: kind || undefined }).then(setActs).catch(() => setActs([])); }, [warehouse, kind]);
+  const signOf = (k) => (k === "writeoff" || k === "shipment" ? "−" : k === "adjust" ? "" : "+");
+  return (
+    <div className="wh-view">
+      <div className="wh-bar">
+        <select className="inv-toolbar-sel" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="">усі акти</option>
+          {Object.entries(ACT_KIND).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+      </div>
+      {acts === null ? <div className="loading">…</div> : acts.length === 0 ? <p className="hint">Актів немає.</p> : (
+        <div className="wh-acts">
+          {acts.map((a) => (
+            <div className={`wh-act k-${a.kind}`} key={a.id} onClick={() => setOpen(open === a.id ? null : a.id)}>
+              <div className="wh-act-top">
+                <span className="wh-act-kind">{ACT_KIND[a.kind]}</span>
+                <span className="wh-act-sum">{signOf(a.kind)}{suahN(a.total)} ₴</span>
+                <span className="wh-act-reason">{a.counterparty || a.reason || (a.order_id ? "замовлення салону" : "")}</span>
+                <span className="wh-act-at">{fmtDate(a.created_at)}</span>
+              </div>
+              {open === a.id && <WhActLines actId={a.id} byId={byId} sign={signOf(a.kind)} />}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* --- Склади території (ТМ) --- */
+function SupplyTerritory({ tmKey, items, stock }) {
+  const salons = salonsOfTm(tmKey);
+  const [pick, setPick] = useState(salons[0]?.key);
+  return (
+    <div className="wh-view">
+      <div className="tm-salon-chips" style={{ marginBottom: 14 }}>
+        {salons.map((s) => <button key={s.key} className={`chip ${s.key === pick ? "active" : ""}`} onClick={() => setPick(s.key)}>{s.city}</button>)}
+      </div>
+      {pick && <SupplySalonStock salonKey={pick} items={items} stock={stock} onOrderAll={() => {}} />}
+    </div>
+  );
+}
+
+/* --- модуль «Склад» --- */
+function SupplyModule({ cab }) {
+  const manageWh = cab.key === "lviv-lypynskoho" || cab.key === "olha" || cab.type === "manager";
+  const salonKey = cab.type === "sm" ? cab.key : null;
+  const isTm = cab.type === "tm";
+  const { items, stock, reload } = useSupply();
+  const [orderPrefill, setOrderPrefill] = useState(null);
+  const [editOrder, setEditOrder] = useState(null);
+
+  const subs = [];
+  if (manageWh) subs.push(["central", "Основний склад"], ["incoming", "Замовлення салонів"], ["acts", "Складські акти"], ["items", "Довідник"]);
+  if (salonKey) subs.push(["mine", "Мій склад"], ["order", "Замовити"], ["myorders", "Мої замовлення"], ["writeoff", "Акт списання"]);
+  if (isTm) subs.push(["terr", "Склади території"], ["torders", "Замовлення території"]);
+  const [tab, setTab] = useState(subs[0]?.[0] || "central");
+
+  if (items === null) return <div className="loading">Завантаження…</div>;
+  const goOrder = (prefill) => { setOrderPrefill(prefill); setEditOrder(null); setTab("order"); };
+
+  return (
+    <div className="tasks-mod wh-mod">
+      <div className="tasks-head"><h3 className="ov-h">Склад господарських потреб</h3></div>
+      <div className="cab-nav wh-nav">
+        {subs.map(([k, l]) => <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>)}
+      </div>
+
+      {tab === "central" && <SupplyCentral items={items} stock={stock} canManage={manageWh} onReload={reload} />}
+      {tab === "items" && <SupplyItemsView items={items} canManage={manageWh} onReload={reload} />}
+      {tab === "acts" && <SupplyActsView warehouse={CENTRAL} items={items} />}
+      {tab === "incoming" && <SupplyOrders scope="incoming" items={items} stock={stock} onReload={reload} onEditDraft={() => {}} />}
+      {tab === "mine" && <SupplySalonStock salonKey={salonKey} items={items} stock={stock} onOrderAll={goOrder} />}
+      {tab === "order" && <SupplyOrderBuilder salonKey={salonKey} items={items} stock={stock} order={editOrder} prefill={orderPrefill} onDone={() => { setOrderPrefill(null); setEditOrder(null); reload(); setTab("myorders"); }} />}
+      {tab === "myorders" && <SupplyOrders scope="mine" salonKey={salonKey} items={items} stock={stock} onReload={reload} onEditDraft={(o) => { orderLines(o.id).then((ls) => { setEditOrder({ ...o, lines: ls }); setOrderPrefill(null); setTab("order"); }); }} />}
+      {tab === "writeoff" && <SupplyWriteoff salonKey={salonKey} items={items} stock={stock} onReload={reload} />}
+      {tab === "terr" && <SupplyTerritory tmKey={cab.tmKey || cab.key} items={items} stock={stock} />}
+      {tab === "torders" && <SupplyOrders scope="territory" tmKey={cab.tmKey || cab.key} items={items} stock={stock} onReload={reload} onEditDraft={() => {}} />}
+    </div>
+  );
+}
+
+/* ==================== ВИТРАТИ ПО СМ ==================== */
+function ExpensesModule({ cab }) {
+  const own = cab.type === "sm" ? cab.key : null;
+  const scopeSalons = cab.type === "tm" ? salonsOfTm(cab.tmKey || cab.key) : (own ? [salonByKey(own)].filter(Boolean) : SALONS);
+  const [pick, setPick] = useState(own || (scopeSalons.length > 1 ? "all" : scopeSalons[0]?.key));
+  const [lines, setLines] = useState(null);
+  const [items, setItems] = useState({});
+  const [openM, setOpenM] = useState(null);
+  const [cmp, setCmp] = useState(false);
+  const months = useMemo(() => recentMonths(12), []);
+  const [pa, setPa] = useState(months[1]);
+  const [pb, setPb] = useState(months[0]);
+
+  useEffect(() => {
+    listItems({ includeArchived: true }).then((it) => setItems(Object.fromEntries(it.map((i) => [i.id, i]))));
+  }, []);
+  useEffect(() => {
+    const from = `${months[months.length - 1]}-01`;
+    const sk = pick === "all" ? undefined : pick;
+    writeoffLines({ from, salonKey: sk })
+      .then((ls) => (cab.type === "tm" && pick === "all"
+        ? ls.filter((l) => scopeSalons.some((s) => s.key === l.act.warehouse))
+        : ls))
+      .then(setLines).catch(() => setLines([]));
+    // eslint-disable-next-line
+  }, [pick]);
+
+  if (lines === null) return <div className="loading">Завантаження…</div>;
+
+  const byMonth = {};
+  for (const l of lines) {
+    const ym = (l.act?.created_at || "").slice(0, 7);
+    if (!ym) continue;
+    (byMonth[ym] = byMonth[ym] || { total: 0, items: {} });
+    const v = Number(l.qty) * Number(l.unit_cost);
+    byMonth[ym].total += v;
+    const it = byMonth[ym].items[l.item_id] = byMonth[ym].items[l.item_id] || { qty: 0, sum: 0 };
+    it.qty += Number(l.qty); it.sum += v;
+  }
+  const monthRows = months.filter((m) => byMonth[m]).map((m) => ({ ym: m, ...byMonth[m] }));
+  const periodItems = (ym) => Object.entries(byMonth[ym]?.items || {})
+    .map(([id, x]) => ({ name: items[id]?.name || "?", ...x }))
+    .sort((a, b) => b.sum - a.sum);
+
+  return (
+    <div className="tasks-mod">
+      <div className="tasks-head"><h3 className="ov-h">Витрати по СМ · господарські потреби</h3></div>
+
+      {scopeSalons.length > 1 && (
+        <div className="tm-salon-chips" style={{ marginBottom: 12 }}>
+          <button className={`chip ${pick === "all" ? "active" : ""}`} onClick={() => setPick("all")}>усі</button>
+          {scopeSalons.map((s) => <button key={s.key} className={`chip ${pick === s.key ? "active" : ""}`} onClick={() => setPick(s.key)}>{s.city}</button>)}
+        </div>
+      )}
+      <button className="btn-secondary small" style={{ marginBottom: 12 }} onClick={() => setCmp((v) => !v)}>
+        {cmp ? "Звичайний вигляд" : "Порівняти витрати"}
+      </button>
+
+      {cmp ? (
+        <div className="exp-cmp">
+          <div className="exp-cmp-pick">
+            <select className="inv-toolbar-sel" value={pa} onChange={(e) => setPa(e.target.value)}>{months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select>
+            <span>vs</span>
+            <select className="inv-toolbar-sel" value={pb} onChange={(e) => setPb(e.target.value)}>{months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select>
+          </div>
+          <div className="exp-cmp-cols">
+            {[pa, pb].map((ym) => (
+              <div className="exp-col" key={ym}>
+                <div className="exp-col-h">{monthLabel(ym)}<b>{suah(byMonth[ym]?.total || 0)}</b></div>
+                {periodItems(ym).length === 0 ? <p className="hint">немає списань</p> : periodItems(ym).map((r) => (
+                  <div className="exp-row" key={r.name}><span>{r.name}</span><span className="mono">{r.qty} · {suahN(r.sum)} ₴</span></div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : monthRows.length === 0 ? (
+        <div className="admin-empty">Списань ще немає.</div>
+      ) : (
+        <div className="exp-months">
+          {monthRows.map((m) => (
+            <div className="exp-month" key={m.ym}>
+              <button className="exp-month-h" onClick={() => setOpenM(openM === m.ym ? null : m.ym)}>
+                <span>{monthLabel(m.ym)}</span>
+                <b>{suah(m.total)}</b>
+                <ChevronRight size={15} style={{ transform: openM === m.ym ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+              </button>
+              {openM === m.ym && (
+                <div className="exp-month-b">
+                  {periodItems(m.ym).map((r) => (
+                    <div className="exp-row" key={r.name}><span>{r.name}</span><span className="mono">{r.qty} · {suahN(r.sum)} ₴</span></div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="hint" style={{ marginTop: 14 }}>Зараз тут витрати зі складських актів списання. Блок витрат розширюватимемо.</p>
+    </div>
+  );
+}
+
 /* Персональне налаштування лівої навігації (порядок + приховані пункти).
    Зберігається локально на пристрої, окремо для кожного кабінету. */
 function useNavPrefs(cabKey, itemKeys) {
@@ -5613,6 +6307,8 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "planner", label: "Планер", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={tmKey} /> },
     { key: "regionsheet", label: "Офіційні виплати", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
     { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "team", label: "Команда", icon: <Users size={16} />, divider: true, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "archive", label: "Архів", icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
@@ -5635,6 +6331,8 @@ function ManagerCabinet({ onExit, onLogout }) {
     { key: "byTm", label: "По ТМ", icon: <Users size={16} />, render: () => <ManagerView embedded /> },
     { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="manager" /> },
     { key: "cash", label: "Готівка", icon: <Banknote size={16} />, render: () => <ManagerCashTab /> },
+    { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
+    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
     { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, divider: true, render: () => <TasksModule cab={cab} /> },
     { key: "inv", label: "Рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
     { key: "team", label: "Команда", icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
@@ -5650,6 +6348,8 @@ function AccountantCabinet({ onExit, onLogout }) {
   const modules = [
     { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="accountant" /> },
     { key: "inv", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
+    { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
+    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
   ];
   return <CabinetShell title={ACCOUNTANT.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="accountant" />;
 }
@@ -5690,6 +6390,8 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "cash", label: "Готівка", icon: <Banknote size={16} />, render: () => <CashModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "kpi", label: "Показники магазину", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "planner", label: "Планер", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={salonTmOn(salonKey)} /> },
     { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
@@ -5729,6 +6431,10 @@ function OfficeCabinet({ cabKey, onExit, onLogout }) {
     caps.includes("view_consolidation")
       ? { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role={caps.includes("manage_payments") ? "accountant" : "viewer"} /> }
       : null,
+    cabKey === "olha"
+      ? { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: cabKey, type: "office" }} /> }
+      : null,
+    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: cabKey, type: "office" }} /> },
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <ModuleStub name="Безнальні рахунки" /> },
   ];
   return <CabinetShell title={person?.name || "Офіс"} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={cabKey} />;
@@ -6786,6 +7492,108 @@ td.sh.sh-plan{font-weight:400;}
 .ci-cash-ic{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:50%;background:rgba(190,138,46,.12);color:var(--gold);margin-bottom:12px;}
 .ci-cash p{margin:2px 0;font-size:14px;color:var(--ink);}
 .ci-cash p.hint{font-size:12.5px;color:var(--muted);margin-top:8px;}
+
+/* ---------- склад господарських потреб ---------- */
+.wh-mod .tasks-head{margin-bottom:8px;}
+.wh-nav{margin-bottom:14px;flex-wrap:wrap;}
+.wh-view{animation:fadeIn .2s ease both;}
+.wh-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;}
+.wh-search{flex:1;min-width:150px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:8px 12px;font-family:inherit;font-size:13px;background:#fff;color:var(--ink);}
+.wh-search:focus{outline:none;border-color:var(--gold);}
+.wh-check{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--on-dark-2);white-space:nowrap;}
+.wh-reorder{background:rgba(190,138,46,.12);border:1px solid rgba(220,169,74,.3);border-radius:var(--radius-md);padding:10px 14px;font-size:12.5px;color:var(--gold-bright);margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.wh-reorder b{color:var(--on-dark);}
+.wh-link{background:none;border:none;color:var(--gold-bright);font-size:12px;cursor:pointer;padding:2px 4px;text-decoration:underline;text-underline-offset:2px;font-family:inherit;}
+.wh-tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
+.wh-tbl{width:100%;border-collapse:collapse;font-size:12.5px;color:var(--ink);min-width:520px;}
+.wh-tbl th{text-align:right;padding:9px 12px;font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--surface-alt);border-bottom:1px solid var(--line-strong);white-space:nowrap;}
+.wh-tbl th:first-child{text-align:left;}
+.wh-tbl td{padding:7px 12px;border-bottom:1px solid var(--line);text-align:right;font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;}
+.wh-tbl td.wh-nm{text-align:left;font-family:Inter,sans-serif;font-weight:500;}
+.wh-tbl td.num{text-align:right;}
+.wh-tbl td.muted{color:var(--muted);}
+.wh-tbl tr:last-child td{border-bottom:none;}
+.wh-tbl tfoot td{background:var(--surface-alt);font-weight:700;border-top:2px solid var(--line-strong);}
+.wh-tbl tr td:first-child{border-left:3px solid transparent;}
+.wh-tbl tr.st-lo td:first-child{border-left-color:var(--negative);}
+.wh-tbl tr.st-mid td:first-child{border-left-color:var(--gold);}
+.wh-tbl tr.st-ok td:first-child{border-left-color:var(--positive);}
+.wh-cat{display:block;font-size:10px;color:var(--faint);font-weight:400;font-family:'IBM Plex Mono',monospace;}
+.wh-neg{color:var(--negative);font-weight:700;}
+.wh-pill{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:6px;background:rgba(160,58,42,.14);color:var(--negative);}
+.wh-price{width:70px;border:1px solid transparent;background:none;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink);text-align:right;padding:4px 6px;border-radius:6px;}
+.wh-price:hover{border-color:var(--line-strong);}
+.wh-price:focus{outline:none;border-color:var(--gold);background:#fff;}
+.wh-h4{font-family:Inter,sans-serif;font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);margin:20px 0 10px;}
+.wh-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;}
+.wh-kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 14px;}
+.wh-kpi span{font-size:11px;color:var(--muted);}
+.wh-kpi b{display:block;font-family:'IBM Plex Mono',monospace;font-size:17px;color:var(--ink);margin-top:3px;}
+.wh-kpi.attn{border-color:rgba(220,169,74,.35);background:linear-gradient(180deg,rgba(190,138,46,.1),var(--surface));}
+.wh-kpi.attn b{color:var(--gold);}
+
+.wh-modal{position:relative;background:var(--surface);border-radius:var(--radius);max-width:560px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:var(--sh-3);overflow:hidden;animation:fadeIn .2s ease both;}
+.wh-modal-h{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line);font-family:'Fraunces',serif;font-size:16px;color:var(--ink);font-weight:600;}
+.wh-modal-h .modal-close{position:static;width:28px;height:28px;top:auto;right:auto;}
+.wh-modal-b{padding:16px 18px 18px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+.wh-lines{display:flex;flex-direction:column;gap:7px;}
+.wh-line{display:flex;gap:6px;align-items:center;}
+.wh-line select{flex:1;min-width:0;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 9px;font-family:inherit;font-size:12.5px;background:#fff;color:var(--ink);}
+.wh-line-qty{width:72px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;text-align:right;background:#fff;color:var(--ink);}
+.wh-line-x{background:none;border:none;color:var(--faint);cursor:pointer;padding:4px;flex-shrink:0;}
+.wh-line-x:hover{color:var(--negative);}
+.wh-add{align-self:flex-start;background:none;border:1px dashed var(--line-strong);border-radius:var(--radius-sm);color:var(--muted);font-size:12px;padding:6px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:inherit;}
+.wh-add:hover{border-color:var(--gold);color:var(--gold);}
+.wh-modal-foot{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid var(--line);font-family:'IBM Plex Mono',monospace;}
+.wh-modal-foot b{font-size:15px;color:var(--ink);}
+
+.wh-form{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:16px 18px;margin-bottom:16px;}
+.wh-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;}
+@media(max-width:640px){.wh-form-grid{grid-template-columns:1fr;}}
+.wh-form-grid select{padding:8px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;background:#fff;font-size:13px;color:var(--ink);}
+.wh-form-act{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}
+
+.wh-ord-list{display:flex;flex-direction:column;gap:8px;}
+.wh-ord{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:11px 14px;}
+.wh-ord.submitted{border-left:3px solid var(--gold);}
+.wh-ord.shipped{border-left:3px solid var(--positive);}
+.wh-ord-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.wh-ord-nm{font-weight:600;color:var(--ink);font-size:13px;}
+.wh-ord-st{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:999px;background:var(--surface-alt);color:var(--muted);text-transform:uppercase;letter-spacing:.03em;}
+.wh-ord.submitted .wh-ord-st{background:rgba(190,138,46,.14);color:var(--gold);}
+.wh-ord.shipped .wh-ord-st{background:rgba(60,107,74,.14);color:var(--positive);}
+.wh-ord-at{margin-left:auto;font-size:11px;color:var(--faint);font-family:'IBM Plex Mono',monospace;}
+.wh-ord-act{display:flex;gap:10px;align-items:center;margin-top:7px;}
+
+.wh-acts{display:flex;flex-direction:column;gap:6px;}
+.wh-act{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px 13px;cursor:pointer;}
+.wh-act.k-writeoff{border-left:3px solid var(--negative);}
+.wh-act.k-receipt{border-left:3px solid var(--positive);}
+.wh-act.k-shipment{border-left:3px solid var(--gold);}
+.wh-act-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px;}
+.wh-act-kind{font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);}
+.wh-act-sum{font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--ink);}
+.wh-act-reason{color:var(--ink-soft);flex:1;min-width:0;}
+.wh-act-at{margin-left:auto;font-size:11px;color:var(--faint);font-family:'IBM Plex Mono',monospace;}
+.wh-act-lines{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:4px;font-size:12px;}
+.wh-act-lines>div{display:flex;justify-content:space-between;color:var(--ink-soft);}
+.wh-act-lines .mono{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
+
+/* витрати по СМ */
+.exp-months{display:flex;flex-direction:column;gap:6px;}
+.exp-month{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;}
+.exp-month-h{width:100%;display:flex;align-items:center;gap:12px;padding:12px 15px;background:none;border:none;cursor:pointer;font-family:inherit;color:var(--ink);}
+.exp-month-h span{font-weight:600;font-size:13px;}
+.exp-month-h b{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:14px;}
+.exp-month-b{padding:4px 15px 12px;display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--line);}
+.exp-row{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-soft);padding:3px 0;}
+.exp-row .mono{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
+.exp-cmp-pick{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;color:var(--muted);}
+.exp-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media(max-width:640px){.exp-cmp-cols{grid-template-columns:1fr;}}
+.exp-col{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 14px;}
+.exp-col-h{display:flex;justify-content:space-between;font-weight:600;color:var(--ink);font-size:13px;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid var(--line);}
+.exp-col-h b{font-family:'IBM Plex Mono',monospace;}
 
 /* ---------- огляд ---------- */
 .ov{animation:fadeIn .28s ease both;}
