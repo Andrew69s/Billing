@@ -1265,9 +1265,14 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
 
   const saveDraft = async () => {
     setSaving(true);
-    await saveData(tmKey, ym, data);
+    try {
+      await saveData(tmKey, ym, data);
+      setSavedAt(new Date());
+      pushToast({ title: "Чернетку збережено", body: monthLabel(ym) });
+    } catch (e) {
+      pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) });
+    }
     setSaving(false);
-    setSavedAt(new Date());
   };
   // автозбереження через 2,5 с після останньої зміни
   useEffect(() => {
@@ -1278,6 +1283,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   }, [data, loading, tmKey, ym]);
 
   const submit = async () => {
+    if (!confirm(`Подати ЗП за ${monthLabel(ym)} на погодження керівнику?`)) return;
     setSaving(true);
     const snapshot = _.cloneDeep({ block1: data.block1, block2: data.block2, block3: data.block3, ez: data.ez });
     const next = {
@@ -1292,8 +1298,13 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
       tmReplyComment: "",
       tmRepliedAt: null,
     };
-    await saveData(tmKey, ym, next);
-    setData(next);
+    try {
+      await saveData(tmKey, ym, next);
+      setData(next);
+      pushToast({ title: "Подано на погодження", body: `ЗП за ${monthLabel(ym)} → керівник` });
+    } catch (e) {
+      pushToast({ title: "Не вдалося подати", body: String(e.message || e) });
+    }
     setSaving(false);
   };
 
@@ -1301,6 +1312,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
     const next = { ...data, tmReplyComment: comment, tmRepliedAt: new Date().toISOString() };
     await saveData(tmKey, ym, next);
     setData(next);
+    pushToast({ title: "Відповідь надіслано керівнику" });
   };
 
   const dl = deadlineInfo(ym);
@@ -1529,31 +1541,48 @@ function ManagerView({ onBack, embedded }) {
   const onFlag = (num, val) => setData((prev) => _.set(_.cloneDeep(prev), ["managerFlags", num], val));
   const flagCount = Object.values(data.managerFlags || {}).filter((f) => f?.flagged).length;
 
-  const saveAdjOnly = async () => { setSavingAdj(true); await saveAdj(tmKey, ym, adj); setSavingAdj(false); };
+  const saveAdjOnly = async () => {
+    setSavingAdj(true);
+    try { await saveAdj(tmKey, ym, adj); pushToast({ title: "Коригування збережено", body: monthLabel(ym) }); }
+    catch (e) { pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) }); }
+    setSavingAdj(false);
+  };
   const setPaymentStatus = async (status) => {
     const next = { ...data, paymentStatus: status, paymentStatusAt: new Date().toISOString() };
     setData(next);
     await saveData(tmKey, ym, next);
-    if (status === "to_pay") notify({ recipient: tmKey, kind: "salary", title: "ЗП призначено до виплати", body: monthLabel(ym), actor: "manager", link: "salary" });
-    if (status === "paid") notify({ recipient: tmKey, kind: "salary", title: "ЗП виплачено", body: monthLabel(ym), actor: "manager", link: "salary" });
+    if (status === "to_pay") { notify({ recipient: tmKey, kind: "salary", title: "ЗП призначено до виплати", body: monthLabel(ym), actor: "manager", link: "salary" }); pushToast({ title: "Призначено до виплати", body: monthLabel(ym) }); }
+    if (status === "paid") { notify({ recipient: tmKey, kind: "salary", title: "ЗП виплачено", body: monthLabel(ym), actor: "manager", link: "salary" }); pushToast({ title: "Позначено як виплачено", body: monthLabel(ym) }); }
   };
 
   const sendBack = async () => {
+    if (!confirm(`Повернути ЗП ${TM_LIST.find((t) => t.key === tmKey)?.name || ""} за ${monthLabel(ym)} на доопрацювання?`)) return;
     setSavingCorr(true);
     const next = { ...data, status: "corrected", correctedAt: new Date().toISOString(), managerComment: correctionComment };
-    await saveData(tmKey, ym, next);
-    setData(next);
-    setCorrectionComment("");
+    try {
+      await saveData(tmKey, ym, next);
+      setData(next);
+      setCorrectionComment("");
+      notify({ recipient: tmKey, kind: "salary", title: "Керівник повернув ЗП на доопрацювання", body: monthLabel(ym), actor: "manager", link: "salary" });
+      pushToast({ title: "Повернено на доопрацювання", body: `ТМ отримає сповіщення` });
+    } catch (e) {
+      pushToast({ title: "Не вдалося виконати", body: String(e.message || e) });
+    }
     setSavingCorr(false);
-    notify({ recipient: tmKey, kind: "salary", title: "Керівник повернув ЗП на доопрацювання", body: monthLabel(ym), actor: "manager", link: "salary" });
   };
   const approve = async () => {
+    if (!confirm(`Погодити ЗП ${TM_LIST.find((t) => t.key === tmKey)?.name || ""} за ${monthLabel(ym)}?`)) return;
     setSavingCorr(true);
     const next = { ...data, status: "approved", approvedAt: new Date().toISOString(), managerFlags: {}, managerComment: "" };
-    await saveData(tmKey, ym, next);
-    setData(next);
+    try {
+      await saveData(tmKey, ym, next);
+      setData(next);
+      notify({ recipient: tmKey, kind: "salary", title: "Керівник погодив вашу ЗП", body: monthLabel(ym), actor: "manager", link: "salary" });
+      pushToast({ title: "ЗП погоджено", body: monthLabel(ym) });
+    } catch (e) {
+      pushToast({ title: "Не вдалося погодити", body: String(e.message || e) });
+    }
     setSavingCorr(false);
-    notify({ recipient: tmKey, kind: "salary", title: "Керівник погодив вашу ЗП", body: monthLabel(ym), actor: "manager", link: "salary" });
   };
 
   return (
@@ -2270,9 +2299,14 @@ function SmView({ salon, embedded }) {
 
   const saveDraft = async () => {
     setSaving(true);
-    await saveSmData(salon.key, emp.id, ym, data);
+    try {
+      await saveSmData(salon.key, emp.id, ym, data);
+      setSavedAt(new Date());
+      pushToast({ title: "Чернетку збережено", body: `${emp.full_name} · ${monthLabel(ym)}` });
+    } catch (e) {
+      pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) });
+    }
     setSaving(false);
-    setSavedAt(new Date());
   };
   useEffect(() => {
     if (loading || !emp) return undefined;
@@ -2286,6 +2320,7 @@ function SmView({ salon, embedded }) {
   const months = useMemo(() => recentMonths(12), []);
 
   const submit = async () => {
+    if (!confirm(`Подати ЗП ${emp.full_name} за ${monthLabel(ym)} на погодження ТМ?`)) return;
     setSaving(true);
     const snap = _.cloneDeep({
       base: data.base, manager: data.manager, bonus: data.bonus,
@@ -2296,14 +2331,20 @@ function SmView({ salon, embedded }) {
       tmComment: "", correctionDiff: [], correctedAt: null, smReplyComment: "", smRepliedAt: null,
       tmApproved: false, tmApprovedAt: null,
     };
-    await saveSmData(salon.key, emp.id, ym, next);
-    setData(next);
+    try {
+      await saveSmData(salon.key, emp.id, ym, next);
+      setData(next);
+      pushToast({ title: "Подано на погодження", body: `${emp.full_name} → ТМ` });
+    } catch (e) {
+      pushToast({ title: "Не вдалося подати", body: String(e.message || e) });
+    }
     setSaving(false);
   };
   const onReply = async (comment) => {
     const next = { ...data, smReplyComment: comment, smRepliedAt: new Date().toISOString() };
     await saveSmData(salon.key, emp.id, ym, next);
     setData(next);
+    pushToast({ title: "Відповідь надіслано ТМ" });
   };
 
   if (employees === null) return <div className="loading">Завантаження…</div>;
@@ -2415,13 +2456,18 @@ function SalonDetail({ salon, emp, ym, reviewer, onBack }) {
 
   const { calc } = useSmCalc(data, salon.key, ym);
 
-  const saveAdjOnly = async () => { setSaving(true); await saveSmData(salon.key, empId, ym, data); setSaving(false); };
+  const saveAdjOnly = async () => {
+    setSaving(true);
+    try { await saveSmData(salon.key, empId, ym, data); pushToast({ title: "Коригування збережено" }); }
+    catch (e) { pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) }); }
+    setSaving(false);
+  };
   const setPaymentStatus = async (status) => {
     const next = { ...data, paymentStatus: status, paymentStatusAt: new Date().toISOString() };
     setData(next);
     await saveSmData(salon.key, empId, ym, next);
-    if (status === "to_pay") notify({ recipient: salon.key, kind: "salary", title: "ЗП призначено до виплати", body: notifBody, actor: "manager", link: "salary" });
-    if (status === "paid") notify({ recipient: salon.key, kind: "salary", title: "ЗП виплачено", body: notifBody, actor: "manager", link: "salary" });
+    if (status === "to_pay") { notify({ recipient: salon.key, kind: "salary", title: "ЗП призначено до виплати", body: notifBody, actor: "manager", link: "salary" }); pushToast({ title: "Призначено до виплати" }); }
+    if (status === "paid") { notify({ recipient: salon.key, kind: "salary", title: "ЗП виплачено", body: notifBody, actor: "manager", link: "salary" }); pushToast({ title: "Позначено як виплачено" }); }
   };
   const cancelEdit = async () => {
     const d = await loadSmData(salon.key, empId, ym);
@@ -2431,14 +2477,26 @@ function SalonDetail({ salon, emp, ym, reviewer, onBack }) {
     setSaving(true);
     const diff = smBuildDiff(data.smSnapshot, data);
     const next = { ...data, status: "corrected", correctedAt: new Date().toISOString(), tmComment: comment, correctionDiff: diff };
-    await saveSmData(salon.key, empId, ym, next);
-    setData(next); setEditMode(false); setComment(""); setSaving(false);
-    notify({ recipient: salon.key, kind: "salary", title: "ТМ вніс корективи у ЗП", body: notifBody, actor: "tm", link: "salary" });
+    try {
+      await saveSmData(salon.key, empId, ym, next);
+      setData(next); setEditMode(false); setComment("");
+      notify({ recipient: salon.key, kind: "salary", title: "ТМ вніс корективи у ЗП", body: notifBody, actor: "tm", link: "salary" });
+      pushToast({ title: "Корективи збережено", body: "Салон отримає сповіщення" });
+    } catch (e) {
+      pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) });
+    }
+    setSaving(false);
   };
   const approveToManager = async () => {
+    if (!confirm(`Передати ЗП ${emp?.full_name || ""} за ${monthLabel(ym)} керівнику?`)) return;
     const next = { ...data, tmApproved: true, tmApprovedAt: new Date().toISOString() };
     setData(next);
-    await saveSmData(salon.key, empId, ym, next);
+    try {
+      await saveSmData(salon.key, empId, ym, next);
+      pushToast({ title: "Передано керівнику", body: `${emp?.full_name || ""} · ${monthLabel(ym)}` });
+    } catch (e) {
+      pushToast({ title: "Не вдалося передати", body: String(e.message || e) });
+    }
   };
 
   return (
@@ -4558,9 +4616,12 @@ function DailyCheckIn({ salon, onDone }) {
   const answerCash = async (taken) => {
     setBusy(true);
     try {
-      if (taken) await cashHandover(salon.key, salon.key, "підтверджено на ранковому чек-іні");
+      if (taken) {
+        const s = await cashHandover(salon.key, salon.key, "підтверджено на ранковому чек-іні");
+        pushToast({ title: "Готівку відмічено як забрану", body: uah(s || cashInfo.total) });
+      }
       onDone();
-    } catch (e) { alert(e.message || e); setBusy(false); }
+    } catch (e) { pushToast({ title: "Помилка", body: String(e.message || e) }); setBusy(false); }
   };
   const closeStore = async () => {
     setBusy(true);
@@ -4788,12 +4849,12 @@ function TerritoryDayTable({ salonKey, ym, rowsMap, editable, by, onPatched, pla
     const patch = { [metric]: val === "" || val == null ? null : Number(val) || 0 };
     onPatched(salonKey, d, patch); // оптимістично
     try { await saveManual(salonKey, d, patch, by); }
-    catch (e) { alert(e.message || e); }
+    catch (e) { pushToast({ title: "Показник не збережено", body: String(e.message || e) }); }
   };
   const reset = async (day) => {
     const d = dateOf(ym, day);
     onPatched(salonKey, d, null);
-    try { await resetManual(salonKey, d); } catch (e) { alert(e.message || e); }
+    try { await resetManual(salonKey, d); } catch (e) { pushToast({ title: "Не вдалося скинути", body: String(e.message || e) }); }
   };
 
   return (
@@ -4915,8 +4976,10 @@ function TerritoryModule({ cab }) {
       setSyncNote(`оновлено рядків: ${r?.rows ?? 0}`);
       localEditAt.current = 0;
       await reload();
+      pushToast({ title: "Синхронізовано з планера", body: `оновлено рядків: ${r?.rows ?? 0}` });
     } catch (e) {
       setSyncNote(`помилка: ${e.message || e}`);
+      pushToast({ title: "Помилка синхронізації", body: String(e.message || e) });
     } finally { setSyncing(false); }
   };
 
@@ -5008,8 +5071,8 @@ function CashModule({ cab, salonKey: overrideKey }) {
   const recent = days.slice(0, 20);
 
   const saveToday = async (val) => {
-    try { await setCashDay(salonKey, todayISO(), val, cab.key); }
-    catch (e) { alert(e.message || e); }
+    try { await setCashDay(salonKey, todayISO(), val, cab.key); pushToast({ title: "Готівку за день збережено", body: uah(Number(val) || 0) }); }
+    catch (e) { pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) }); }
   };
   const handover = async () => {
     if (!open.length) return;
