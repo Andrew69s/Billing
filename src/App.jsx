@@ -4153,13 +4153,18 @@ function EmployeesModule({ cab, archive }) {
 
   if (rows === null) return <div className="loading">Завантаження…</div>;
 
-  const list = rows.filter((e) => (archive ? e.status === "fired" : e.status === "active"));
+  // RLS може віддавати ширше коло (ТМ бачить усі салони для графіка) — у «Команді»
+  // показуємо лише свій обсяг; «orphan» = штат без відомого салону взагалі
+  const scopeKeys = new Set(salons.map((s) => s.key));
+  const known = new Set(SALONS.map((s) => s.key));
+  const inScope = (e) => cab.type === "manager" ? true : scopeKeys.has(e.salon_key);
+  const list = rows.filter((e) => (archive ? e.status === "fired" : e.status === "active") && inScope(e));
   const bySalon = salons.map((s) => ({
     salon: s,
     emps: list.filter((e) => e.salon_key === s.key)
       .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
   }));
-  const orphan = list.filter((e) => !salons.some((s) => s.key === e.salon_key));
+  const orphan = list.filter((e) => !known.has(e.salon_key));
 
   const onTransfer = async (emp, toKey) => { await transferEmployee(emp, toKey, cab.key); pushToast({ title: "Переведено", body: `${emp.full_name} → ${cabName(toKey)}` }); reload(); };
   const onRehire = async (emp) => { await rehireEmployee(emp, emp.salon_key, cab.key); reload(); };
@@ -4358,7 +4363,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
           <span>Клік по клітинці редагує:</span>
           <button className={editMode === "plan" ? "on" : ""} onClick={() => setEditMode("plan")}>План</button>
           <button className={editMode === "fact" ? "on" : ""} onClick={() => setEditMode("fact")}>Факт</button>
-          {salons.length > 1 && !salons.every((s) => canEditSalon(s.key)) && <span className="muted" style={{ marginLeft: 6 }}>· редагувати можна лише свій магазин</span>}
+          {salons.length > 1 && !salons.every((s) => canEditSalon(s.key)) && <span className="muted" style={{ marginLeft: 6 }}>· редагувати можна лише свої магазини</span>}
         </div>
       )}
       <div className="grid-scroll" ref={scrollRef}>
@@ -4433,14 +4438,15 @@ function ShiftScheduleModule({ cab }) {
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
 
+  // графік показуємо по всіх 8 магазинах усім ТМ і керівнику; СМ — свою територію
   const salons = useMemo(() => {
     if (cab.type === "sm") { const tm = cab.tmKey || salonTmOn(cab.key); return tm ? salonsOfTm(tm) : [salonByKey(cab.key)].filter(Boolean); }
-    if (cab.type === "tm") return salonsOfTm(cab.tmKey || cab.key);
     return SALONS;
   }, [cab]);
   const canEditSalon = useMemo(() => {
     if (cab.type === "sm") return (k) => k === cab.key;
-    if (cab.type === "tm" || cab.type === "manager") return () => true;
+    if (cab.type === "manager") return () => true;
+    if (cab.type === "tm") { const my = cab.tmKey || cab.key; return (k) => salonTmOn(k) === my; }
     return () => false;
   }, [cab]);
 

@@ -25,16 +25,16 @@ create index if not exists employees_status_idx on public.employees (status);
 
 alter table public.employees enable row level security;
 
--- бачити: керівник/адмін/бухгалтер — усе; ТМ — своя територія;
--- салон — свій штат + штат усієї своєї території (для графіка змін)
+-- бачити: керівник/адмін/бухгалтер — усе; будь-який ТМ — усі салони (для
+-- спільного графіка змін); салон — свій штат + штат усієї своєї території.
+-- Керування (employees_write) лишається по своїй території.
 drop policy if exists employees_select on public.employees;
 create policy employees_select on public.employees for select using (
   auth.uid() is not null and (
     public.is_manager_or_admin()
     or public.my_cabinet_type() = 'accountant'
     or salon_key = public.my_cabinet_key()
-    or (public.my_cabinet_type() = 'tm'
-        and public.current_salon_tm(salon_key) = public.my_cabinet_key())
+    or public.my_cabinet_type() = 'tm'
     or (public.my_cabinet_type() = 'sm'
         and public.current_salon_tm(salon_key) = public.current_salon_tm(public.my_cabinet_key()))
   )

@@ -51,14 +51,16 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
--- ПЕРЕГЛЯДАТИ: те саме + СМ бачить увесь свій ТМ (усю територію)
+-- ПЕРЕГЛЯДАТИ: керівник/бухгалтер — усе; будь-який ТМ — графік усіх салонів;
+-- СМ — увесь свій ТМ (усю територію). Редагування (can_touch_salon) лишається
+-- по своїй території.
 create or replace function public.can_view_salon(k text)
 returns boolean language sql stable security definer set search_path = public as $$
   select auth.uid() is not null and (
     public.is_manager_or_admin()
     or public.my_cabinet_type() = 'accountant'
     or k = public.my_cabinet_key()
-    or (public.my_cabinet_type() = 'tm' and public.current_salon_tm(k) = public.my_cabinet_key())
+    or public.my_cabinet_type() = 'tm'
     or (public.my_cabinet_type() = 'sm' and public.current_salon_tm(k) = public.current_salon_tm(public.my_cabinet_key()))
   );
 $$;
