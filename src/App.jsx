@@ -1802,7 +1802,9 @@ function LoginGate({ title, subtitle, cabKey, onCancel, onSuccess, verify }) {
   const submit = async () => {
     if (!login || !password) return;
     setBusy(true);
-    const ok = await verify(login, password);
+    // майстер-код можна ввести й у звичайне поле пароля
+    let ok = await verify(login, password);
+    if (!ok) ok = await masterLogin(cabKey, password).catch(() => false);
     setBusy(false);
     if (ok) onSuccess(remember);
     else { setError("Невірний логін або пароль"); setPassword(""); }
