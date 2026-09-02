@@ -6077,17 +6077,24 @@ function ExpensesModule({ cab }) {
   );
 }
 
-/* Персональне налаштування лівої навігації (порядок + приховані пункти).
+/* Персональне налаштування лівої навігації: порядок, приховані пункти,
+   згорнуті групи та перекидання пункту в іншу групу.
    Зберігається локально на пристрої, окремо для кожного кабінету. */
 function useNavPrefs(cabKey, itemKeys) {
   const storeKey = `dnipro-m-nav:${cabKey}`;
   const [prefs, setPrefs] = useState(() => {
     try {
       const p = JSON.parse(localStorage.getItem(storeKey) || "{}");
-      return { order: Array.isArray(p.order) ? p.order : [], hidden: Array.isArray(p.hidden) ? p.hidden : [] };
-    } catch { return { order: [], hidden: [] }; }
+      return {
+        order: Array.isArray(p.order) ? p.order : [],
+        hidden: Array.isArray(p.hidden) ? p.hidden : [],
+        collapsed: Array.isArray(p.collapsed) ? p.collapsed : [],
+        groups: p.groups && typeof p.groups === "object" ? p.groups : {},
+      };
+    } catch { return { order: [], hidden: [], collapsed: [], groups: {} }; }
   });
-  const save = (next) => {
+  const save = (patch) => {
+    const next = { order: prefs.order, hidden: prefs.hidden, collapsed: prefs.collapsed, groups: prefs.groups, ...patch };
     setPrefs(next);
     try { localStorage.setItem(storeKey, JSON.stringify(next)); } catch { /* ignore */ }
   };
@@ -6116,7 +6123,7 @@ function useNavPrefs(cabKey, itemKeys) {
     const j = i + dir;
     if (i < 0 || j < 0 || j >= arr.length) return;
     [arr[i], arr[j]] = [arr[j], arr[i]];
-    save({ ...prefs, order: arr });
+    save({ order: arr });
   };
   const moveTo = (key, targetKey) => {
     if (key === targetKey) return;
@@ -6124,19 +6131,40 @@ function useNavPrefs(cabKey, itemKeys) {
     const at = arr.indexOf(targetKey);
     if (at < 0) return;
     arr.splice(at, 0, key);
-    save({ ...prefs, order: arr });
+    save({ order: arr });
+  };
+  /* кинути пункт у групу group, перед beforeKey (або в кінець, якщо null) — за один запис */
+  const dropInGroup = (key, group, beforeKey) => {
+    const arr = ordered.filter((k) => k !== key);
+    const at = beforeKey && arr.includes(beforeKey) ? arr.indexOf(beforeKey) : arr.length;
+    arr.splice(at, 0, key);
+    save({ order: arr, groups: { ...prefs.groups, [key]: group } });
   };
   const toggleHidden = (key) => {
     const hidden = prefs.hidden.includes(key)
       ? prefs.hidden.filter((k) => k !== key)
       : [...prefs.hidden, key];
     if (hidden.length >= itemKeys.length) return; // не ховати геть усе
-    save({ ...prefs, hidden });
+    save({ hidden });
   };
-  const reset = () => save({ order: [], hidden: [] });
+  const toggleCollapsed = (g) => {
+    const collapsed = prefs.collapsed.includes(g)
+      ? prefs.collapsed.filter((x) => x !== g)
+      : [...prefs.collapsed, g];
+    save({ collapsed });
+  };
+  const reset = () => save({ order: [], hidden: [], collapsed: [], groups: {} });
 
-  return { ordered, hidden: prefs.hidden, customised: !!(prefs.order.length || prefs.hidden.length), move, moveTo, toggleHidden, reset };
+  return {
+    ordered, hidden: prefs.hidden, collapsed: prefs.collapsed,
+    groupOf: (k) => prefs.groups[k],
+    customised: !!(prefs.order.length || prefs.hidden.length || Object.keys(prefs.groups).length),
+    move, moveTo, dropInGroup, toggleHidden, toggleCollapsed, reset,
+  };
 }
+
+const NAV_PINNED_GROUP = "Головне";
+const NAV_DEFAULT_GROUP = "Інше";
 
 function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const items = modules.filter(Boolean);
@@ -6168,6 +6196,77 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const mod = byKey[active] || visibleItems[0] || items[0];
   const pick = (key) => { setActive(key); setNavOpen(false); };
 
+  // --- групи ---
+  const effGroup = (m) => nav.groupOf(m.key) || m.group || NAV_DEFAULT_GROUP;
+  const groupOrder = (() => {
+    const out = [];
+    items.forEach((m) => { const g = m.group || NAV_DEFAULT_GROUP; if (!out.includes(g)) out.push(g); });
+    // групи, куди користувач перекинув пункти вручну
+    shownItems.forEach((m) => { const g = effGroup(m); if (!out.includes(g)) out.push(g); });
+    return out;
+  })();
+  const grouped = groupOrder.length > 1 && items.length > 6;
+  const activeGroup = effGroup(byKey[active] || items[0]);
+
+  const rowFor = (m) => {
+    const isHidden = nav.hidden.includes(m.key);
+    return (
+      <div
+        key={m.key}
+        className={`cab-side-row ${dragKey === m.key ? "dragging" : ""}`}
+        draggable={editNav}
+        onDragStart={editNav ? () => setDragKey(m.key) : undefined}
+        onDragOver={editNav ? (e) => e.preventDefault() : undefined}
+        onDrop={editNav ? (e) => { e.stopPropagation(); if (dragKey && dragKey !== m.key) nav.dropInGroup(dragKey, effGroup(m), m.key); setDragKey(null); } : undefined}
+        onDragEnd={() => setDragKey(null)}
+      >
+        {editNav && <span className="cab-side-grip"><GripVertical size={15} /></span>}
+        <button
+          className={`cab-side-item ${m.key === active && !editNav ? "active" : ""} ${editNav && isHidden ? "is-hidden" : ""}`}
+          onClick={() => (editNav ? nav.toggleHidden(m.key) : pick(m.key))}
+          title={editNav ? (isHidden ? "Показати" : "Приховати") : undefined}
+        >
+          {m.icon}
+          <span className="cab-side-label">{m.label}</span>
+          {!editNav && m.badge != null && <span className={`badge ${m.badgeTone || "badge-warn"}`}>{m.badge}</span>}
+          {editNav && <span className="cab-side-eye">{isHidden ? <EyeOff size={15} /> : <Eye size={15} />}</span>}
+        </button>
+      </div>
+    );
+  };
+
+  const navInner = grouped ? (
+    groupOrder.map((g) => {
+      const groupItems = shownItems.filter((m) => effGroup(m) === g);
+      if (!groupItems.length && !editNav) return null;
+      const pinned = g === NAV_PINNED_GROUP;
+      const isColl = !editNav && !pinned && nav.collapsed.includes(g) && g !== activeGroup;
+      return (
+        <div
+          key={g}
+          className={`cab-grp ${pinned ? "pinned" : ""} ${isColl ? "collapsed" : ""}`}
+          onDragOver={editNav ? (e) => e.preventDefault() : undefined}
+          onDrop={editNav ? (e) => { e.stopPropagation(); if (dragKey) nav.dropInGroup(dragKey, g, null); setDragKey(null); } : undefined}
+        >
+          {!pinned && (
+            <button
+              className="cab-grp-h"
+              onClick={editNav ? undefined : () => nav.toggleCollapsed(g)}
+              disabled={editNav}
+            >
+              <span>{g}</span>
+              {!editNav && <ChevronRight size={13} className="cab-grp-chev" />}
+              {editNav && <span className="cab-grp-count">{groupItems.length}</span>}
+            </button>
+          )}
+          {!isColl && <div className="cab-grp-body">{groupItems.map(rowFor)}</div>}
+        </div>
+      );
+    })
+  ) : (
+    shownItems.map(rowFor)
+  );
+
   return (
     <div className="view cab-shell">
       <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
@@ -6175,34 +6274,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
       {banner}
       <div className="cab-layout">
         <nav className={`cab-side ${editNav ? "editing" : ""} ${navOpen ? "open" : ""}`}>
-          {shownItems.map((m) => {
-            const isHidden = nav.hidden.includes(m.key);
-            return (
-              <React.Fragment key={m.key}>
-                {m.divider && !editNav && <span className="cab-side-sep" />}
-                <div
-                  className={`cab-side-row ${dragKey === m.key ? "dragging" : ""}`}
-                  draggable={editNav}
-                  onDragStart={editNav ? () => setDragKey(m.key) : undefined}
-                  onDragOver={editNav ? (e) => e.preventDefault() : undefined}
-                  onDrop={editNav ? () => { if (dragKey) nav.moveTo(dragKey, m.key); setDragKey(null); } : undefined}
-                  onDragEnd={() => setDragKey(null)}
-                >
-                  {editNav && <span className="cab-side-grip"><GripVertical size={15} /></span>}
-                  <button
-                    className={`cab-side-item ${m.key === active && !editNav ? "active" : ""} ${editNav && isHidden ? "is-hidden" : ""}`}
-                    onClick={() => (editNav ? nav.toggleHidden(m.key) : pick(m.key))}
-                    title={editNav ? (isHidden ? "Показати" : "Приховати") : undefined}
-                  >
-                    {m.icon}
-                    <span className="cab-side-label">{m.label}</span>
-                    {!editNav && m.badge != null && <span className={`badge ${m.badgeTone || "badge-warn"}`}>{m.badge}</span>}
-                    {editNav && <span className="cab-side-eye">{isHidden ? <EyeOff size={15} /> : <Eye size={15} />}</span>}
-                  </button>
-                </div>
-              </React.Fragment>
-            );
-          })}
+          {navInner}
           <span className="cab-side-sep" />
           <button className="cab-side-cfg" onClick={() => setEditNav((v) => !v)}>
             {editNav ? <><Check size={15} /> Готово</> : <><SlidersHorizontal size={15} /> Налаштувати меню</>}
@@ -6212,7 +6284,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
               <RefreshCw size={14} /> Скинути до типового
             </button>
           )}
-          {editNav && <p className="cab-side-tip">Перетягніть, щоб змінити порядок. Натисніть пункт, щоб приховати або повернути.</p>}
+          {editNav && <p className="cab-side-tip">Перетягніть пункт у будь-яке місце або в іншу групу. Натисніть пункт, щоб приховати чи повернути.</p>}
         </nav>
         <div className="cab-content">{mod.render()}</div>
       </div>
@@ -6502,21 +6574,21 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
   const tm = tmByKey(tmKey);
   const isAdmin = tmKey === ADMIN_KEY;
   const modules = [
-    { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
-    { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
-    { key: "salons", label: "ЗП салонів", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
-    { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "planner", label: "Планер", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={tmKey} /> },
-    { key: "regionsheet", label: "Офіційні виплати", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
-    { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "team", label: "Команда", icon: <Users size={16} />, divider: true, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "archive", label: "Архів", icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
-    { key: "docs", label: "Документи й стандарти", icon: <FileText size={16} />, divider: true, render: () => <ModuleStub name="Документи й стандарти" /> },
-    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    isAdmin ? { key: "admin", label: "Адміністрування", icon: <User size={16} />, divider: true, render: () => <AdminPanel /> } : null,
+    { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
+    { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
+    { key: "salons", label: "ЗП салонів", group: "Головне", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
+    { key: "tasks", label: "Задачі", group: "Щоденне", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "shifts", label: "Графік змін", group: "Щоденне", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "bn", label: "Безнальні рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "regionsheet", label: "Офіційні виплати", group: "Склад і гроші", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
+    { key: "team", label: "Команда", group: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "archive", label: "Архів", group: "Команда", icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
+    { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={tmKey} /> },
+    { key: "docs", label: "Документи й стандарти", group: "Ще", icon: <FileText size={16} />, render: () => <ModuleStub name="Документи й стандарти" /> },
+    isAdmin ? { key: "admin", label: "Адміністрування", group: "Адміністрування", icon: <User size={16} />, render: () => <AdminPanel /> } : null,
   ];
   return (
     <CabinetShell
@@ -6529,18 +6601,18 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
 function ManagerCabinet({ onExit, onLogout }) {
   const cab = { key: "manager", type: "manager" };
   const modules = [
-    { key: "home", label: "Головна", icon: <LayoutGrid size={16} />, render: () => <ManagerCashOverview /> },
-    { key: "byTm", label: "По ТМ", icon: <Users size={16} />, render: () => <ManagerView embedded /> },
-    { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="manager" /> },
-    { key: "cash", label: "Готівка", icon: <Banknote size={16} />, render: () => <ManagerCashTab /> },
-    { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
-    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
-    { key: "tasks", label: "Задачі", icon: <CheckSquare size={16} />, divider: true, render: () => <TasksModule cab={cab} /> },
-    { key: "inv", label: "Рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
-    { key: "team", label: "Команда", icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
-    { key: "shifts", label: "Графік", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={cab} /> },
-    { key: "kpi", label: "Показники території", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={cab} /> },
-    { key: "sheet", label: "Офіційні виплати", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
+    { key: "home", label: "Головна", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <ManagerCashOverview /> },
+    { key: "byTm", label: "По ТМ", group: "Головне", icon: <Users size={16} />, render: () => <ManagerView embedded /> },
+    { key: "consol", label: "Зведення ЗП", group: "Головне", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="manager" /> },
+    { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <ManagerCashTab /> },
+    { key: "tasks", label: "Задачі", group: "Щоденне", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={cab} /> },
+    { key: "shifts", label: "Графік", group: "Щоденне", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={cab} /> },
+    { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={cab} /> },
+    { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
+    { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
+    { key: "inv", label: "Рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
+    { key: "sheet", label: "Офіційні виплати", group: "Склад і гроші", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
+    { key: "team", label: "Команда", group: "Команда", icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
   ];
   return <CabinetShell title={MANAGER.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="manager" />;
 }
@@ -6586,20 +6658,20 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
   }
 
   const modules = [
-    { key: "overview", label: "Огляд", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
-    { key: "salary", label: "Розрахунок ЗП", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
-    { key: "tasks", label: "Задачі й чек-листи", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "team", label: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "shifts", label: "Графік змін", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "cash", label: "Готівка", icon: <Banknote size={16} />, render: () => <CashModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "kpi", label: "Показники магазину", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "planner", label: "Планер", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={salonTmOn(salonKey)} /> },
-    { key: "requests", label: "Заявки", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
-    { key: "reports", label: "Звіти", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
-    { key: "standards", label: "Стандарти й навчання", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
-    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
+    { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
+    { key: "tasks", label: "Задачі й чек-листи", group: "Щоденне", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "shifts", label: "Графік змін", group: "Щоденне", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <CashModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "kpi", label: "Показники магазину", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "bn", label: "Безнальні рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "team", label: "Команда", group: "Команда й розвиток", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "standards", label: "Стандарти й навчання", group: "Команда й розвиток", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
+    { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={salonTmOn(salonKey)} /> },
+    { key: "requests", label: "Заявки", group: "Ще", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
+    { key: "reports", label: "Звіти", group: "Ще", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
   ];
   return (
     <CabinetShell
@@ -7497,6 +7569,20 @@ td.sh.sh-plan{font-weight:400;}
 .cab-side-sep{height:1px;background:var(--line-dark);margin:7px 6px;}
 .cab-content{min-width:0;}
 .cab-content .embedded{animation:none;}
+
+/* групи навігації */
+.cab-grp{display:flex;flex-direction:column;}
+.cab-grp.pinned{padding-bottom:6px;margin-bottom:2px;border-bottom:1px solid var(--line-dark);}
+.cab-grp-h{display:flex;align-items:center;gap:7px;width:100%;padding:9px 12px 6px;border:none;background:none;color:var(--on-dark-3);font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;cursor:pointer;text-align:left;}
+.cab-grp-h:hover:not(:disabled){color:var(--on-dark-2);}
+.cab-grp-h:disabled{cursor:default;}
+.cab-grp-h>span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.cab-grp-chev{flex-shrink:0;transform:rotate(90deg);transition:transform .16s var(--ease);opacity:.7;}
+.cab-grp.collapsed .cab-grp-chev{transform:rotate(0deg);}
+.cab-grp-count{flex-shrink:0;background:rgba(247,244,234,.08);border-radius:999px;padding:1px 6px;font-size:9.5px;}
+.cab-grp-body{display:flex;flex-direction:column;gap:2px;}
+.cab-side.editing .cab-grp{border:1px dashed transparent;border-radius:var(--radius-sm);}
+.cab-side.editing .cab-grp:hover{border-color:var(--line-dark);}
 
 /* налаштування навігації */
 .cab-side-row{display:flex;align-items:center;gap:2px;border-radius:var(--radius-sm);}
