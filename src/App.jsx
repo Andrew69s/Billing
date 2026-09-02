@@ -2056,18 +2056,18 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
       </SmItem>
       <SmItem num="3.6" title="Продажі із сайту через НП" amount={showAmounts ? calc.bonus.siteNp : undefined} screenshotKey="np" {...shot}>
         <Field readOnly={readOnly} label="Оборот продажів через НП" suffix="грн" value={data.bonus.siteNpRevenue} onChange={(v) => update(["bonus", "siteNpRevenue"], v)} />
-        <div className="hint">4% на команду</div>
+        <div className="hint">4% на команду{showAmounts ? ` · ${fmt(calc.bonus.siteNpTeam)} ÷ ${calc.bonus.team} = ${fmt(calc.bonus.siteNp)} кожному` : ""}</div>
       </SmItem>
       <SmItem num="3.7" title="Продаж по БН" amount={showAmounts ? calc.bonus.bn : undefined} screenshotKey="bn" {...shot}>
         <Field readOnly={readOnly} label="Оборот по БН" suffix="грн" value={data.bonus.bnRevenue} onChange={(v) => update(["bonus", "bnRevenue"], v)} />
-        <div className="hint">4% на команду</div>
+        <div className="hint">4% на команду{showAmounts ? ` · ${fmt(calc.bonus.bnTeam)} ÷ ${calc.bonus.team} = ${fmt(calc.bonus.bn)} кожному` : ""}</div>
       </SmItem>
 
       <BlockHeader n="4" title="Додаткова мотивація за продаж PPI" />
       <SmItem num="4.1" title="Продаж PPI" amount={showAmounts ? calc.ppi.bonus : undefined} screenshotKey="ppi" {...shot}>
         <Field readOnly={readOnly} label="Оборот по категорії PPI" suffix="грн" value={data.ppi.ppiRevenue} onChange={(v) => update(["ppi", "ppiRevenue"], v)} />
         <CheckField readOnly={readOnly} label="План PPI закрито" checked={data.ppi.planClosed} onChange={(v) => update(["ppi", "planClosed"], v)} />
-        {showAmounts && <div className="hint">{calc.ppi.pct}% від обороту PPI ({data.ppi.planClosed ? "план закрито" : "план не закрито"})</div>}
+        {showAmounts && <div className="hint">{calc.ppi.pct}% від обороту PPI ({data.ppi.planClosed ? "план закрито" : "план не закрито"}) · {fmt(calc.ppi.teamBonus)} ÷ {calc.ppi.team} = {fmt(calc.ppi.bonus)} кожному</div>}
       </SmItem>
 
       <BlockHeader n="5" title="Рекорд та квартальна премія" />
@@ -2076,8 +2076,8 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
         <Field readOnly={readOnly} label="Попередній рекорд ТО" suffix="грн" value={data.record.prevRecord} onChange={(v) => update(["record", "prevRecord"], v)} />
         {showAmounts && (
           <div className="hint">
-            Поточний поріг рекорду: {fmt(calc.record.threshold)} (мін. 1 млн, крок +10%). Бонус — 1% від ТО.
-            {calc.record.beaten ? " Рекорд перебито ✔" : ""}
+            Поточний поріг рекорду: {fmt(calc.record.threshold)} (мін. 1 млн, крок +10%). Бонус — 1% від ТО на команду.
+            {calc.record.beaten ? ` Рекорд перебито ✔ · ${fmt(calc.record.teamBonus)} ÷ ${calc.record.team} = ${fmt(calc.record.bonus)} кожному` : ""}
           </div>
         )}
       </SmItem>

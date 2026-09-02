@@ -227,7 +227,8 @@ function tierBonus(value: number, thresholds: number[], bonuses: number[]) {
   for (let i = thresholds.length - 1; i >= 0; i--) if (thresholds[i] && v >= thresholds[i]) return bonuses[i];
   return 0;
 }
-function calcBonusBlock(b: any, dailyRate: number) {
+function calcBonusBlock(b: any, dailyRate: number, teamSize = 1) {
+  const team = Math.max(1, teamSize || 1);
   let callsPct = 0;
   if (b.callsCountDone && b.callsRevenueDone) callsPct = 5;
   else if (b.callsCountDone) callsPct = 3;
@@ -237,22 +238,33 @@ function calcBonusBlock(b: any, dailyRate: number) {
   const avgCheck = tierBonus(b.avgCheckFact, [b.scN1, b.scN2, b.scN3], [700, 1500, 2000]);
   const checkLen = tierBonus(b.checkLenFact, [b.clN1, b.clN2, b.clN3], [700, 1500, 2000]);
   const courses = b.coursesOk ? 500 : 0;
-  const siteNp = Math.round((b.siteNpRevenue || 0) * 0.04);
-  const bn = Math.round((b.bnRevenue || 0) * 0.04);
+  // 3.6 НП і 3.7 БН — командні: 4% від обороту ділиться на всю команду салону
+  const siteNpTeam = Math.round((b.siteNpRevenue || 0) * 0.04);
+  const bnTeam = Math.round((b.bnRevenue || 0) * 0.04);
+  const siteNp = Math.round(siteNpTeam / team);
+  const bn = Math.round(bnTeam / team);
   return {
-    callsPct, callsPlanRevenue, calls, replacement, avgCheck, checkLen, courses, siteNp, bn,
+    callsPct, callsPlanRevenue, calls, replacement, avgCheck, checkLen, courses,
+    siteNp, bn, siteNpTeam, bnTeam, team,
     subtotal: calls + replacement + avgCheck + checkLen + courses + siteNp + bn,
   };
 }
-function calcPpi(p: any) { const pct = p.planClosed ? 3 : 1; return { pct, bonus: Math.round((p.ppiRevenue || 0) * (pct / 100)) }; }
+function calcPpi(p: any, teamSize = 1) {
+  const team = Math.max(1, teamSize || 1);
+  const pct = p.planClosed ? 3 : 1;
+  const teamBonus = Math.round((p.ppiRevenue || 0) * (pct / 100));
+  return { pct, team, teamBonus, bonus: Math.round(teamBonus / team) };
+}
 const recordThreshold = (prev: number) => Math.max(1_000_000, Math.round((prev || 0) * 1.1));
-function calcRecord(r: any) {
+function calcRecord(r: any, teamSize = 1) {
+  const team = Math.max(1, teamSize || 1);
   const threshold = recordThreshold(r.prevRecord);
   const beaten = (r.monthlyTo || 0) >= threshold && (r.monthlyTo || 0) > 0;
-  return { threshold, beaten, bonus: beaten ? Math.round((r.monthlyTo || 0) * 0.01) : 0 };
+  const teamBonus = beaten ? Math.round((r.monthlyTo || 0) * 0.01) : 0;
+  return { threshold, beaten, team, teamBonus, bonus: Math.round(teamBonus / team) };
 }
 function calcQuarterly(q: any) { if (!q.threeOfThree) return 0; return Math.round((q.last3SalarySum || 0) * 0.1); }
-function calcSmAll(data: any, ym: string, area: string) {
+function calcSmAll(data: any, ym: string, area: string, teamSize = 1) {
   const daysInMonth = daysInMonthOf(ym);
   const avg3 = data.base.avg3To || 0;
   const autoCategory = categoryOf(avg3);
@@ -263,14 +275,14 @@ function calcSmAll(data: any, ym: string, area: string) {
   const baseAdjusted = Math.round(baseRaw * factor);
   const dailyRate = Math.round(baseRaw / Math.max(1, daysInMonth - normDaysOff(area)));
   const mgr = calcManagerBlock(data.manager, baseRaw);
-  const bonus = calcBonusBlock(data.bonus, dailyRate);
-  const ppi = calcPpi(data.ppi);
-  const record = calcRecord(data.record);
+  const bonus = calcBonusBlock(data.bonus, dailyRate, teamSize);
+  const ppi = calcPpi(data.ppi, teamSize);
+  const record = calcRecord(data.record, teamSize);
   const quarterly = calcQuarterly(data.quarterly);
   const adj = data.adj?.amount || 0;
   const advance = data.adj?.advance || 0;
   const total = baseAdjusted + mgr.subtotal + bonus.subtotal + ppi.bonus + record.bonus + quarterly + adj - advance;
-  return { daysInMonth, category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate, mgr, bonus, ppi, record, quarterly, adj, advance, total };
+  return { daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate, mgr, bonus, ppi, record, quarterly, adj, advance, total };
 }
 
 // ---------- тексти «Умови» (заповнюються з src/conditions.js) ----------
@@ -336,9 +348,17 @@ Deno.serve(async (req) => {
         (me.cabinet_type === "tm" && salonTmOn(sk, it.ym, reass) === me.cabinet_key);
       if (!allowed) return json({ error: "forbidden" }, 403);
     }
+    // розмір команди по кожному салону (активні співробітники) — для командних бонусів
+    const salonKeys = [...new Set(items.map((it: any) => it.salonKey).filter(Boolean))];
+    const teamBySalon: Record<string, number> = {};
+    if (salonKeys.length) {
+      const { data: emps } = await svc.from("employees")
+        .select("salon_key").eq("status", "active").in("salon_key", salonKeys);
+      for (const e of emps || []) teamBySalon[e.salon_key] = (teamBySalon[e.salon_key] || 0) + 1;
+    }
     const out = items.map((it: any) => {
       const area = SALONS[it.salonKey]?.area || "область";
-      return calcSmAll(it.data, it.ym, area);
+      return calcSmAll(it.data, it.ym, area, teamBySalon[it.salonKey] || 1);
     });
     return json(op === "sm" ? out[0] : out);
   }
