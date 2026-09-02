@@ -202,8 +202,8 @@ async function saveData(tmKey, ym, data) {
   try { await window.storage.set(`data:${tmKey}:${ym}`, JSON.stringify(data), true); } catch (e) { console.error(e); }
 }
 async function loadAdj(tmKey, ym) {
-  try { const r = await window.storage.get(`adj:${tmKey}:${ym}`, true); return r ? { amount: 0, comment: "", advance: 0, ...JSON.parse(r.value) } : { amount: 0, comment: "", advance: 0 }; }
-  catch { return { amount: 0, comment: "", advance: 0 }; }
+  try { const r = await window.storage.get(`adj:${tmKey}:${ym}`, true); return r ? { amount: 0, comment: "", advance: 0, official: 0, birthdays: 0, ...JSON.parse(r.value) } : { amount: 0, comment: "", advance: 0, official: 0, birthdays: 0 }; }
+  catch { return { amount: 0, comment: "", advance: 0, official: 0, birthdays: 0 }; }
 }
 async function saveAdj(tmKey, ym, adj) {
   try { await window.storage.set(`adj:${tmKey}:${ym}`, JSON.stringify(adj), true); } catch (e) { console.error(e); }
@@ -1101,7 +1101,10 @@ function SummaryBlock({ id, title, note, total, items, expanded, onToggle }) {
 
 function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl, calc }) {
   const advance = adj.advance || 0;
-  const grandTotal = calc.floored + (isLastMonthOfQuarter ? (qbonus.bonus41 + qbonus.bonus42) : 0) + (adj.amount || 0) - advance;
+  const official = adj.official || 0;
+  const birthdays = adj.birthdays || 0;
+  const accrued = calc.floored + (isLastMonthOfQuarter ? (qbonus.bonus41 + qbonus.bonus42) : 0) + (adj.amount || 0);
+  const grandTotal = accrued - advance - official - birthdays;
 
   const b1Items = [
     { label: "1.1 Виконання плану продажів", amount: calc.b1.sales },
@@ -1151,10 +1154,15 @@ function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuart
             <NumInput className="adj-amount" value={adj.amount} onChange={(v) => onAdjChange({ ...adj, amount: v })} />
             <span>грн</span>
           </div>
-          <div className="adj-row">
-            <span>Аванс (вирахувати)</span>
-            <NumInput className="adj-amount" value={adj.advance} onChange={(v) => onAdjChange({ ...adj, advance: v })} />
-            <span>грн</span>
+          <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
+          <div className="adj-row"><span>Офіційно на картку</span>
+            <NumInput className="adj-amount" value={adj.official} onChange={(v) => onAdjChange({ ...adj, official: v })} /><span>грн</span>
+          </div>
+          <div className="adj-row"><span>Аванс готівка</span>
+            <NumInput className="adj-amount" value={adj.advance} onChange={(v) => onAdjChange({ ...adj, advance: v })} /><span>грн</span>
+          </div>
+          <div className="adj-row"><span>Дні народження</span>
+            <NumInput className="adj-amount" value={adj.birthdays} onChange={(v) => onAdjChange({ ...adj, birthdays: v })} /><span>грн</span>
             <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>
           </div>
         </>
@@ -1163,9 +1171,10 @@ function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuart
           {(adj.amount || 0) !== 0 && (
             <div className="summary-row"><span>Додатково{adj.comment ? ` (${adj.comment})` : ""}</span><b>{fmt(adj.amount)}</b></div>
           )}
-          {(adj.advance || 0) !== 0 && (
-            <div className="summary-row"><span>Аванс (вирахувано)</span><b>-{fmt(adj.advance)}</b></div>
-          )}
+          <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
+          {official !== 0 && <div className="summary-row"><span>Офіційно на картку</span><b>-{fmt(official)}</b></div>}
+          {advance !== 0 && <div className="summary-row"><span>Аванс готівка</span><b>-{fmt(advance)}</b></div>}
+          {birthdays !== 0 && <div className="summary-row"><span>Дні народження</span><b>-{fmt(birthdays)}</b></div>}
         </>
       )}
 
@@ -1246,7 +1255,7 @@ function CorrectionsTab({ data, onReply }) {
 function TmView({ tmKey, tmName, onBack, embedded }) {
   const [ym, setYm] = useState(salaryYm());
   const [data, setData] = useState(emptyData());
-  const [adj, setAdj] = useState({ amount: 0, comment: "", advance: 0 });
+  const [adj, setAdj] = useState({ amount: 0, comment: "", advance: 0, official: 0, birthdays: 0 });
   const [grade, setGrade] = useState(2);
   const [qbonus, setQbonus] = useState({ bonus41: 0, bonus42: 0 });
   const [loading, setLoading] = useState(true);
@@ -1493,7 +1502,7 @@ function ManagerView({ onBack, embedded }) {
   const [tmKey, setTmKey] = useState("andriy");
   const [ym, setYm] = useState(salaryYm());
   const [data, setData] = useState(emptyData());
-  const [adj, setAdj] = useState({ amount: 0, comment: "", advance: 0 });
+  const [adj, setAdj] = useState({ amount: 0, comment: "", advance: 0, official: 0, birthdays: 0 });
   const [grade, setGrade] = useState(2);
   const [qbonus, setQbonus] = useState({ bonus41: 0, bonus42: 0 });
   const [months, setMonths] = useState([]);
@@ -2097,6 +2106,10 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
 ========================================================= */
 function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
   const grand = calc.total;
+  const official = data.adj.official || 0;
+  const advance = data.adj.advance || 0;
+  const birthdays = data.adj.birthdays || 0;
+  const accrued = calc.grossTotal != null ? calc.grossTotal : grand + advance + official + birthdays;
 
   const baseItems = [
     { label: `База (${calc.category} · ${planBracketLabel(calc.bracket)})`, amount: calc.baseRaw },
@@ -2137,10 +2150,15 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange,
             <NumInput className="adj-amount" value={data.adj.amount} onChange={(v) => onAdjChange({ ...data.adj, amount: v })} />
             <span>грн</span>
           </div>
-          <div className="adj-row">
-            <span>Аванс (вирахувати)</span>
-            <NumInput className="adj-amount" value={data.adj.advance} onChange={(v) => onAdjChange({ ...data.adj, advance: v })} />
-            <span>грн</span>
+          <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
+          <div className="adj-row"><span>Офіційно на картку</span>
+            <NumInput className="adj-amount" value={data.adj.official} onChange={(v) => onAdjChange({ ...data.adj, official: v })} /><span>грн</span>
+          </div>
+          <div className="adj-row"><span>Аванс готівка</span>
+            <NumInput className="adj-amount" value={data.adj.advance} onChange={(v) => onAdjChange({ ...data.adj, advance: v })} /><span>грн</span>
+          </div>
+          <div className="adj-row"><span>Дні народження</span>
+            <NumInput className="adj-amount" value={data.adj.birthdays} onChange={(v) => onAdjChange({ ...data.adj, birthdays: v })} /><span>грн</span>
             <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>
           </div>
         </>
@@ -2149,9 +2167,10 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, onAdjChange,
           {(data.adj.amount || 0) !== 0 && (
             <div className="summary-row"><span>Додатково{data.adj.comment ? ` (${data.adj.comment})` : ""}</span><b>{fmt(data.adj.amount)}</b></div>
           )}
-          {(data.adj.advance || 0) !== 0 && (
-            <div className="summary-row"><span>Аванс (вирахувано)</span><b>-{fmt(data.adj.advance)}</b></div>
-          )}
+          <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
+          {official !== 0 && <div className="summary-row"><span>Офіційно на картку</span><b>-{fmt(official)}</b></div>}
+          {advance !== 0 && <div className="summary-row"><span>Аванс готівка</span><b>-{fmt(advance)}</b></div>}
+          {birthdays !== 0 && <div className="summary-row"><span>Дні народження</span><b>-{fmt(birthdays)}</b></div>}
         </>
       )}
 
@@ -2673,7 +2692,8 @@ async function tmGrandTotal(tmKey, ym) {
     isLast ? loadQBonus(tmKey, qKey) : Promise.resolve({ bonus41: 0, bonus42: 0 }),
   ]);
   const calc = await calcTm(d, g, tmKey, ym);
-  const total = calc.floored + (isLast ? (qb.bonus41 + qb.bonus42) : 0) + (a.amount || 0) - (a.advance || 0);
+  const total = calc.floored + (isLast ? (qb.bonus41 + qb.bonus42) : 0) + (a.amount || 0)
+    - (a.advance || 0) - (a.official || 0) - (a.birthdays || 0);
   return { data: d, total, status: d.status, paymentStatus: d.paymentStatus };
 }
 

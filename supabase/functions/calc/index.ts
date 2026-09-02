@@ -281,8 +281,12 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1) {
   const quarterly = calcQuarterly(data.quarterly);
   const adj = data.adj?.amount || 0;
   const advance = data.adj?.advance || 0;
-  const total = baseAdjusted + mgr.subtotal + bonus.subtotal + ppi.bonus + record.bonus + quarterly + adj - advance;
-  return { daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate, mgr, bonus, ppi, record, quarterly, adj, advance, total };
+  const official = data.adj?.official || 0;   // Офіційно на картку
+  const birthdays = data.adj?.birthdays || 0; // Дні народження
+  const grossTotal = baseAdjusted + mgr.subtotal + bonus.subtotal + ppi.bonus + record.bonus + quarterly + adj;
+  const deducted = advance + official + birthdays;
+  const total = grossTotal - deducted;
+  return { daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate, mgr, bonus, ppi, record, quarterly, adj, advance, official, birthdays, grossTotal, deducted, total };
 }
 
 // ---------- тексти «Умови» (заповнюються з src/conditions.js) ----------
