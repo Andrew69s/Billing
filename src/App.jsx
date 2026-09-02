@@ -5218,15 +5218,28 @@ function useSupply() {
 /* --- рядок вводу товару (для приходу / списання / замовлення) --- */
 function SupplyLineRow({ items, line, exclude, onChange, onRemove, priceCol }) {
   const opts = items.filter((i) => i.id === line.item_id || !exclude.has(i.id));
+  const pickItem = (id) => {
+    const next = { ...line, item_id: id };
+    // ціну підтягуємо з довідника; лишаємо ручну правку, якщо вона вже введена й відрізняється від попередньої позиції
+    if (priceCol) {
+      const prevPrice = items.find((i) => i.id === line.item_id)?.unit_cost;
+      const manual = line.unit_cost !== "" && line.unit_cost != null && Number(line.unit_cost) !== Number(prevPrice);
+      if (!manual) {
+        const cost = items.find((i) => i.id === id)?.unit_cost;
+        next.unit_cost = cost ? String(cost) : "";
+      }
+    }
+    onChange(next);
+  };
   return (
     <div className="wh-line">
-      <select value={line.item_id} onChange={(e) => onChange({ ...line, item_id: e.target.value })}>
+      <select value={line.item_id} onChange={(e) => pickItem(e.target.value)}>
         <option value="">— позиція —</option>
         {opts.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
       </select>
       <NumInput className="wh-line-qty" allowEmpty placeholder="к-ть" value={line.qty} onChange={(v) => onChange({ ...line, qty: v })} />
       {priceCol && (
-        <NumInput className="wh-line-qty" allowEmpty placeholder="ціна" value={line.unit_cost}
+        <NumInput key={line.item_id} className="wh-line-qty" allowEmpty placeholder="ціна" value={line.unit_cost}
           onChange={(v) => onChange({ ...line, unit_cost: v })} />
       )}
       <button className="wh-line-x" onClick={onRemove}><X size={13} /></button>
@@ -5312,9 +5325,15 @@ function SupplyCentral({ items, stock, canManage, onReload }) {
 /* --- Прихід (модалка) --- */
 function SupplyReceipt({ items, warehouse, prefill, onClose, onDone }) {
   const [cp, setCp] = useState("");
-  const [lines, setLines] = useState(prefill || [{ item_id: "", qty: "", unit_cost: "" }]);
-  const [busy, setBusy] = useState(false);
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  const [lines, setLines] = useState(() =>
+    (prefill || [{ item_id: "", qty: "", unit_cost: "" }]).map((l) =>
+      l.item_id && (l.unit_cost === "" || l.unit_cost == null) && byId[l.item_id]?.unit_cost
+        ? { ...l, unit_cost: String(byId[l.item_id].unit_cost) }
+        : l
+    )
+  );
+  const [busy, setBusy] = useState(false);
   const set = (idx, ln) => setLines((ls) => ls.map((x, i) => (i === idx ? ln : x)));
   const total = lines.reduce((s, l) => {
     const c = l.unit_cost !== "" ? Number(l.unit_cost) : (byId[l.item_id]?.unit_cost || 0);
@@ -5347,7 +5366,7 @@ function SupplyReceipt({ items, warehouse, prefill, onClose, onDone }) {
           </div>
           <div className="wh-modal-foot"><span>Сума</span><b>{suah(total)}</b></div>
           <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? "…" : "Оформити прихід"}</button>
-          <p className="hint">Ціну можна лишити порожньою — візьметься з довідника. Якщо ввести іншу — довідник оновиться.</p>
+          <p className="hint">Ціна підтягується з довідника — за потреби відкоригуйте у рядку. Нова ціна оновить довідник.</p>
         </div>
       </div>
     </div>, document.body);
