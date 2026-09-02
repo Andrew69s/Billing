@@ -5567,7 +5567,7 @@ function SupplyOrders({ scope, salonKey, tmKey, items, stock, onReload, onEditDr
         ))}
       </div>
 
-      {open && (
+      {open && createPortal(
         <div className="modal-overlay" onClick={() => setOpen(null)}>
           <div className="wh-modal" onClick={(e) => e.stopPropagation()}>
             <div className="wh-modal-h"><span>{salonByKey(open.order.salon_key)?.city} · {ORDER_ST[open.order.status]}</span><button className="modal-close" onClick={() => setOpen(null)}><X size={16} /></button></div>
@@ -5581,7 +5581,8 @@ function SupplyOrders({ scope, salonKey, tmKey, items, stock, onReload, onEditDr
               </tbody></table>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       {ship && <SupplyShip order={ship} items={items} stock={stock} onClose={() => setShip(null)} onDone={() => { setShip(null); load(); onReload && onReload(); }} />}
     </div>
