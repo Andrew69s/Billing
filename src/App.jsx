@@ -83,6 +83,10 @@ function fmtDeadline(v) {
 
 const pad = (n) => String(n).padStart(2, "0");
 const nowYm = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+const prevYm = (ym) => { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m - 2, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+/* активний період ЗП — завжди попередній календарний місяць
+   (у вересні працюємо над серпнем, дедлайн — 10 вересня) */
+const salaryYm = () => prevYm(nowYm());
 const ymToQuarter = (ym) => { const [y, m] = ym.split("-").map(Number); return `${y}-Q${Math.ceil(m / 3)}`; };
 const quarterMonths = (qKey) => {
   const [y, qs] = qKey.split("-Q");
@@ -1211,7 +1215,7 @@ function CorrectionsTab({ data, onReply }) {
    TM VIEW
 ========================================================= */
 function TmView({ tmKey, tmName, onBack, embedded }) {
-  const [ym, setYm] = useState(nowYm());
+  const [ym, setYm] = useState(salaryYm());
   const [data, setData] = useState(emptyData());
   const [adj, setAdj] = useState({ amount: 0, comment: "", advance: 0 });
   const [grade, setGrade] = useState(2);
@@ -1446,7 +1450,7 @@ function QuarterPanel({ qKey, onDone }) {
 ========================================================= */
 function ManagerView({ onBack, embedded }) {
   const [tmKey, setTmKey] = useState("andriy");
-  const [ym, setYm] = useState(nowYm());
+  const [ym, setYm] = useState(salaryYm());
   const [data, setData] = useState(emptyData());
   const [adj, setAdj] = useState({ amount: 0, comment: "", advance: 0 });
   const [grade, setGrade] = useState(2);
@@ -2218,7 +2222,7 @@ function SmEmployeePicker({ salon, employees, ym, onPick }) {
 function SmView({ salon, embedded }) {
   const [employees, setEmployees] = useState(null);
   const [emp, setEmp] = useState(null);
-  const [ym, setYm] = useState(nowYm());
+  const [ym, setYm] = useState(salaryYm());
   const [data, setData] = useState(emptySmData());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -2489,7 +2493,7 @@ const smStatusBadge = (st) => (
 );
 
 function SalonReviewPanel({ tmKey, reviewer }) {
-  const [ym, setYm] = useState(nowYm());
+  const [ym, setYm] = useState(salaryYm());
   const salons = useMemo(() => salonsOfTm(tmKey, ym), [tmKey, ym]);
   const [employees, setEmployees] = useState(null);
   const [bySalon, setBySalon] = useState(null); // { salonKey: rows[] }
@@ -2585,7 +2589,7 @@ async function tmGrandTotal(tmKey, ym) {
 }
 
 function ConsolidationPanel({ role }) {
-  const [ym, setYm] = useState(nowYm());
+  const [ym, setYm] = useState(salaryYm());
   const [rows, setRows] = useState(null);
   const [reload, setReload] = useState(0);
 
@@ -5246,7 +5250,7 @@ function useNavPrefs(cabKey, itemKeys) {
   return { ordered, hidden: prefs.hidden, customised: !!(prefs.order.length || prefs.hidden.length), move, moveTo, toggleHidden, reset };
 }
 
-function CabinetShell({ title, onExit, onLogout, modules, cabKey }) {
+function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const items = modules.filter(Boolean);
   const byKey = React.useMemo(() => Object.fromEntries(items.map((m) => [m.key, m])), [items]);
   const nav = useNavPrefs(cabKey, items.map((m) => m.key));
@@ -5270,6 +5274,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey }) {
     <div className="view cab-shell">
       <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
       <div className={`cab-scrim ${navOpen ? "on" : ""}`} onClick={() => setNavOpen(false)} />
+      {banner}
       <div className="cab-layout">
         <nav className={`cab-side ${editNav ? "editing" : ""} ${navOpen ? "open" : ""}`}>
           {shownItems.map((m) => {
@@ -5374,11 +5379,48 @@ function TmWhatIf({ base }) {
   );
 }
 
+/* Смужка-нагадування про подачу ЗП за попередній місяць — вгорі кабінету,
+   видима на всіх вкладках, поки не подано. */
+function SalaryDeadlineBanner({ role, tmKey, salonKey }) {
+  const [state, setState] = useState(null); // { pending, overdue, dl } | { done:true } | null
+  useEffect(() => {
+    let active = true;
+    const ym = salaryYm();
+    const dl = deadlineInfo(ym);
+    (async () => {
+      try {
+        if (role === "tm") {
+          const d = await loadData(tmKey, ym);
+          const pending = d.status === "draft" || d.status === "corrected";
+          if (active) setState({ pending, overdue: dl.overdue, dl, ym });
+        } else {
+          const emps = await listEmployees().catch(() => []);
+          const rows = await salonSalaryRows(salonKey, ym, emps);
+          const pending = rows.length === 0 || rows.some((r) => r.data.status !== "submitted" && r.data.status !== "corrected" && r.data.status !== "approved");
+          if (active) setState({ pending, overdue: dl.overdue, dl, ym, count: rows.filter((r) => r.data.status === "draft").length, total: rows.length });
+        }
+      } catch { if (active) setState(null); }
+    })();
+    return () => { active = false; };
+  }, [role, tmKey, salonKey]);
+
+  if (!state || !state.pending) return null;
+  const per = monthLabel(state.ym);
+  return (
+    <div className={`salary-strip ${state.overdue ? "late" : ""}`}>
+      <AlertTriangle size={15} />
+      {state.overdue
+        ? `Термін подачі ЗП за ${per} минув (був до ${state.dl.dueLabel}) — подайте якнайшвидше`
+        : `Подайте ЗП за ${per} до ${state.dl.dueLabel}`}
+    </div>
+  );
+}
+
 function TmOverview({ tmKey }) {
   const [s, setS] = useState(null);
   useEffect(() => {
     let active = true;
-    const ym = nowYm();
+    const ym = salaryYm();
     (async () => {
       const [d, g, invoices, employees] = await Promise.all([
         loadData(tmKey, ym), loadGrade(tmKey, ymToQuarter(ym)), listInvoices().catch(() => []), listEmployees().catch(() => []),
@@ -5441,7 +5483,7 @@ function TmOverview({ tmKey }) {
       const hasPct = plan > 0 || curFinal;
       if (active) setS({
         status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct || 0, curFinal, hasPct, ym,
-        submitted, salonTotal: salons.length, dl: deadlineInfo(ym),
+        submitted, salonTotal: salons.length,
         invIssued, invPaid, invCount: invM.length, salonPayroll, hist, whatif,
       });
     })();
@@ -5449,7 +5491,6 @@ function TmOverview({ tmKey }) {
   }, [tmKey]);
   if (!s) return <div className="loading">Завантаження…</div>;
   const st = { draft: "чернетка", submitted: "на розгляді", corrected: "потребує коректив", approved: "погоджено" }[s.status] || "—";
-  const nagged = (s.status === "draft" || s.status === "corrected") && !s.dl.future;
   const notSubmitted = s.salonTotal - s.submitted;
 
   // для трендів ігноруємо поточний місяць, поки він чернетка (неповний)
@@ -5464,7 +5505,7 @@ function TmOverview({ tmKey }) {
   return (
     <div className="ov">
       <h3 className="ov-h">Огляд</h3>
-      <p className="ov-sub">{monthLabel(nowYm())}</p>
+      <p className="ov-sub">ЗП за {monthLabel(salaryYm())}</p>
       <div className="ov-tiles">
         <div className="ov-tile ov-tile-kpi">
           <b>{fmt(s.total)}</b>
@@ -5486,12 +5527,6 @@ function TmOverview({ tmKey }) {
         <div className="ov-tile"><b>{invMoney(s.invIssued)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
         <div className="ov-tile"><b>{invMoney(s.invPaid)}</b><span>з них оплачено+</span></div>
       </div>
-      {nagged && (
-        <div className={`banner ${s.dl.overdue ? "banner-late" : "banner-warn"}`}>
-          <AlertTriangle size={16} />
-          {s.dl.overdue ? `Термін подачі ЗП минув (був до ${s.dl.dueLabel})` : `Подайте ЗП за ${monthLabel(nowYm())} до ${s.dl.dueLabel}`}
-        </div>
-      )}
 
       <div className="ov-charts">
         <div className="chart-wrap">
@@ -5537,7 +5572,7 @@ function SmOverview({ salon }) {
   const [s, setS] = useState(null);
   useEffect(() => {
     let active = true;
-    const ym = nowYm();
+    const ym = salaryYm();
     (async () => {
       const [invoices, employees] = await Promise.all([listInvoices().catch(() => []), listEmployees().catch(() => [])]);
       const rows = await salonSalaryRows(salon.key, ym, employees);
@@ -5545,29 +5580,22 @@ function SmOverview({ salon }) {
       const invM = invoices.filter((i) => invMonth(i) === ym && i.status !== "cancelled");
       const pending = rows.filter((r) => r.data.status !== "submitted" && r.data.status !== "corrected").length;
       setS({
-        payroll: rows.reduce((a, r) => a + r.total, 0), headcount: rows.length, pending, dl: deadlineInfo(ym),
+        payroll: rows.reduce((a, r) => a + r.total, 0), headcount: rows.length, pending,
         invSum: invM.reduce((a, i) => a + Number(i.amount || 0), 0), invCount: invM.length,
       });
     })();
     return () => { active = false; };
   }, [salon.key]);
   if (!s) return <div className="loading">Завантаження…</div>;
-  const nagged = s.pending > 0 && !s.dl.future;
   return (
     <div className="ov">
       <h3 className="ov-h">Огляд</h3>
-      <p className="ov-sub">{monthLabel(nowYm())}</p>
+      <p className="ov-sub">ЗП за {monthLabel(salaryYm())}</p>
       <div className="ov-tiles">
         <div className="ov-tile"><b>{fmt(s.payroll)}</b><span>ФОП магазину за місяць</span></div>
         <div className="ov-tile"><b>{s.headcount - s.pending} / {s.headcount}</b><span>ЗП подано</span></div>
         <div className="ov-tile"><b>{invMoney(s.invSum)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
       </div>
-      {nagged && (
-        <div className={`banner ${s.dl.overdue ? "banner-late" : "banner-warn"}`}>
-          <AlertTriangle size={16} />
-          {s.dl.overdue ? `Термін подачі ЗП минув (був до ${s.dl.dueLabel})` : `Подайте ЗП співробітників до ${s.dl.dueLabel}`}
-        </div>
-      )}
     </div>
   );
 }
@@ -5590,7 +5618,12 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     isAdmin ? { key: "admin", label: "Адміністрування", icon: <User size={16} />, divider: true, render: () => <AdminPanel /> } : null,
   ];
-  return <CabinetShell title={`ТМ · ${tm.name}`} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={tmKey} />;
+  return (
+    <CabinetShell
+      title={`ТМ · ${tm.name}`} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={tmKey}
+      banner={<SalaryDeadlineBanner role="tm" tmKey={tmKey} />}
+    />
+  );
 }
 
 function ManagerCabinet({ onExit, onLogout }) {
@@ -5662,7 +5695,12 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "standards", label: "Стандарти й навчання", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
   ];
-  return <CabinetShell title={`Салон · ${salonLabel(salon)}`} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={salonKey} />;
+  return (
+    <CabinetShell
+      title={`Салон · ${salonLabel(salon)}`} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={salonKey}
+      banner={<SalaryDeadlineBanner role="sm" salonKey={salonKey} tmKey={salonTmOn(salonKey)} />}
+    />
+  );
 }
 
 function OfficeCabinet({ cabKey, onExit, onLogout }) {
@@ -5799,6 +5837,13 @@ const CSS = `
 .banner svg{flex-shrink:0;}
 .banner-warn{background:rgba(190,138,46,.14);color:var(--gold-bright);border-color:rgba(220,169,74,.22);}
 .banner-late{background:rgba(160,58,42,.18);color:var(--negative-bright);border-color:rgba(224,145,127,.22);}
+
+/* смужка-нагадування про подачу ЗП — вгорі кабінету, на всіх вкладках */
+.salary-strip{display:flex;align-items:center;gap:9px;padding:10px 16px;margin-bottom:16px;border-radius:var(--radius-md);font-size:12.5px;font-weight:600;line-height:1.35;
+  background:rgba(190,138,46,.16);color:var(--gold-bright);border:1px solid rgba(220,169,74,.3);}
+.salary-strip svg{flex-shrink:0;}
+.salary-strip.late{background:rgba(160,58,42,.2);color:var(--negative-bright);border-color:rgba(224,145,127,.32);}
+@media (max-width:880px){.salary-strip{margin-bottom:12px;font-size:12px;}}
 .loading{color:var(--on-dark-2);padding:44px 0;text-align:center;font-size:13px;animation:pulse 1.4s ease-in-out infinite;}
 
 /* ---------- blocks & items ---------- */
