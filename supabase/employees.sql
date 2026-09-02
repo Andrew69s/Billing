@@ -35,8 +35,7 @@ create policy employees_select on public.employees for select using (
     or public.my_cabinet_type() = 'accountant'
     or salon_key = public.my_cabinet_key()
     or public.my_cabinet_type() = 'tm'
-    or (public.my_cabinet_type() = 'sm'
-        and public.current_salon_tm(salon_key) = public.current_salon_tm(public.my_cabinet_key()))
+    or public.my_cabinet_type() = 'sm'  -- будь-який СМ бачить склад команди всіх салонів (графік/підміни)
   )
 );
 

@@ -4531,11 +4531,8 @@ function ShiftScheduleModule({ cab }) {
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
 
-  // графік показуємо по всіх 8 магазинах усім ТМ і керівнику; СМ — свою територію
-  const salons = useMemo(() => {
-    if (cab.type === "sm") { const tm = cab.tmKey || salonTmOn(cab.key); return tm ? salonsOfTm(tm) : [salonByKey(cab.key)].filter(Boolean); }
-    return SALONS;
-  }, [cab]);
+  // графік показуємо по всіх 8 магазинах усім (ТМ, керівник, СМ) — для підмін і координації
+  const salons = SALONS;
   const canEditSalon = useMemo(() => {
     if (cab.type === "sm") return (k) => k === cab.key;
     if (cab.type === "manager") return () => true;
