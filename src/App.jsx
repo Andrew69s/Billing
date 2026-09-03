@@ -7918,39 +7918,39 @@ td.sh.sh-plan{font-weight:400;}
 .cash-tbl tr.done td.num{color:var(--muted);font-weight:500;}
 
 /* оборот салонів — кільцевий дашборд (головний екран Віктора / ТМ) */
-.rg-mod{margin-bottom:26px;animation:fadeIn .28s ease both;}
-.rg-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
-.rg-toggle{display:inline-flex;background:var(--surface-alt);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px;}
-.rg-toggle button{border:0;background:none;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 13px;border-radius:999px;cursor:pointer;letter-spacing:.02em;}
+.rg-mod{margin-bottom:30px;animation:fadeIn .28s ease both;}
+.rg-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+.rg-toggle{display:inline-flex;background:rgba(247,244,234,.06);border:1px solid var(--line-dark);border-radius:999px;padding:3px;gap:2px;}
+.rg-toggle button{border:0;background:none;color:var(--on-dark-3);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 13px;border-radius:999px;cursor:pointer;letter-spacing:.02em;}
 .rg-toggle button.on{background:var(--gold);color:var(--gold-ink);font-weight:600;}
 .rg-ring{position:relative;flex-shrink:0;}
 .rg-ring svg{display:block;}
 .rg-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;}
-.rg-center b{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;}
+.rg-center b{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:var(--on-dark);font-variant-numeric:tabular-nums;}
 .rg-center i{font-style:normal;font-size:10px;margin-top:3px;font-family:'IBM Plex Mono',monospace;}
-.rg-track{stroke:var(--surface-sink);}
+.rg-track{stroke:rgba(247,244,234,.10);}
 .rg-prog{transition:stroke-dashoffset .9s cubic-bezier(.2,.8,.2,1);}
-.rg-prog.lo{stroke:var(--negative);} .rg-prog.mid{stroke:var(--gold);} .rg-prog.ok{stroke:var(--positive);} .rg-prog.over{stroke:var(--gold-bright);}
-.rg-pct.lo{color:var(--negative);} .rg-pct.mid{color:var(--gold);} .rg-pct.ok{color:var(--positive);} .rg-pct.over{color:var(--gold-bright);}
-.rg-hero{display:flex;align-items:center;gap:18px;padding:16px 18px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:16px;}
+.rg-prog.lo{stroke:var(--negative-bright);} .rg-prog.mid{stroke:var(--gold-bright);} .rg-prog.ok{stroke:var(--positive-bright);} .rg-prog.over{stroke:var(--gold-bright);}
+.rg-pct.lo{color:var(--negative-bright);} .rg-pct.mid{color:var(--gold-bright);} .rg-pct.ok{color:var(--positive-bright);} .rg-pct.over{color:var(--gold-bright);}
+.rg-hero{display:flex;align-items:center;gap:20px;margin-bottom:24px;padding-bottom:22px;border-bottom:1px solid var(--line-dark);}
 .rg-hero-meta{min-width:0;}
-.rg-hero-val{font-family:'Fraunces',serif;font-size:1.55rem;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1;}
-.rg-hero-lab{font-size:.83rem;color:var(--muted);margin-top:5px;}
-.rg-hero-norm{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);margin-top:9px;}
-.rg-hero-norm b{color:var(--ink);}
-.rg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:12px;}
-.rg-cell{display:flex;flex-direction:column;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--line);cursor:pointer;padding:14px 6px 12px;border-radius:var(--radius-md);font-family:inherit;transition:background .13s,transform .13s;box-shadow:var(--sh-1);}
-.rg-cell:hover{background:var(--surface-alt);transform:translateY(-1px);}
-.rg-nm{font-size:12px;color:var(--ink-soft);font-weight:500;text-align:center;line-height:1.2;}
+.rg-hero-val{font-family:'Fraunces',serif;font-size:1.7rem;font-weight:600;color:var(--on-dark);font-variant-numeric:tabular-nums;line-height:1;}
+.rg-hero-lab{font-size:.83rem;color:var(--on-dark-3);margin-top:6px;}
+.rg-hero-norm{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--on-dark-2);margin-top:10px;}
+.rg-hero-norm b{color:var(--on-dark);}
+.rg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:18px 12px;justify-items:center;max-width:640px;}
+.rg-cell{display:flex;flex-direction:column;align-items:center;gap:8px;background:none;border:0;cursor:pointer;padding:6px 2px;font-family:inherit;transition:transform .13s;}
+.rg-cell:hover{transform:translateY(-2px);}
+.rg-cell:hover .rg-nm{color:var(--on-dark);}
+.rg-nm{font-size:12px;color:var(--on-dark-2);font-weight:500;text-align:center;line-height:1.2;}
 .rg-pct{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;}
-.rg-note{font-size:.78rem;color:var(--muted);margin-top:12px;line-height:1.5;}
+.rg-note{font-size:.78rem;color:var(--on-dark-3);margin-top:16px;line-height:1.5;}
 @media(max-width:560px){
-  .rg-grid{grid-template-columns:repeat(3,1fr);gap:10px;}
-  .rg-hero{gap:13px;padding:13px 14px;}
-  .rg-hero-val{font-size:1.28rem;}
-  .rg-cell{padding:7px 2px;}
+  .rg-grid{grid-template-columns:repeat(3,1fr);gap:16px 8px;}
+  .rg-hero{gap:14px;}
+  .rg-hero-val{font-size:1.35rem;}
 }
-@media(max-width:370px){.rg-grid{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:360px){.rg-grid{grid-template-columns:repeat(2,1fr);}}
 
 /* теплова сітка готівки (головний екран Віктора) */
 .cash-bento{
