@@ -5062,11 +5062,9 @@ function TerritoryModule({ cab }) {
           <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
             {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
           </select>
-          {editable && (
-            <button type="button" className="planner-btn" onClick={runSync} disabled={syncing}>
-              <RefreshCw size={13} /> {syncing ? "Оновлення…" : "Оновити з планера"}
-            </button>
-          )}
+          <button type="button" className="planner-btn" onClick={runSync} disabled={syncing}>
+            <RefreshCw size={13} /> {syncing ? "Оновлення…" : "Оновити з планера"}
+          </button>
         </div>
       </div>
       {syncNote && <p className="tm-sync-note">{syncNote}</p>}
@@ -5236,6 +5234,130 @@ const cashLevelWord = (m) => {
   if (age <= 0) return "сьогодні";
   return `${age} ${age === 1 ? "день" : age < 5 ? "дні" : "днів"}${m.days > 1 ? ` · ${m.days} внесень` : ""}`;
 };
+
+/* ==================== ОБОРОТ САЛОНІВ — кільцевий дашборд ==================== */
+const uahK = (n) => {
+  n = Math.round(n || 0);
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace(/\.0$/, "") + " млн";
+  if (n >= 1000) return (n / 1000).toFixed(n >= 100_000 ? 0 : 1).replace(/\.0$/, "") + "к";
+  return String(n);
+};
+const turnoverBand = (pct) => (pct < 50 ? "lo" : pct < 80 ? "mid" : pct <= 105 ? "ok" : "over");
+const salonShortName = (s) => (s.city === "Львів" ? shortAddr(s.addr).split(",")[0] : s.city);
+
+function Ring({ pct, size = 82, sw = 8, children }) {
+  const r = (size - sw) / 2;
+  const C = 2 * Math.PI * r;
+  const off = C * (1 - Math.min(Math.max(pct, 0), 100) / 100);
+  return (
+    <div className="rg-ring" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle className="rg-track" cx={size / 2} cy={size / 2} r={r} strokeWidth={sw} fill="none" />
+        <circle
+          className={`rg-prog ${turnoverBand(pct)}`} cx={size / 2} cy={size / 2} r={r} strokeWidth={sw} fill="none"
+          strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          strokeDasharray={C.toFixed(1)} strokeDashoffset={off.toFixed(1)}
+        />
+      </svg>
+      <div className="rg-center">{children}</div>
+    </div>
+  );
+}
+
+function TurnoverRings({ scopeSalons }) {
+  const salons = scopeSalons && scopeSalons.length ? scopeSalons : SALONS;
+  const ym = nowYm();
+  const today = todayISO();
+  const dim = daysInYm(ym);
+  const [rows, setRows] = useState(null);
+  const [plans, setPlans] = useState(SALON_MONTH_PLAN);
+  const [mtd, setMtd] = useState(false);
+
+  useEffect(() => {
+    const load = () => {
+      listMetrics(ym).then(setRows).catch(() => setRows([]));
+      listPlans().then(setPlans).catch(() => {});
+    };
+    load();
+    return subscribeMetrics(load);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ym]);
+
+  if (rows === null) return <div className="loading">Завантаження…</div>;
+
+  const dayCount = Math.min(new Date().getDate(), dim);
+  const byKey = {};
+  for (const r of rows) {
+    const e = effective(r);
+    const b = (byKey[r.salon_key] = byKey[r.salon_key] || { today: 0, mtd: 0 });
+    if (r.work_date === today) b.today = e.assort;
+    b.mtd += e.assort;
+  }
+  const normOf = (k) => {
+    const p = planOf(plans, k).assort || 0;
+    return mtd ? (p / dim) * dayCount : p / dim;
+  };
+  const valOf = (k) => (mtd ? byKey[k]?.mtd || 0 : byKey[k]?.today || 0);
+
+  const cells = salons
+    .map((s) => {
+      const v = valOf(s.key);
+      const n = normOf(s.key);
+      return { s, v, n, pct: n ? (v / n) * 100 : 0 };
+    })
+    .sort((a, b) => a.pct - b.pct);
+
+  const totV = cells.reduce((a, c) => a + c.v, 0);
+  const totN = cells.reduce((a, c) => a + c.n, 0);
+  const totPct = totN ? (totV / totN) * 100 : 0;
+
+  return (
+    <div className="rg-mod">
+      <div className="rg-head">
+        <h3 className="ov-h">Оборот салонів</h3>
+        <div className="rg-toggle">
+          <button className={!mtd ? "on" : ""} onClick={() => setMtd(false)}>Сьогодні</button>
+          <button className={mtd ? "on" : ""} onClick={() => setMtd(true)}>За місяць</button>
+        </div>
+      </div>
+
+      <div className="rg-hero">
+        <Ring pct={totPct} size={112} sw={12}>
+          <b>{uahK(totV)}</b>
+          <i className={`rg-pct ${turnoverBand(totPct)}`}>{Math.round(totPct)}%</i>
+        </Ring>
+        <div className="rg-hero-meta">
+          <div className="rg-hero-val">{fmt(totV)}</div>
+          <div className="rg-hero-lab">оборот мережі · {mtd ? "з початку місяця" : "сьогодні"}</div>
+          <div className="rg-hero-norm">Норма: <b>{fmt(totN)}</b></div>
+        </div>
+      </div>
+
+      <div className="rg-grid">
+        {cells.map(({ s, v, pct }) => (
+          <button key={s.key} className="rg-cell" onClick={() => goToModule("kpi")}>
+            <Ring pct={pct}>
+              <b>{uahK(v)}</b>
+            </Ring>
+            <span className="rg-nm">{salonShortName(s)}</span>
+            <span className={`rg-pct ${turnoverBand(pct)}`}>{Math.round(pct)}%</span>
+          </button>
+        ))}
+      </div>
+      <p className="rg-note">Кільце — оборот проти денної норми (план ÷ {dim}). Оновлюється з планера й у реальному часі, коли салон вносить цифри.</p>
+    </div>
+  );
+}
+
+/* Віктор — головний екран: оборот салонів + теплова сітка готівки */
+function ManagerHome() {
+  return (
+    <>
+      <TurnoverRings />
+      <ManagerCashOverview />
+    </>
+  );
+}
 
 /* Віктор — головний екран: теплова сітка готівки до видачі */
 function ManagerCashOverview() {
@@ -6647,7 +6769,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
 function ManagerCabinet({ onExit, onLogout }) {
   const cab = { key: "manager", type: "manager" };
   const modules = [
-    { key: "home", label: "Головна", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <ManagerCashOverview /> },
+    { key: "home", label: "Головна", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <ManagerHome /> },
     { key: "byTm", label: "По ТМ", group: "Головне", icon: <Users size={16} />, render: () => <ManagerView embedded /> },
     { key: "consol", label: "Зведення ЗП", group: "Головне", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="manager" /> },
     { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <ManagerCashTab /> },
@@ -7794,6 +7916,41 @@ td.sh.sh-plan{font-weight:400;}
 .cash-tbl td.st{color:var(--muted);font-size:11px;text-align:right;}
 .cash-tbl tr.done td{color:var(--faint);}
 .cash-tbl tr.done td.num{color:var(--muted);font-weight:500;}
+
+/* оборот салонів — кільцевий дашборд (головний екран Віктора / ТМ) */
+.rg-mod{margin-bottom:26px;animation:fadeIn .28s ease both;}
+.rg-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+.rg-toggle{display:inline-flex;background:var(--surface-alt);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px;}
+.rg-toggle button{border:0;background:none;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 13px;border-radius:999px;cursor:pointer;letter-spacing:.02em;}
+.rg-toggle button.on{background:var(--gold);color:var(--gold-ink);font-weight:600;}
+.rg-ring{position:relative;flex-shrink:0;}
+.rg-ring svg{display:block;}
+.rg-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;}
+.rg-center b{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;}
+.rg-center i{font-style:normal;font-size:10px;margin-top:3px;font-family:'IBM Plex Mono',monospace;}
+.rg-track{stroke:var(--surface-sink);}
+.rg-prog{transition:stroke-dashoffset .9s cubic-bezier(.2,.8,.2,1);}
+.rg-prog.lo{stroke:var(--negative);} .rg-prog.mid{stroke:var(--gold);} .rg-prog.ok{stroke:var(--positive);} .rg-prog.over{stroke:var(--gold-bright);}
+.rg-pct.lo{color:var(--negative);} .rg-pct.mid{color:var(--gold);} .rg-pct.ok{color:var(--positive);} .rg-pct.over{color:var(--gold-bright);}
+.rg-hero{display:flex;align-items:center;gap:18px;padding:16px 18px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:16px;}
+.rg-hero-meta{min-width:0;}
+.rg-hero-val{font-family:'Fraunces',serif;font-size:1.55rem;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1;}
+.rg-hero-lab{font-size:.83rem;color:var(--muted);margin-top:5px;}
+.rg-hero-norm{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);margin-top:9px;}
+.rg-hero-norm b{color:var(--ink);}
+.rg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:12px;}
+.rg-cell{display:flex;flex-direction:column;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--line);cursor:pointer;padding:14px 6px 12px;border-radius:var(--radius-md);font-family:inherit;transition:background .13s,transform .13s;box-shadow:var(--sh-1);}
+.rg-cell:hover{background:var(--surface-alt);transform:translateY(-1px);}
+.rg-nm{font-size:12px;color:var(--ink-soft);font-weight:500;text-align:center;line-height:1.2;}
+.rg-pct{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;}
+.rg-note{font-size:.78rem;color:var(--muted);margin-top:12px;line-height:1.5;}
+@media(max-width:560px){
+  .rg-grid{grid-template-columns:repeat(3,1fr);gap:10px;}
+  .rg-hero{gap:13px;padding:13px 14px;}
+  .rg-hero-val{font-size:1.28rem;}
+  .rg-cell{padding:7px 2px;}
+}
+@media(max-width:370px){.rg-grid{grid-template-columns:repeat(2,1fr);}}
 
 /* теплова сітка готівки (головний екран Віктора) */
 .cash-bento{
