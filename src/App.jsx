@@ -56,6 +56,9 @@ import {
 import { getMaintenance, setMaintenance, subscribeFlags } from "./lib/appFlags.js";
 import { submitFeedback, listFeedback, setFeedbackStatus, resolveFeedback, deleteFeedback, subscribeFeedback } from "./lib/feedback.js";
 import {
+  bDaysInYm, bDateOf, bonusNet, listBonusYear, saveBonusDay, subscribeBonus, bonusYearAgg,
+} from "./lib/bonus.js";
+import {
   listCashDays, outstandingBySalon, setCashDay, cashHandover, listHandovers, subscribeCash,
   yesterdayISO as cashYesterday,
 } from "./lib/cash.js";
@@ -5272,16 +5275,29 @@ function TurnoverRings({ scopeSalons }) {
   const [rows, setRows] = useState(null);
   const [plans, setPlans] = useState(SALON_MONTH_PLAN);
   const [mtd, setMtd] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
+  const reload = () => {
+    listMetrics(ym).then(setRows).catch(() => setRows([]));
+    listPlans().then(setPlans).catch(() => {});
+  };
   useEffect(() => {
-    const load = () => {
-      listMetrics(ym).then(setRows).catch(() => setRows([]));
-      listPlans().then(setPlans).catch(() => {});
-    };
-    load();
-    return subscribeMetrics(load);
+    reload();
+    return subscribeMetrics(reload);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ym]);
+
+  const runSync = async () => {
+    setSyncing(true);
+    try {
+      const r = await syncFromPlanner([ym]);
+      pushToast({ title: "Оновлено з планера", body: `рядків: ${r?.rows ?? 0}` });
+      reload();
+    } catch (e) {
+      pushToast({ title: "Помилка синхронізації", body: String(e.message || e) });
+    }
+    setSyncing(false);
+  };
 
   if (rows === null) return <div className="loading">Завантаження…</div>;
 
@@ -5343,6 +5359,15 @@ function TurnoverRings({ scopeSalons }) {
             <span className={`rg-pct ${turnoverBand(pct)}`}>{Math.round(pct)}%</span>
           </button>
         ))}
+        <button className="rg-cell rg-sync" onClick={runSync} disabled={syncing} title="Підтягнути свіжі цифри з планера">
+          <div className="rg-ring" style={{ width: 82, height: 82 }}>
+            <svg width="82" height="82" viewBox="0 0 82 82">
+              <circle className="rg-track" cx="41" cy="41" r="37" strokeWidth="8" fill="none" />
+            </svg>
+            <div className="rg-center"><RefreshCw size={19} className={syncing ? "rg-spin" : ""} /></div>
+          </div>
+          <span className="rg-nm">{syncing ? "Оновлення…" : "Оновити"}</span>
+        </button>
       </div>
       <p className="rg-note">Кільце — оборот проти денної норми (план ÷ {dim}). Оновлюється з планера й у реальному часі, коли салон вносить цифри.</p>
     </div>
@@ -6142,6 +6167,167 @@ function SupplyModule({ cab }) {
   );
 }
 
+/* ==================== РУХ БОНУСІВ ==================== */
+const MONTH_SHORT = ["Січ", "Лют", "Бер", "Кві", "Тра", "Чер", "Лип", "Сер", "Вер", "Жов", "Лис", "Гру"];
+const bnum = (n) => (n == null ? "—" : Math.round(n).toLocaleString("uk-UA"));
+
+function BonusModule({ cab }) {
+  const scopeSalons = cab.type === "tm"
+    ? salonsOfTm(cab.tmKey || cab.key)
+    : cab.type === "sm" ? [salonByKey(cab.key)].filter(Boolean) : SALONS;
+  const myKey = cab.tmKey || cab.key;
+  const canEdit = (k) => {
+    if (cab.type === "sm") return k === cab.key;
+    if (cab.type === "tm") return salonTmOn(k) === myKey;
+    if (cab.type === "manager") return true;
+    return false;
+  };
+
+  const [ym, setYm] = useState(nowYm());
+  const year = ym.slice(0, 4);
+  const months = useMemo(() => recentMonths(15), []);
+  const [rows, setRows] = useState(null);
+  const [pick, setPick] = useState(scopeSalons[0]?.key);
+  const localEdit = useRef(0);
+
+  const load = async () => {
+    if (Date.now() - localEdit.current < 2500) return;
+    setRows(await listBonusYear(year).catch(() => []));
+  };
+  useEffect(() => { setRows(null); localEdit.current = 0; load(); /* eslint-disable-next-line */ }, [year]);
+  useEffect(() => subscribeBonus(load), [year]); // eslint-disable-line
+
+  if (rows === null) return <div className="loading">Завантаження…</div>;
+
+  const byDay = new Map();
+  for (const r of rows) byDay.set(`${r.salon_key}|${r.work_date}`, r);
+  const scopeKeys = scopeSalons.map((s) => s.key);
+  const agg = bonusYearAgg(rows, scopeKeys);
+  const activeSalon = pick && scopeKeys.includes(pick) ? pick : scopeKeys[0];
+  const editable = canEdit(activeSalon);
+
+  const dim = bDaysInYm(ym);
+  const days = Array.from({ length: dim }, (_, i) => i + 1);
+  const todayD = todayISO();
+  const monthWord = MONTH_NAMES[Number(ym.slice(5, 7)) - 1].toLowerCase();
+
+  const commit = async (day, field, val) => {
+    const d = bDateOf(ym, day);
+    localEdit.current = Date.now();
+    const num = val === "" || val == null ? 0 : Number(val) || 0;
+    setRows((prev) => {
+      const ex = prev.find((r) => r.salon_key === activeSalon && r.work_date === d);
+      if (ex) return prev.map((r) => (r === ex ? { ...r, [field]: num } : r));
+      return [...prev, { salon_key: activeSalon, work_date: d, accrued: 0, writeoff: 0, accrued_bn: 0, [field]: num }];
+    });
+    try { await saveBonusDay(activeSalon, d, { [field]: val }, cab.key); }
+    catch (e) { pushToast({ title: "Не збережено", body: String(e.message || e) }); }
+  };
+
+  const mTot = { accrued: 0, writeoff: 0, accrued_bn: 0 };
+  for (const day of days) {
+    const r = byDay.get(`${activeSalon}|${bDateOf(ym, day)}`);
+    if (!r) continue;
+    mTot.accrued += Number(r.accrued) || 0;
+    mTot.writeoff += Number(r.writeoff) || 0;
+    mTot.accrued_bn += Number(r.accrued_bn) || 0;
+  }
+  const mNet = mTot.accrued + mTot.accrued_bn - mTot.writeoff;
+
+  return (
+    <div className="tm-mod bn-mod">
+      <div className="tm-head">
+        <h3 className="ov-h">Рух бонусів</h3>
+        <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+      </div>
+
+      {scopeSalons.length > 1 && (
+        <div className="bn-roll-wrap">
+          <table className="bn-roll">
+            <thead>
+              <tr><th>Салон</th>{MONTH_SHORT.map((m, i) => <th key={i}>{m}</th>)}<th>Рік</th></tr>
+            </thead>
+            <tbody>
+              {scopeSalons.map((s) => {
+                const a = agg[s.key];
+                return (
+                  <tr key={s.key} className={s.key === activeSalon ? "on" : ""} onClick={() => setPick(s.key)}>
+                    <td className="bn-roll-nm">{s.city === "Львів" ? shortAddr(s.addr).split(",")[0] : s.city}</td>
+                    {a.months.map((v, i) => (
+                      <td key={i} className={`num ${v == null ? "muted" : v < 0 ? "neg" : "pos"}`}>{v == null ? "·" : bnum(v)}</td>
+                    ))}
+                    <td className={`num bn-roll-yr ${a.year < 0 ? "neg" : "pos"}`}>{bnum(a.year)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {scopeSalons.length > 1 && (
+        <div className="tm-salon-chips">
+          {scopeSalons.map((s) => (
+            <button key={s.key} className={`chip ${s.key === activeSalon ? "active" : ""}`} onClick={() => setPick(s.key)}>
+              {s.city}, {shortAddr(s.addr)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="bn-sum">
+        <div className="bn-sum-cell"><span>Нараховано</span><b>{bnum(mTot.accrued)}</b></div>
+        <div className="bn-sum-cell"><span>Списано</span><b>{bnum(mTot.writeoff)}</b></div>
+        <div className="bn-sum-cell"><span>Нараховано БН</span><b>{bnum(mTot.accrued_bn)}</b></div>
+        <div className={`bn-sum-cell hero ${mNet < 0 ? "neg" : "pos"}`}><span>Баланс за {monthWord}</span><b>{bnum(mNet)}</b></div>
+      </div>
+
+      <div className="tm-grid-wrap">
+        <table className="tm-grid bn-grid">
+          <thead>
+            <tr><th className="tm-c-day">День</th><th>Нараховано</th><th>Списано</th><th>Нарах. БН</th><th>Баланс дня</th></tr>
+          </thead>
+          <tbody>
+            {days.map((day) => {
+              const d = bDateOf(ym, day);
+              const r = byDay.get(`${activeSalon}|${d}`) || {};
+              const net = bonusNet(r);
+              const filled = r.accrued || r.writeoff || r.accrued_bn;
+              return (
+                <tr key={day} className={d > todayD ? "tm-future" : ""}>
+                  <td className="tm-c-day">{day}</td>
+                  {["accrued", "writeoff", "accrued_bn"].map((f) => (
+                    <td key={f}>
+                      {editable
+                        ? <NumInput className="tm-in" allowEmpty value={r[f] || ""} onChange={(v) => commit(day, f, v)} />
+                        : <span>{r[f] ? bnum(r[f]) : "—"}</span>}
+                    </td>
+                  ))}
+                  <td className={`num ${!filled ? "muted" : net < 0 ? "neg" : net > 0 ? "pos" : "muted"}`}>{filled ? bnum(net) : "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr className="tm-tot">
+              <td className="tm-c-day">Разом</td>
+              <td className="num">{bnum(mTot.accrued)}</td>
+              <td className="num">{bnum(mTot.writeoff)}</td>
+              <td className="num">{bnum(mTot.accrued_bn)}</td>
+              <td className={`num ${mNet < 0 ? "neg" : "pos"}`}>{bnum(mNet)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p className="hint" style={{ marginTop: 12 }}>
+        Баланс = (Нараховано + БН) − Списано. Мінус — клієнти списали більше бонусів, ніж набрали. Вносить СМ щодня.
+      </p>
+    </div>
+  );
+}
+
 /* ==================== ВИТРАТИ ПО СМ ==================== */
 function ExpensesModule({ cab }) {
   const own = cab.type === "sm" ? cab.key : null;
@@ -6750,6 +6936,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "shifts", label: "Графік змін", group: "Щоденне", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "bonus", label: "Рух бонусів", group: "Склад і гроші", icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "bn", label: "Безнальні рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "regionsheet", label: "Офіційні виплати", group: "Склад і гроші", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
     { key: "team", label: "Команда", group: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
@@ -6778,6 +6965,7 @@ function ManagerCabinet({ onExit, onLogout }) {
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={cab} /> },
     { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
     { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
+    { key: "bonus", label: "Рух бонусів", group: "Склад і гроші", icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
     { key: "inv", label: "Рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
     { key: "sheet", label: "Офіційні виплати", group: "Склад і гроші", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
     { key: "team", label: "Команда", group: "Команда", icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
@@ -6792,6 +6980,7 @@ function AccountantCabinet({ onExit, onLogout }) {
     { key: "inv", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
     { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
     { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
+    { key: "bonus", label: "Рух бонусів", icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
   ];
   return <CabinetShell title={ACCOUNTANT.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="accountant" />;
 }
@@ -6834,6 +7023,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "kpi", label: "Показники магазину", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "bonus", label: "Рух бонусів", group: "Щоденне", icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "bn", label: "Безнальні рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "team", label: "Команда", group: "Команда й розвиток", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "standards", label: "Стандарти й навчання", group: "Команда й розвиток", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
@@ -7830,6 +8020,34 @@ td.sh.sh-plan{font-weight:400;}
 .tm-grid tfoot tr.tm-tot td{font-weight:700;color:var(--ink);}
 .tm-grid tfoot tr.tm-plan td{color:var(--muted);font-weight:500;border-top:1px solid var(--line);}
 .tm-grid td.num{text-align:right;}
+.tm-grid td.neg{color:var(--negative);font-weight:600;}
+.tm-grid td.pos{color:var(--positive);}
+
+/* ---------- рух бонусів ---------- */
+.bn-roll-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);margin-bottom:14px;}
+.bn-roll{border-collapse:collapse;font-size:11.5px;width:100%;font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;}
+.bn-roll th{background:var(--surface-alt);color:var(--muted);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;padding:7px 8px;text-align:right;border-bottom:1px solid var(--line-strong);white-space:nowrap;}
+.bn-roll th:first-child{text-align:left;}
+.bn-roll td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap;}
+.bn-roll tr{cursor:pointer;}
+.bn-roll tr:hover td{background:var(--surface-alt);}
+.bn-roll tr.on td{background:rgba(190,138,46,.13);}
+.bn-roll td.bn-roll-nm{text-align:left;color:var(--ink);font-weight:600;font-family:inherit;position:sticky;left:0;background:var(--surface);}
+.bn-roll tr.on td.bn-roll-nm{background:rgba(190,138,46,.13);}
+.bn-roll td.neg{color:var(--negative);}
+.bn-roll td.pos{color:var(--positive);}
+.bn-roll td.muted{color:var(--faint);}
+.bn-roll td.bn-roll-yr{font-weight:700;border-left:2px solid var(--line-strong);}
+.bn-sum{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;}
+.bn-sum-cell{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:11px 13px;}
+.bn-sum-cell span{display:block;font-size:11px;color:var(--muted);}
+.bn-sum-cell b{font-family:'IBM Plex Mono',monospace;font-size:1.15rem;color:var(--ink);font-variant-numeric:tabular-nums;}
+.bn-sum-cell.hero{border-left:3px solid var(--gold);}
+.bn-sum-cell.hero.neg{border-left-color:var(--negative);}
+.bn-sum-cell.hero.neg b{color:var(--negative);}
+.bn-sum-cell.hero.pos b{color:var(--positive);}
+.bn-grid .tm-in{width:92px;}
+@media(max-width:640px){.bn-sum{grid-template-columns:repeat(2,1fr);}}
 
 /* ---------- технічна перерва ---------- */
 .maint-screen{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(1000px 500px at 50% 0%,rgba(190,138,46,.14),transparent 60%),var(--bg-deep,#14100a);}
@@ -7945,6 +8163,11 @@ td.sh.sh-plan{font-weight:400;}
 .rg-nm{font-size:12px;color:var(--on-dark-2);font-weight:500;text-align:center;line-height:1.2;}
 .rg-pct{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;}
 .rg-note{font-size:.78rem;color:var(--on-dark-3);margin-top:16px;line-height:1.5;}
+.rg-sync .rg-center{color:var(--on-dark-2);}
+.rg-sync:hover .rg-center{color:var(--gold-bright);}
+.rg-sync[disabled]{cursor:default;opacity:.7;}
+.rg-spin{animation:rgspin .9s linear infinite;}
+@keyframes rgspin{to{transform:rotate(360deg);}}
 @media(max-width:560px){
   .rg-grid{grid-template-columns:repeat(3,1fr);gap:16px 8px;}
   .rg-hero{gap:14px;}
