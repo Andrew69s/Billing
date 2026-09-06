@@ -5353,6 +5353,24 @@ function TurnoverRings({ scopeSalons }) {
   const totN = cells.reduce((a, c) => a + c.n, 0);
   const totPct = totN ? (totV / totN) * 100 : 0;
 
+  // виконання плану по територіях (місто / область) — завжди наростаючим за місяць
+  const territories = [
+    { label: "Територія · місто", area: "місто" },
+    { label: "Територія · область", area: "область" },
+  ].map((t) => {
+    const keys = SALONS.filter((s) => s.area === t.area).map((s) => s.key);
+    const done = keys.reduce((a, k) => a + (byKey[k]?.mtd || 0), 0);
+    const plan = keys.reduce((a, k) => a + (planOf(plans, k).assort || 0), 0);
+    const normToday = plan ? (plan / dim) * dayCount : 0;
+    return {
+      ...t, done, plan, normToday,
+      donePct: plan ? (done / plan) * 100 : 0,
+      gap: done - normToday,                                   // <0 — відстаємо
+      gapPct: normToday ? ((done - normToday) / normToday) * 100 : 0,
+      remain: Math.max(0, plan - done),
+    };
+  });
+
   return (
     <div className="rg-mod">
       <div className="rg-head">
@@ -5373,6 +5391,26 @@ function TurnoverRings({ scopeSalons }) {
           <div className="rg-hero-lab">оборот мережі · {mtd ? "з початку місяця" : "сьогодні"}</div>
           <div className="rg-hero-norm">Норма: <b>{fmt(totN)}</b></div>
         </div>
+      </div>
+
+      <div className="rg-terr">
+        {territories.map((x) => (
+          <div className="rg-terr-card" key={x.area}>
+            <div className="rg-terr-h">{x.label}<span className="rg-terr-done">{Math.round(x.donePct)}% плану</span></div>
+            <div className="rg-terr-bar">
+              <div className={`rg-terr-fill ${x.gap < 0 ? "behind" : "ahead"}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
+              <span className="rg-terr-mark" style={{ left: `${Math.min(100, x.plan ? (x.normToday / x.plan) * 100 : 0)}%` }} title={`норма на сьогодні: ${fmt(x.normToday)}`} />
+            </div>
+            <div className="rg-terr-rows">
+              <div><span>Оборот за місяць</span><b>{fmt(x.done)}</b></div>
+              <div>
+                <span>{x.gap < 0 ? "Відставання від норми на сьогодні" : "Випередження норми на сьогодні"}</span>
+                <b className={x.gap < 0 ? "neg" : "pos"}>{x.gap < 0 ? "−" : "+"}{fmt(Math.abs(x.gap))} · {Math.abs(Math.round(x.gapPct))}%</b>
+              </div>
+              <div><span>Залишок до закриття плану</span><b>{fmt(x.remain)}</b></div>
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="rg-grid">
@@ -8228,6 +8266,21 @@ td.sh.sh-plan{font-weight:400;}
 .rg-nm{font-size:12px;color:var(--on-dark-2);font-weight:500;text-align:center;line-height:1.2;}
 .rg-pct{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;}
 .rg-note{font-size:.78rem;color:var(--on-dark-3);margin-top:16px;line-height:1.5;}
+.rg-terr{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px;}
+.rg-terr-card{border:1px solid var(--line-dark);border-radius:var(--radius-md);padding:14px 16px;background:rgba(var(--sf),.03);}
+.rg-terr-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-family:'Fraunces',serif;font-size:1rem;font-weight:600;color:var(--on-dark);}
+.rg-terr-done{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--gold-bright);}
+.rg-terr-bar{position:relative;height:8px;border-radius:999px;background:rgba(var(--sf),.10);margin:11px 0 12px;overflow:visible;}
+.rg-terr-fill{position:absolute;left:0;top:0;bottom:0;border-radius:999px;transition:width .8s cubic-bezier(.2,.8,.2,1);}
+.rg-terr-fill.behind{background:var(--negative-bright);}
+.rg-terr-fill.ahead{background:var(--positive-bright);}
+.rg-terr-mark{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--on-dark);border-radius:2px;opacity:.7;}
+.rg-terr-rows{display:flex;flex-direction:column;gap:7px;}
+.rg-terr-rows>div{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:12px;color:var(--on-dark-3);}
+.rg-terr-rows b{font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;color:var(--on-dark);text-align:right;font-variant-numeric:tabular-nums;}
+.rg-terr-rows b.neg{color:var(--negative-bright);}
+.rg-terr-rows b.pos{color:var(--positive-bright);}
+@media(max-width:560px){.rg-terr{grid-template-columns:1fr;}}
 .rg-sync .rg-center{color:var(--on-dark-2);}
 .rg-sync:hover .rg-center{color:var(--gold-bright);}
 .rg-sync[disabled]{cursor:default;opacity:.7;}
