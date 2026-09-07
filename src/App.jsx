@@ -4935,22 +4935,23 @@ function TerritorySummaryStrip({ salonKeys, rows, daysPassed, dim, plans }) {
   );
 }
 
-function TerritoryAllSalons({ salons, rows, activeKey, onPick, plans }) {
+function TerritoryAllSalons({ salons, rows, activeKey, onPick, plans, withEz }) {
   return (
     <div className="tm-all">
       <table className="tm-all-tbl">
         <thead>
-          <tr><th>Салон</th><th>Оборот, міс.</th><th>План</th><th>%</th><th>Днів</th></tr>
+          <tr><th>Салон</th><th>Оборот{withEz ? " (з ЕЗ)" : ""}, міс.</th><th>План</th><th>%</th><th>Днів</th></tr>
         </thead>
         <tbody>
           {salons.map((s) => {
             const { sum, daysBySalon } = monthAgg(rows, [s.key]);
-            const plan = planOf(plans, s.key).assort || 0;
-            const pct = plan ? Math.round((sum.assort / plan) * 100) : null;
+            const done = sum.assort + (withEz ? sum.ez : 0);
+            const plan = planTurnover(planOf(plans, s.key), withEz);
+            const pct = plan ? Math.round((done / plan) * 100) : null;
             return (
               <tr key={s.key} className={s.key === activeKey ? "active" : ""} onClick={() => onPick(s.key)}>
                 <td>{s.city}, {shortAddr(s.addr)}</td>
-                <td className="num">{tmMoney(sum.assort)} ₴</td>
+                <td className="num">{tmMoney(done)} ₴</td>
                 <td className="num muted">{tmMoney(plan)}</td>
                 <td className="num">{pct == null ? "—" : `${pct}%`}</td>
                 <td className="num">{daysBySalon[s.key] || 0}</td>
@@ -5051,23 +5052,25 @@ function TerritoryDayTable({ salonKey, ym, rowsMap, editable, by, onPatched, pla
 }
 
 function TerritoryModule({ cab }) {
-  const scopeSalons = cab.type === "tm"
-    ? salonsOfTm(cab.tmKey || cab.key)
+  // показники лише читаються — тягнуться з планера, ніхто їх не редагує
+  const scopeSalons = cab.type === "tm" || cab.type === "manager"
+    ? SALONS
     : (cab.type === "sm" ? [salonByKey(cab.key)].filter(Boolean) : SALONS);
-  const editable = cab.type === "tm" || cab.type === "manager";
+  const editable = false;
+  const [withEz] = useWithEz();
   const months = useMemo(() => recentMonths(15), []);
   const [ym, setYm] = useState(nowYm());
   const [rowsMap, setRowsMap] = useState(new Map());
   const [plans, setPlans] = useState(SALON_MONTH_PLAN);
   const [loading, setLoading] = useState(true);
-  const [salonKey, setSalonKey] = useState(scopeSalons[0]?.key || null);
+  const [salonKey, setSalonKey] = useState(() => {
+    if (_focusSalon && scopeSalons.some((s) => s.key === _focusSalon)) { const f = _focusSalon; _focusSalon = null; return f; }
+    return scopeSalons[0]?.key || null;
+  });
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState("");
-  const localEditAt = React.useRef(0);
 
   const reload = async () => {
-    // не перетирати щойно збережені локальні правки відлунням realtime
-    if (Date.now() - localEditAt.current < 2500) return;
     const list = await listMetrics(ym).catch(() => []);
     const m = new Map();
     for (const r of list) m.set(rowKey(r.salon_key, r.work_date), r);
@@ -5075,32 +5078,16 @@ function TerritoryModule({ cab }) {
     setLoading(false);
   };
   useEffect(() => { listPlans().then(setPlans).catch(() => {}); }, []);
-  useEffect(() => { setLoading(true); localEditAt.current = 0; reload(); /* eslint-disable-next-line */ }, [ym]);
+  useEffect(() => { setLoading(true); reload(); /* eslint-disable-next-line */ }, [ym]);
   useEffect(() => subscribeMetrics(() => { reload(); listPlans().then(setPlans).catch(() => {}); }), [ym]); // eslint-disable-line
 
-  const patchLocal = (sk, d, patch) => {
-    localEditAt.current = Date.now();
-    setRowsMap((prev) => {
-      const next = new Map(prev);
-      const k = rowKey(sk, d);
-      const cur = next.get(k) || { salon_key: sk, work_date: d, planner: {}, manual: {} };
-      const manual = patch === null ? {} : { ...(cur.manual || {}) };
-      if (patch) {
-        for (const [kk, vv] of Object.entries(patch)) {
-          if (vv === null) delete manual[kk]; else manual[kk] = Number(vv) || 0;
-        }
-      }
-      next.set(k, { ...cur, manual });
-      return next;
-    });
-  };
+  const patchLocal = () => {};
 
   const runSync = async () => {
     setSyncing(true); setSyncNote("");
     try {
       const r = await syncFromPlanner([ym]);
       setSyncNote(`оновлено рядків: ${r?.rows ?? 0}`);
-      localEditAt.current = 0;
       await reload();
       pushToast({ title: "Синхронізовано з планера", body: `оновлено рядків: ${r?.rows ?? 0}` });
     } catch (e) {
@@ -5119,8 +5106,9 @@ function TerritoryModule({ cab }) {
   return (
     <div className="tm-mod">
       <div className="tm-head">
-        <h3 className="ov-h">Показники території</h3>
+        <h3 className="ov-h">Показники{scopeSalons.length === 1 ? ` · ${salonShortName(scopeSalons[0])}` : " території"}{withEz ? " · з ЕЗ" : ""}</h3>
         <div className="tm-head-actions">
+          <EzToggle />
           <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
             {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
           </select>
@@ -5136,7 +5124,7 @@ function TerritoryModule({ cab }) {
           <TerritorySummaryStrip salonKeys={scopeKeys} rows={rowsArr} daysPassed={daysPassed} dim={dim} plans={plans} />
 
           {scopeSalons.length > 1 && (
-            <TerritoryAllSalons salons={scopeSalons} rows={rowsArr} activeKey={activeSalon} onPick={setSalonKey} plans={plans} />
+            <TerritoryAllSalons salons={scopeSalons} rows={rowsArr} activeKey={activeSalon} onPick={setSalonKey} plans={plans} withEz={withEz} />
           )}
 
           {scopeSalons.length > 1 && (
@@ -5153,7 +5141,7 @@ function TerritoryModule({ cab }) {
             <>
               <p className="tm-grid-cap">
                 {salonLabel(salonByKey(activeSalon))} · {monthLabel(ym)}
-                {editable && <span className="muted"> · клітинку можна відкоригувати вручну, ↩ повертає значення з планера</span>}
+                <span className="muted"> · дані з планера, лише перегляд</span>
               </p>
               <TerritoryDayTable
                 salonKey={activeSalon} ym={ym} rowsMap={rowsMap} plans={plans}
@@ -5307,8 +5295,40 @@ const uahK = (n) => {
 const turnoverBand = (pct) => (pct < 50 ? "lo" : pct < 80 ? "mid" : pct <= 105 ? "ok" : "over");
 const salonShortName = (s) => (s.city === "Львів" ? shortAddr(s.addr).split(",")[0] : s.city);
 
+/* ---- «з ЕЗ / без ЕЗ» — спільний перемикач для всієї аналітики ---- */
+const EZ_KEY = "dnipro-m-with-ez";
+const ezBus = typeof window !== "undefined" ? new EventTarget() : null;
+const getWithEz = () => { try { return localStorage.getItem(EZ_KEY) === "1"; } catch { return false; } };
+const setWithEzGlobal = (v) => { try { localStorage.setItem(EZ_KEY, v ? "1" : "0"); } catch { /* */ } ezBus?.dispatchEvent(new Event("c")); };
+function useWithEz() {
+  const [v, setV] = useState(getWithEz);
+  useEffect(() => {
+    const h = () => setV(getWithEz());
+    ezBus?.addEventListener("c", h);
+    return () => ezBus?.removeEventListener("c", h);
+  }, []);
+  return [v, setWithEzGlobal];
+}
+/* оборот рядка з урахуванням прапорця ЕЗ */
+const turnoverVal = (e, withEz) => (Number(e?.assort) || 0) + (withEz ? (Number(e?.ez) || 0) : 0);
+const planTurnover = (p, withEz) => (Number(p?.assort) || 0) + (withEz ? (Number(p?.ez) || 0) : 0);
+
+/* клік по салону з дашборду → сторінка «Показники» саме цього салону */
+let _focusSalon = null;
+function openSalonAnalytics(salonKey) { _focusSalon = salonKey; goToModule("kpi"); }
+
+function EzToggle() {
+  const [withEz, setWithEz] = useWithEz();
+  return (
+    <label className="ez-toggle" title="Враховувати ТО ЕЗ в усіх показниках">
+      <input type="checkbox" checked={withEz} onChange={(e) => setWithEz(e.target.checked)} />
+      <span>з ЕЗ</span>
+    </label>
+  );
+}
+
 /* Кільце — розмір задає CSS (ширина комірки), SVG масштабується через viewBox */
-function Ring({ pct, size = 104, sw = 9, children }) {
+function Ring({ pct, size = 82, sw = 7, children }) {
   const VB = 100; // внутрішня система координат
   const r = (VB - (sw / size) * VB) / 2;
   const C = 2 * Math.PI * r;
@@ -5334,6 +5354,7 @@ function TurnoverRings({ scopeSalons }) {
   const ym = nowYm();
   const today = todayISO();
   const dim = daysInYm(ym);
+  const [withEz] = useWithEz();
   const [rows, setRows] = useState(null);
   const [plans, setPlans] = useState(SALON_MONTH_PLAN);
   const [mode, setMode] = useState("today"); // today | month | range
@@ -5370,18 +5391,17 @@ function TurnoverRings({ scopeSalons }) {
 
   const dayCount = Math.min(new Date().getDate(), dim);
   const rangeDays = mode === "range" ? daysBetween(rFrom, rTo) : 0;
-  // множник норми відносно денної: today → 1, month → минуло днів, range → днів у діапазоні
   const normMult = mode === "today" ? 1 : mode === "month" ? dayCount : rangeDays;
 
   const byKey = {};
   for (const r of rows) {
-    const e = effective(r);
+    const v = turnoverVal(effective(r), withEz);
     const b = (byKey[r.salon_key] = byKey[r.salon_key] || { today: 0, sum: 0 });
-    if (r.work_date === today) b.today = e.assort;
-    b.sum += e.assort;
+    if (r.work_date === today) b.today = v;
+    b.sum += v;
   }
   const valOf = (k) => (mode === "today" ? byKey[k]?.today || 0 : byKey[k]?.sum || 0);
-  const dailyNorm = (k) => (planOf(plans, k).assort || 0) / dim;
+  const dailyNorm = (k) => planTurnover(planOf(plans, k), withEz) / dim;
   const normOf = (k) => dailyNorm(k) * normMult;
 
   const cells = salons
@@ -5406,9 +5426,9 @@ function TurnoverRings({ scopeSalons }) {
   ].map((t) => {
     const keys = SALONS.filter((s) => s.area === t.area).map((s) => s.key);
     const done = keys.reduce((a, k) => a + valOf(k), 0);
-    const plan = keys.reduce((a, k) => a + (planOf(plans, k).assort || 0), 0);
+    const plan = keys.reduce((a, k) => a + planTurnover(planOf(plans, k), withEz), 0);
     const norm = keys.reduce((a, k) => a + normOf(k), 0);
-    const normToDatePct = plan ? ((plan / dim) * dayCount / plan) * 100 : 0; // = dayCount/dim
+    const normToDatePct = dim ? (dayCount / dim) * 100 : 0;
     const mtdSum = mode === "range" ? null : done;
     return {
       ...t, done, plan, norm, mtdSum, normToDatePct,
@@ -5419,16 +5439,22 @@ function TurnoverRings({ scopeSalons }) {
     };
   });
 
-  const gapWhen = mode === "today" ? "на сьогодні" : mode === "month" ? "на сьогодні" : "за період";
+  const gapWhen = mode === "range" ? "за період" : "на сьогодні";
 
   return (
     <div className="rg-mod">
       <div className="rg-head">
-        <h3 className="ov-h">Оборот салонів</h3>
-        <div className="rg-toggle">
-          <button className={mode === "today" ? "on" : ""} onClick={() => setMode("today")}>Сьогодні</button>
-          <button className={mode === "month" ? "on" : ""} onClick={() => setMode("month")}>За місяць</button>
-          <button className={mode === "range" ? "on" : ""} onClick={() => setMode("range")}>Період</button>
+        <h3 className="ov-h">Оборот салонів{withEz ? " · з ЕЗ" : ""}</h3>
+        <div className="rg-head-r">
+          <EzToggle />
+          <div className="rg-toggle">
+            <button className={mode === "today" ? "on" : ""} onClick={() => setMode("today")}>Сьогодні</button>
+            <button className={mode === "month" ? "on" : ""} onClick={() => setMode("month")}>Місяць</button>
+            <button className={mode === "range" ? "on" : ""} onClick={() => setMode("range")}>Період</button>
+          </div>
+          <button className={`rg-refresh ${syncing ? "spin" : ""}`} onClick={runSync} disabled={syncing} title="Підтягнути свіжі цифри з планера">
+            <RefreshCw size={14} /><span>{syncing ? "Оновлення…" : "Оновити"}</span>
+          </button>
         </div>
       </div>
 
@@ -5441,7 +5467,7 @@ function TurnoverRings({ scopeSalons }) {
       )}
 
       <div className="rg-hero">
-        <Ring pct={totPct} size={112} sw={12}>
+        <Ring pct={totPct} size={88} sw={9}>
           <b>{uahK(totV)}</b>
           <i className={`rg-pct ${turnoverBand(totPct)}`}>{Math.round(totPct)}%</i>
         </Ring>
@@ -5463,6 +5489,7 @@ function TurnoverRings({ scopeSalons }) {
               </div>
             )}
             <div className="rg-terr-rows">
+              <div><span>План на місяць</span><b>{fmt(x.plan)}</b></div>
               <div><span>Оборот {mode === "range" ? "за період" : "за місяць"}</span><b>{fmt(x.done)}</b></div>
               <div>
                 <span>{x.gap < 0 ? `Відставання від норми ${gapWhen}` : `Випередження норми ${gapWhen}`}</span>
@@ -5476,7 +5503,7 @@ function TurnoverRings({ scopeSalons }) {
 
       <div className="rg-grid">
         {cells.map(({ s, v, pct }) => (
-          <button key={s.key} className="rg-cell" onClick={() => goToModule("kpi")}>
+          <button key={s.key} className="rg-cell" onClick={() => openSalonAnalytics(s.key)} title={`${salonLabel(s)} — відкрити аналітику`}>
             <Ring pct={pct}>
               <b>{uahK(v)}</b>
             </Ring>
@@ -5484,17 +5511,109 @@ function TurnoverRings({ scopeSalons }) {
             <span className={`rg-pct ${turnoverBand(pct)}`}>{Math.round(pct)}%</span>
           </button>
         ))}
-        <button className="rg-cell rg-sync" onClick={runSync} disabled={syncing} title="Підтягнути свіжі цифри з планера">
-          <div className="rg-ring" style={{ "--rg-max": "104px" }}>
-            <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
-              <circle className="rg-track" cx="50" cy="50" r="45.5" strokeWidth="9" fill="none" />
-            </svg>
-            <div className="rg-center"><RefreshCw size={19} className={syncing ? "rg-spin" : ""} /></div>
-          </div>
-          <span className="rg-nm">{syncing ? "Оновлення…" : "Оновити"}</span>
-        </button>
       </div>
-      <p className="rg-note">Кільце — оборот проти денної норми (план ÷ {dim}). Оновлюється з планера й у реальному часі, коли салон вносить цифри.</p>
+      <p className="rg-note">Кільце — оборот проти денної норми (план{withEz ? " з ЕЗ" : ""} ÷ {dim}). Клік по салону — його аналітика.</p>
+    </div>
+  );
+}
+
+/* ---- Продажі день-у-день: лінійний графік + фільтр магазинів + порівняння періодів ---- */
+const isoDate = (d) => d.toISOString().slice(0, 10);
+function SalesTrendChart({ scopeSalons }) {
+  const salons = scopeSalons && scopeSalons.length ? scopeSalons : SALONS;
+  const [withEz] = useWithEz();
+  const today = todayISO();
+  const [aFrom, setAFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 13); return isoDate(d); });
+  const [aTo, setATo] = useState(today);
+  const [cmp, setCmp] = useState(false);
+  const [bFrom, setBFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 27); return isoDate(d); });
+  const [bTo, setBTo] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 14); return isoDate(d); });
+  const [pick, setPick] = useState([]); // порожньо = усі салони в scope
+  const [rows, setRows] = useState(null);
+
+  const minFrom = cmp ? (aFrom < bFrom ? aFrom : bFrom) : aFrom;
+  const maxTo = cmp ? (aTo > bTo ? aTo : bTo) : aTo;
+  useEffect(() => {
+    listMetricsRange(minFrom, maxTo).then(setRows).catch(() => setRows([]));
+    return subscribeMetrics(() => listMetricsRange(minFrom, maxTo).then(setRows).catch(() => {}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minFrom, maxTo]);
+
+  if (rows === null) return <div className="chart-wrap"><div className="loading">Завантаження…</div></div>;
+
+  const scopeKeys = new Set(salons.map((s) => s.key));
+  const activeKeys = pick.length ? new Set(pick) : scopeKeys;
+  const dayMap = {}; // "YYYY-MM-DD" -> сума обороту по обраних салонах
+  for (const r of rows) {
+    if (!activeKeys.has(r.salon_key)) continue;
+    dayMap[r.work_date] = (dayMap[r.work_date] || 0) + turnoverVal(effective(r), withEz);
+  }
+  const seq = (from, to) => {
+    const out = [];
+    const d = new Date(from);
+    const end = new Date(to);
+    while (d <= end) { out.push(isoDate(d)); d.setDate(d.getDate() + 1); }
+    return out;
+  };
+  const aDates = seq(aFrom, aTo);
+  const bDates = cmp ? seq(bFrom, bTo) : [];
+  const len = Math.max(aDates.length, bDates.length);
+  const data = Array.from({ length: len }, (_, i) => ({
+    i: i + 1,
+    aLbl: aDates[i] ? fmtDate(aDates[i]).split(",")[0] : "",
+    a: aDates[i] ? Math.round(dayMap[aDates[i]] || 0) : null,
+    b: cmp && bDates[i] ? Math.round(dayMap[bDates[i]] || 0) : null,
+  }));
+  const aSum = aDates.reduce((s, d) => s + (dayMap[d] || 0), 0);
+  const bSum = bDates.reduce((s, d) => s + (dayMap[d] || 0), 0);
+
+  return (
+    <div className="chart-wrap trend-wrap">
+      <div className="trend-head">
+        <div className="ov-card-h">Продажі день-у-день{withEz ? " · з ЕЗ" : ""}</div>
+        <label className="ez-toggle"><input type="checkbox" checked={cmp} onChange={(e) => setCmp(e.target.checked)} /><span>порівняти періоди</span></label>
+      </div>
+
+      <div className="trend-filters">
+        <div className="trend-dates">
+          <span className="trend-dot a" />
+          <input type="date" value={aFrom} max={aTo} onChange={(e) => setAFrom(e.target.value)} />
+          <input type="date" value={aTo} min={aFrom} max={today} onChange={(e) => setATo(e.target.value)} />
+          <b>{fmt(aSum)}</b>
+        </div>
+        {cmp && (
+          <div className="trend-dates">
+            <span className="trend-dot b" />
+            <input type="date" value={bFrom} max={bTo} onChange={(e) => setBFrom(e.target.value)} />
+            <input type="date" value={bTo} min={bFrom} max={today} onChange={(e) => setBTo(e.target.value)} />
+            <b>{fmt(bSum)} {bSum ? <span className={aSum >= bSum ? "pos" : "neg"}>({aSum >= bSum ? "+" : ""}{fmt(aSum - bSum)})</span> : null}</b>
+          </div>
+        )}
+      </div>
+
+      {salons.length > 1 && (
+        <div className="trend-salons">
+          <button className={`chip ${pick.length === 0 ? "active" : ""}`} onClick={() => setPick([])}>Усі</button>
+          {salons.map((s) => (
+            <button key={s.key} className={`chip ${pick.includes(s.key) ? "active" : ""}`}
+              onClick={() => setPick((p) => p.includes(s.key) ? p.filter((k) => k !== s.key) : [...p, s.key])}>
+              {salonShortName(s)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <ResponsiveContainer width="100%" height={230}>
+        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+          <CartesianGrid strokeDasharray="2 5" stroke="var(--line)" vertical={false} />
+          <XAxis dataKey={cmp ? "i" : "aLbl"} tick={{ fontSize: 10, fill: "var(--muted)" }} tickMargin={8} axisLine={{ stroke: "var(--line)" }} tickLine={false} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 10, fill: "var(--muted)" }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} width={38} />
+          <Tooltip formatter={(v, n) => [fmt(v), n === "a" ? "Період A" : "Період B"]}
+            contentStyle={{ borderRadius: 10, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }} />
+          {cmp && <Line type="monotone" dataKey="b" name="b" stroke="var(--muted)" strokeWidth={2} strokeDasharray="4 4" dot={false} />}
+          <Line type="monotone" dataKey="a" name="a" stroke="var(--gold)" strokeWidth={2.5} dot={{ r: 2.5, fill: "var(--gold)" }} activeDot={{ r: 4 }} />
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -6866,155 +6985,14 @@ function SalaryDeadlineBanner({ role, tmKey, salonKey }) {
 }
 
 function TmOverview({ tmKey }) {
-  const [s, setS] = useState(null);
-  useEffect(() => {
-    let active = true;
-    const ym = salaryYm();
-    (async () => {
-      const [d, g, invoices, employees] = await Promise.all([
-        loadData(tmKey, ym), loadGrade(tmKey, ymToQuarter(ym)), listInvoices().catch(() => []), listEmployees().catch(() => []),
-      ]);
-      const salons = salonsOfTm(tmKey, ym);
-      let submitted = 0;
-      let salonPayroll = 0;
-      for (const sl of salons) {
-        const rows = await salonSalaryRows(sl.key, ym, employees);
-        if (rows.length && rows.every((r) => r.data.status === "submitted" || r.data.status === "corrected")) submitted += 1;
-        salonPayroll += rows.reduce((a, r) => a + r.total, 0);
-      }
-      const calc = await calcTm(d, g, tmKey, ym);
-      const invM = invoices.filter((inv) => invMonth(inv) === ym && inv.status !== "cancelled");
-      const invIssued = invM.reduce((a, i) => a + Number(i.amount || 0), 0);
-      const invPaid = invM.filter((i) => i.status !== "issued").reduce((a, i) => a + Number(i.amount || 0), 0);
-
-      // --- історія за 6 місяців (для дельт, спарклайнів, графіка по блоках) ---
-      let hist = [];
-      try {
-        let ms = (await listMonths(tmKey)).sort();
-        if (!ms.includes(ym)) ms.push(ym);
-        ms = ms.slice(-6);
-        const datas = await Promise.all(ms.map((m) => loadData(tmKey, m)));
-        const grades = await Promise.all(ms.map((m) => loadGrade(tmKey, ymToQuarter(m))));
-        const calcs = await calcTmBatch(ms.map((m, i) => ({ data: datas[i], grade: grades[i], tmKey, ym: m })));
-        hist = ms.map((m, i) => {
-          const c = calcs[i];
-          const mi = Number(m.split("-")[1]) - 1;
-          return {
-            ym: m, m: MON_SHORT[mi],
-            total: Math.round(c.floored),
-            b1: Math.round(c.b1.subtotal),
-            b2: Math.round(c.b2.subtotal + c.ez.bonus),
-            b3: Math.round(c.b3.subtotal),
-            pct: c.b1.d.sales.pct || 0,
-          };
-        });
-      } catch { hist = []; }
-
-      // --- калькулятор «що якщо» ---
-      let whatif = null;
-      const plan = Number(d.block1?.salesPlan || 0);
-      const ez = Number(d.block1?.salesEz || 0);
-      if (plan > 0) {
-        try {
-          const items = WHATIF_STEPS.map((p) => ({
-            data: { ...d, block1: { ...d.block1, salesFact: Math.round((plan * p) / 100 + ez) } },
-            grade: g, tmKey, ym,
-          }));
-          const calcs = await calcTmBatch(items);
-          whatif = {
-            plan, ez, current: calc.b1.d.sales.pct || 0,
-            curve: WHATIF_STEPS.map((p, i) => ({ pct: p, total: Math.round(calcs[i].floored) })),
-          };
-        } catch { whatif = null; }
-      }
-
-      const curFinal = d.status !== "draft";        // місяць подано/погоджено → порівняння коректне
-      const hasPct = plan > 0 || curFinal;
-      if (active) setS({
-        status: d.status, total: calc.floored, pct: calc.b1.d.sales.pct || 0, curFinal, hasPct, ym,
-        submitted, salonTotal: salons.length,
-        invIssued, invPaid, invCount: invM.length, salonPayroll, hist, whatif,
-      });
-    })();
-    return () => { active = false; };
-  }, [tmKey]);
-  if (!s) return <div className="loading">Завантаження…</div>;
-  const st = { draft: "чернетка", submitted: "на розгляді", corrected: "потребує коректив", approved: "погоджено" }[s.status] || "—";
-  const notSubmitted = s.salonTotal - s.submitted;
-
-  // для трендів ігноруємо поточний місяць, поки він чернетка (неповний)
-  const vizHist = s.curFinal ? s.hist : s.hist.filter((h) => h.ym !== s.ym);
-  const prev = s.curFinal && vizHist.length >= 2 ? vizHist[vizHist.length - 2] : null;
-  const dZP = prev ? s.total - prev.total : null;
-  const dPct = prev ? s.pct - prev.pct : null;
-  const chartData = vizHist.length >= 2 ? vizHist : null;
-  const sparkZP = vizHist.map((h) => h.total);
-  const sparkPct = vizHist.map((h) => h.pct);
-
+  const tm = tmByKey(tmKey);
   return (
     <div className="ov">
-      <h3 className="ov-h">Огляд</h3>
-      <p className="ov-sub">ЗП за {monthLabel(salaryYm())}</p>
-      <div className="ov-tiles">
-        <div className="ov-tile ov-tile-kpi">
-          <b>{fmt(s.total)}</b>
-          <span>моя ЗП · {st}</span>
-          {s.curFinal ? <Delta value={dZP} suffix="до місяця" /> : <span className="kpi-delta flat">чернетка · дельта після подачі</span>}
-          <Spark data={sparkZP} />
-        </div>
-        <div className="ov-tile ov-tile-kpi">
-          <b>{s.hasPct ? `${s.pct.toFixed(0)}%` : "—"}</b>
-          <span>план по ТО{s.hasPct && !s.curFinal ? " · чернетка" : ""}</span>
-          {s.curFinal ? <Delta value={dPct} unit=" п.п." suffix="до місяця" /> : <span className="kpi-delta flat">за поточний місяць</span>}
-          <Spark data={sparkPct} />
-        </div>
-        <div className={`ov-tile ${notSubmitted > 0 ? "ov-tile-attn" : ""}`}>
-          <b>{s.submitted} / {s.salonTotal}</b>
-          <span>{notSubmitted > 0 ? `салони подали ЗП · ${notSubmitted} чекаємо` : "усі салони подали ЗП"}</span>
-        </div>
-        <div className="ov-tile"><b>{fmt(s.salonPayroll)}</b><span>ФОП салонів за місяць</span></div>
-        <div className="ov-tile"><b>{invMoney(s.invIssued)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
-        <div className="ov-tile"><b>{invMoney(s.invPaid)}</b><span>з них оплачено+</span></div>
+      <div className="tm-head">
+        <h3 className="ov-h">Огляд · {tm?.name || "ТМ"}</h3>
       </div>
-
-      <TurnoverRings />
-
-      <div className="ov-charts">
-        <div className="chart-wrap">
-          <div className="ov-card-h">Моя ЗП по блоках · {chartData ? `${chartData.length} міс` : "історія накопичується"}</div>
-          {chartData ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={chartData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
-                <defs>
-                  <linearGradient id="g-b1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#6E8DAA" stopOpacity="0.5" /><stop offset="1" stopColor="#6E8DAA" stopOpacity="0.05" /></linearGradient>
-                  <linearGradient id="g-b2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#5AA6A0" stopOpacity="0.5" /><stop offset="1" stopColor="#5AA6A0" stopOpacity="0.05" /></linearGradient>
-                  <linearGradient id="g-b3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#DCA94A" stopOpacity="0.55" /><stop offset="1" stopColor="#DCA94A" stopOpacity="0.05" /></linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="2 5" stroke="#D9D2BE" vertical={false} />
-                <XAxis dataKey="m" tick={{ fontSize: 11, fill: "#8A8069" }} tickMargin={8} axisLine={{ stroke: "#D9D2BE" }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: "#8A8069" }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} axisLine={false} tickLine={false} width={40} />
-                <Tooltip formatter={(v, n) => [fmt(v), n]}
-                  contentStyle={{ borderRadius: 10, border: "1px solid #E1D9C1", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }} />
-                <Legend wrapperStyle={{ fontSize: 12, paddingTop: 6 }} iconType="circle" />
-                <Area type="monotone" dataKey="b3" name="Блок 3 · управління" stackId="1" stroke="#DCA94A" fill="url(#g-b3)" strokeWidth={2} />
-                <Area type="monotone" dataKey="b2" name="Блок 2 · економіка" stackId="1" stroke="#5AA6A0" fill="url(#g-b2)" strokeWidth={2} />
-                <Area type="monotone" dataKey="b1" name="Блок 1 · продажі" stackId="1" stroke="#6E8DAA" fill="url(#g-b1)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="chart-note">Графік зʼявиться, коли буде щонайменше 2 місяці розрахунків.</p>
-          )}
-        </div>
-
-        {s.whatif
-          ? <TmWhatIf base={s.whatif} />
-          : (
-            <div className="chart-wrap ov-whatif">
-              <div className="ov-card-h">Калькулятор «що якщо»</div>
-              <p className="chart-note">Внесіть <b>План продажів</b> у розрахунку ЗП (п. 1.1) — і тут зʼявиться прогноз: скільки буде ЗП за різного виконання плану.</p>
-            </div>
-          )}
-      </div>
+      <TurnoverRings scopeSalons={SALONS} />
+      <SalesTrendChart scopeSalons={SALONS} />
     </div>
   );
 }
@@ -8320,7 +8298,14 @@ td.sh.sh-plan{font-weight:400;}
 
 /* оборот салонів — кільцевий дашборд (головний екран Віктора / ТМ) */
 .rg-mod{margin-bottom:30px;animation:fadeIn .28s ease both;}
-.rg-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+.rg-head{display:flex;align-items:center;justify-content:space-between;gap:10px 12px;flex-wrap:wrap;margin-bottom:18px;}
+.rg-head-r{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.ez-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--on-dark-2);cursor:pointer;user-select:none;white-space:nowrap;}
+.ez-toggle input{width:15px;height:15px;accent-color:var(--gold);cursor:pointer;}
+.rg-refresh{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));border:0;color:#20170a;border-radius:999px;padding:7px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;box-shadow:0 4px 14px -4px rgba(190,138,46,.5);transition:transform .12s var(--ease),box-shadow .12s var(--ease);}
+.rg-refresh:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 7px 20px -4px rgba(190,138,46,.6);}
+.rg-refresh:disabled{opacity:.75;cursor:default;}
+.rg-refresh.spin svg{animation:rgspin .9s linear infinite;}
 .rg-toggle{display:inline-flex;background:rgba(var(--sf),.06);border:1px solid var(--line-dark);border-radius:999px;padding:3px;gap:2px;}
 .rg-toggle button{border:0;background:none;color:var(--on-dark-3);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 13px;border-radius:999px;cursor:pointer;letter-spacing:.02em;}
 .rg-toggle button.on{background:var(--gold);color:var(--gold-ink);font-weight:600;}
@@ -8391,23 +8376,38 @@ td.sh.sh-plan{font-weight:400;}
 .tw-noauth p{color:var(--on-dark-2);font-size:.9rem;max-width:34ch;}
 .tw-logo{width:56px;height:56px;border-radius:16px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:#20170a;display:flex;align-items:center;justify-content:center;margin-bottom:6px;}
 
-.rg-sync .rg-center{color:var(--on-dark-2);}
-.rg-sync:hover .rg-center{color:var(--gold-bright);}
-.rg-sync[disabled]{cursor:default;opacity:.7;}
 .rg-spin{animation:rgspin .9s linear infinite;}
 @keyframes rgspin{to{transform:rotate(360deg);}}
 @media(max-width:560px){
-  .rg-grid{grid-template-columns:repeat(3,1fr);gap:18px 8px;}
-  .rg-cell .rg-ring{max-width:none;}   /* кільце заповнює комірку */
+  .rg-grid{grid-template-columns:repeat(3,1fr);gap:16px 8px;}
+  .rg-cell .rg-ring{max-width:88px;}
   .rg-hero{gap:16px;}
-  .rg-hero .rg-ring{max-width:96px;}
-  .rg-hero-val{font-size:1.4rem;}
+  .rg-hero .rg-ring{max-width:80px;}
+  .rg-hero-val{font-size:1.3rem;}
   .rg-nm{font-size:11.5px;}
 }
 @media(max-width:380px){
-  .rg-grid{gap:16px 6px;}
-  .rg-hero .rg-ring{max-width:84px;}
+  .rg-grid{gap:14px 6px;}
+  .rg-cell .rg-ring{max-width:74px;}
 }
+
+/* графік продажів день-у-день */
+.trend-wrap{margin-top:16px;}
+.trend-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+.trend-head .ov-card-h{margin:0;}
+.trend-head .ez-toggle{color:var(--ink-soft);}
+.trend-head .ez-toggle input{accent-color:var(--gold);}
+.trend-filters{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;}
+.trend-dates{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;}
+.trend-dates input[type=date]{background:var(--input-bg);border:1px solid var(--line-strong);color:var(--ink);border-radius:8px;padding:6px 9px;font-family:'IBM Plex Mono',monospace;font-size:12px;}
+.trend-dates b{font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--ink);}
+.trend-dates .pos{color:var(--positive);} .trend-dates .neg{color:var(--negative);}
+.trend-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.trend-dot.a{background:var(--gold);}
+.trend-dot.b{background:var(--muted);}
+.trend-salons{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.trend-salons .chip{font-size:11px;padding:5px 10px;border-radius:999px;border:1px solid var(--line-strong);background:var(--surface-alt);color:var(--muted);cursor:pointer;}
+.trend-salons .chip.active{background:var(--gold);color:var(--gold-ink);border-color:var(--gold);font-weight:600;}
 @media (max-width:400px){
   .topbar{gap:6px;padding:calc(11px + env(safe-area-inset-top)) 11px 11px;margin:calc(-1 * env(safe-area-inset-top)) -11px 10px;}
   .topbar-logout{padding:6px 9px;font-size:0;}
