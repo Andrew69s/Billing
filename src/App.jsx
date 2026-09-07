@@ -8281,6 +8281,31 @@ td.sh.sh-plan{font-weight:400;}
 .rg-terr-rows b.neg{color:var(--negative-bright);}
 .rg-terr-rows b.pos{color:var(--positive-bright);}
 @media(max-width:560px){.rg-terr{grid-template-columns:1fr;}}
+/* ---------- віджет-екран показників (PWA) ---------- */
+.tw-screen{max-width:480px;margin:0 auto;min-height:100vh;padding:22px 18px calc(28px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:14px;cursor:pointer;}
+.tw-head{display:flex;align-items:center;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--on-dark-3);}
+.tw-refresh{background:rgba(var(--sf),.06);border:1px solid var(--line-dark);color:var(--on-dark-2);width:32px;height:32px;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+.tw-total{text-align:center;padding:8px 0 14px;border-bottom:1px solid var(--line-dark);}
+.tw-total-val{font-family:'Fraunces',serif;font-size:2.2rem;font-weight:600;color:var(--on-dark);line-height:1;font-variant-numeric:tabular-nums;}
+.tw-total-lab{font-size:.8rem;color:var(--on-dark-3);margin-top:6px;}
+.tw-total-mtd{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--on-dark-2);margin-top:10px;}
+.tw-card{border:1px solid var(--line-dark);border-radius:14px;padding:15px 16px;background:rgba(var(--sf),.03);}
+.tw-card-h{display:flex;align-items:baseline;justify-content:space-between;font-family:'Fraunces',serif;font-size:1.05rem;font-weight:600;color:var(--on-dark);}
+.tw-card-h b{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--gold-bright);}
+.tw-bar{position:relative;height:9px;border-radius:999px;background:rgba(var(--sf),.1);margin:12px 0 13px;}
+.tw-fill{position:absolute;left:0;top:0;bottom:0;border-radius:999px;transition:width .8s cubic-bezier(.2,.8,.2,1);}
+.tw-fill.behind{background:var(--negative-bright);} .tw-fill.ahead{background:var(--positive-bright);}
+.tw-mark{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--on-dark);opacity:.7;border-radius:2px;}
+.tw-rows{display:flex;flex-direction:column;gap:8px;}
+.tw-rows>div{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:12.5px;color:var(--on-dark-3);}
+.tw-rows b{font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;color:var(--on-dark);text-align:right;}
+.tw-rows b.neg{color:var(--negative-bright);} .tw-rows b.pos{color:var(--positive-bright);}
+.tw-foot{margin-top:auto;text-align:center;font-size:10.5px;color:var(--on-dark-3);font-family:'IBM Plex Mono',monospace;padding-top:12px;}
+.tw-noauth{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px;padding:24px;}
+.tw-noauth h1{font-family:'Fraunces',serif;font-size:1.5rem;color:var(--on-dark);font-weight:600;}
+.tw-noauth p{color:var(--on-dark-2);font-size:.9rem;max-width:34ch;}
+.tw-logo{width:56px;height:56px;border-radius:16px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:#20170a;display:flex;align-items:center;justify-content:center;margin-bottom:6px;}
+
 .rg-sync .rg-center{color:var(--on-dark-2);}
 .rg-sync:hover .rg-center{color:var(--gold-bright);}
 .rg-sync[disabled]{cursor:default;opacity:.7;}
@@ -8516,7 +8541,138 @@ function MaintenanceScreen({ message }) {
   );
 }
 
+/* ============ ВІДЖЕТ-ЕКРАН: показники території (для PWA-ярлика) ============ */
+function areaKeys(area) { return SALONS.filter((s) => s.area === area).map((s) => s.key); }
+function widgetTerritoryStats(rows, plans, ym) {
+  const dim = daysInYm(ym);
+  const dayCount = Math.min(new Date().getDate(), dim);
+  const today = todayISO();
+  const byKey = {};
+  for (const r of rows) {
+    const e = effective(r);
+    const b = (byKey[r.salon_key] = byKey[r.salon_key] || { today: 0, mtd: 0 });
+    if (r.work_date === today) b.today = e.assort;
+    b.mtd += e.assort;
+  }
+  const areas = [
+    { label: "Територія · місто", area: "місто" },
+    { label: "Територія · область", area: "область" },
+  ].map((t) => {
+    const keys = areaKeys(t.area);
+    const done = keys.reduce((a, k) => a + (byKey[k]?.mtd || 0), 0);
+    const doneToday = keys.reduce((a, k) => a + (byKey[k]?.today || 0), 0);
+    const plan = keys.reduce((a, k) => a + (planOf(plans, k).assort || 0), 0);
+    const normToday = plan ? (plan / dim) * dayCount : 0;
+    return {
+      ...t, done, doneToday, plan, normToday,
+      donePct: plan ? (done / plan) * 100 : 0,
+      gap: done - normToday,
+      gapPct: normToday ? ((done - normToday) / normToday) * 100 : 0,
+      remain: Math.max(0, plan - done),
+    };
+  });
+  return {
+    areas,
+    totalToday: areas.reduce((a, x) => a + x.doneToday, 0),
+    totalDone: areas.reduce((a, x) => a + x.done, 0),
+    totalPlan: areas.reduce((a, x) => a + x.plan, 0),
+    dayCount, dim,
+  };
+}
+
+function TerritoryWidget() {
+  const [state, setState] = useState("boot"); // boot | noauth | ready
+  const [data, setData] = useState(null);
+  const [at, setAt] = useState(null);
+  const ym = nowYm();
+
+  const load = async () => {
+    try {
+      const [rows, plans] = await Promise.all([listMetrics(ym), listPlans()]);
+      setData(widgetTerritoryStats(rows, plans, ym));
+      setAt(new Date());
+      setState("ready");
+    } catch { setState("noauth"); }
+  };
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const cab = await currentCabinet();
+      if (!alive) return;
+      if (!cab) { setState("noauth"); return; }
+      await initAfterAuth();
+      load();
+    })();
+    const onVis = () => { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onVis);
+    const t = setInterval(() => { if (document.visibilityState === "visible") load(); }, 5 * 60 * 1000);
+    return () => { alive = false; document.removeEventListener("visibilitychange", onVis); clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openApp = () => { window.location.href = "/"; };
+
+  if (state === "noauth") {
+    return (
+      <div className="tw-screen">
+        <div className="tw-noauth">
+          <span className="tw-logo"><BarChart3 size={30} /></span>
+          <h1>Показники території</h1>
+          <p>Спочатку увійдіть у застосунок — далі віджет працюватиме сам.</p>
+          <button className="btn-primary" onClick={() => (window.location.href = "/")}>Відкрити застосунок</button>
+        </div>
+      </div>
+    );
+  }
+  if (state === "boot" || !data) return <div className="tw-screen"><div className="loading" style={{ paddingTop: 100 }}>Завантаження…</div></div>;
+
+  const totPct = data.totalPlan ? (data.totalDone / data.totalPlan) * 100 : 0;
+  return (
+    <div className="tw-screen" onClick={openApp} role="button" title="Відкрити застосунок">
+      <div className="tw-head">
+        <span>Показники території</span>
+        <button className="tw-refresh" onClick={(e) => { e.stopPropagation(); load(); }} aria-label="Оновити"><RefreshCw size={15} /></button>
+      </div>
+
+      <div className="tw-total">
+        <div className="tw-total-val">{fmt(data.totalToday)}</div>
+        <div className="tw-total-lab">оборот мережі сьогодні</div>
+        <div className="tw-total-mtd">{Math.round(totPct)}% місячного плану · {fmt(data.totalDone)}</div>
+      </div>
+
+      {data.areas.map((x) => (
+        <div className="tw-card" key={x.area}>
+          <div className="tw-card-h">{x.label}<b>{Math.round(x.donePct)}%</b></div>
+          <div className="tw-bar"><div className={`tw-fill ${x.gap < 0 ? "behind" : "ahead"}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
+            <span className="tw-mark" style={{ left: `${Math.min(100, x.plan ? (x.normToday / x.plan) * 100 : 0)}%` }} /></div>
+          <div className="tw-rows">
+            <div><span>{x.gap < 0 ? "Відставання від норми" : "Випередження норми"}</span>
+              <b className={x.gap < 0 ? "neg" : "pos"}>{x.gap < 0 ? "−" : "+"}{fmt(Math.abs(x.gap))} · {Math.abs(Math.round(x.gapPct))}%</b></div>
+            <div><span>Залишок до плану</span><b>{fmt(x.remain)}</b></div>
+          </div>
+        </div>
+      ))}
+
+      <div className="tw-foot">{at ? `оновлено ${at.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}` : ""} · тап — відкрити застосунок</div>
+    </div>
+  );
+}
+
 export default function App() {
+  const isWidget = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("w") === "1";
+  if (isWidget) {
+    return (
+      <div className="app-root" data-widget="1">
+        <style>{CSS}</style>
+        <TerritoryWidget />
+      </div>
+    );
+  }
+  return <AppMain />;
+}
+
+function AppMain() {
   const [session, setSession] = useState(null);      // активний кабінет { key, type, tmKey, label }
   const [remembered, setRemembered] = useState(null); // збережений вхід (для смужки на головній)
   const [pending, setPending] = useState(null);
