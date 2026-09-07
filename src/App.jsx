@@ -7245,6 +7245,7 @@ const CSS = `
     linear-gradient(180deg, var(--bg-2), var(--bg));
   background-attachment:fixed;
   min-height:100vh;
+  overflow-x:clip;
   -webkit-font-smoothing:antialiased;
   text-rendering:optimizeLegibility;
 }
@@ -7504,7 +7505,7 @@ const CSS = `
 .adj-amount{width:104px;padding:8px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--input-bg);font-family:'IBM Plex Mono',monospace;font-size:13px;}
 
 /* ---------- chart & quarter ---------- */
-.chart-wrap{background:var(--surface);border-radius:var(--radius);padding:22px;border:1px solid var(--line);box-shadow:var(--sh-2);}
+.chart-wrap{background:var(--surface);border-radius:var(--radius);padding:22px;border:1px solid var(--line);box-shadow:var(--sh-2);overflow:hidden;min-width:0;}
 .chart-note{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.45;}
 .quarter-panel{background:var(--surface);border-radius:var(--radius);padding:22px;border:1px solid var(--line);box-shadow:var(--sh-2);}
 .quarter-panel h3{font-family:'Fraunces',serif;font-size:19px;margin:0 0 4px;color:var(--ink);}
@@ -7548,9 +7549,10 @@ const CSS = `
 @media (max-width:640px){
   .view{padding:4px 13px 84px;}
   .topbar{padding:12px 13px;margin:0 -13px 10px;gap:8px;}
-  .topbar-title{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
-  .topbar-back{padding:7px 9px;font-size:0;}
+  .topbar-title{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;}
+  .topbar-back{padding:7px 9px;font-size:0;flex-shrink:0;}
   .topbar-back svg{width:17px;height:17px;}
+  .topbar-right{gap:7px;flex-shrink:0;}
   .role-select-inner h1{font-size:27px;}
   .item-body{flex-direction:column;}
   .shot-slot{align-self:flex-start;}
@@ -7657,7 +7659,7 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
   .deck-office{flex-direction:row;flex-wrap:wrap;}
   .deck-office .deck-hd{width:100%;}
   .deck-orow{flex:1 1 180px;}
-  .cab-layout{grid-template-columns:1fr;gap:0;}
+  .cab-shell .cab-layout{grid-template-columns:1fr;gap:0;}
   .topbar-menu{display:flex;}
   .cab-scrim{display:block;}
   /* ліва навігація як шухляда (вища специфічність — щоб перекрити базове правило нижче) */
@@ -8305,14 +8307,14 @@ td.sh.sh-plan{font-weight:400;}
 .rg-hero-lab{font-size:.83rem;color:var(--on-dark-3);margin-top:6px;}
 .rg-hero-norm{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--on-dark-2);margin-top:10px;}
 .rg-hero-norm b{color:var(--on-dark);}
-.rg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:18px 12px;justify-items:center;max-width:640px;}
+.rg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:18px 10px;justify-items:center;}
 .rg-cell{display:flex;flex-direction:column;align-items:center;gap:8px;background:none;border:0;cursor:pointer;padding:6px 2px;font-family:inherit;transition:transform .13s;}
 .rg-cell:hover{transform:translateY(-2px);}
 .rg-cell:hover .rg-nm{color:var(--on-dark);}
 .rg-nm{font-size:12px;color:var(--on-dark-2);font-weight:500;text-align:center;line-height:1.2;}
 .rg-pct{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;}
 .rg-note{font-size:.78rem;color:var(--on-dark-3);margin-top:16px;line-height:1.5;}
-.rg-terr{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px;}
+.rg-terr{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:24px;}
 .rg-terr-card{border:1px solid var(--line-dark);border-radius:var(--radius-md);padding:14px 16px;background:rgba(var(--sf),.03);}
 .rg-terr-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-family:'Fraunces',serif;font-size:1rem;font-weight:600;color:var(--on-dark);}
 .rg-terr-done{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--gold-bright);}
@@ -8363,6 +8365,12 @@ td.sh.sh-plan{font-weight:400;}
   .rg-hero-val{font-size:1.35rem;}
 }
 @media(max-width:360px){.rg-grid{grid-template-columns:repeat(2,1fr);}}
+@media (max-width:400px){
+  .topbar{gap:6px;padding:11px 11px;margin:0 -11px 10px;}
+  .topbar-logout{padding:6px 9px;font-size:0;}
+  .topbar-logout::before{content:"⎋";font-size:15px;}
+  .view{padding:4px 11px 84px;}
+}
 
 /* теплова сітка готівки (головний екран Віктора) */
 .cash-bento{
