@@ -15,10 +15,25 @@ async function invoke(body) {
   return data;
 }
 
-export const calcTm = (data, grade, tmKey, ym) => invoke({ op: "tm", data, grade, tmKey, ym });
-export const calcTmBatch = (items) => invoke({ op: "tm-batch", items });
-export const calcSm = (data, salonKey, ym) => invoke({ op: "sm", data, salonKey, ym });
-export const calcSmBatch = (items) => invoke({ op: "sm-batch", items });
+/* Розрахунку потрібні лише числові блоки — скрін-и (base64, до ~200 КБ),
+   історія, снапшоти й прапорці керівника лише роздували б payload і гальмували
+   (аж до таймауту). Вирізаємо їх перед відправкою. */
+const CALC_OMIT = new Set([
+  "screenshots", "history", "tmSnapshot", "smSnapshot",
+  "correctionDiff", "managerFlags", "managerComment", "tmReplyComment",
+]);
+const slimData = (data) => {
+  if (!data || typeof data !== "object") return data;
+  const out = {};
+  for (const k of Object.keys(data)) if (!CALC_OMIT.has(k)) out[k] = data[k];
+  return out;
+};
+const slimItems = (items) => (items || []).map((it) => ({ ...it, data: slimData(it.data) }));
+
+export const calcTm = (data, grade, tmKey, ym) => invoke({ op: "tm", data: slimData(data), grade, tmKey, ym });
+export const calcTmBatch = (items) => invoke({ op: "tm-batch", items: slimItems(items) });
+export const calcSm = (data, salonKey, ym) => invoke({ op: "sm", data: slimData(data), salonKey, ym });
+export const calcSmBatch = (items) => invoke({ op: "sm-batch", items: slimItems(items) });
 export const getConditions = () => invoke({ op: "conditions" });
 export const getCalcMeta = () => invoke({ op: "meta" });
 /* прогрів Edge-функції (щоб перший розрахунок ЗП не чекав холодний старт) */

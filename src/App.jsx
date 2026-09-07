@@ -1348,7 +1348,7 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
   const qKey = ymToQuarter(ym);
   const qMonths = quarterMonths(qKey);
   const isLastMonthOfQuarter = ym === qMonths[2];
-  const { calc } = useTmCalc(data, grade, tmKey, ym);
+  const { calc, error: calcError } = useTmCalc(data, grade, tmKey, ym);
 
   useEffect(() => {
     let active = true;
@@ -1472,7 +1472,12 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
         </button>
       </div>
 
-      {loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
+      {!loading && !calc && calcError ? (
+        <div className="loading" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <span>Не вдалося порахувати ЗП: {String(calcError)}</span>
+          <button className="btn-secondary small" onClick={() => window.location.reload()}>Спробувати ще раз</button>
+        </div>
+      ) : loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
         <>
           <CriteriaForm data={data} update={update} grade={grade} tmKey={tmKey} ym={ym} showAmounts calc={calc}
             onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} />
@@ -2456,7 +2461,7 @@ function SmView({ salon, embedded }) {
     return () => clearTimeout(t);
   }, [data, loading, salon.key, emp, ym]);
 
-  const { calc } = useSmCalc(data, salon.key, ym);
+  const { calc, error: calcError } = useSmCalc(data, salon.key, ym);
 
   const months = useMemo(() => recentMonths(12), []);
 
@@ -2539,7 +2544,12 @@ function SmView({ salon, embedded }) {
         </button>
       </div>
 
-      {loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
+      {!loading && !calc && calcError ? (
+        <div className="loading" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <span>Не вдалося порахувати ЗП: {String(calcError)}</span>
+          <button className="btn-secondary small" onClick={() => window.location.reload()}>Спробувати ще раз</button>
+        </div>
+      ) : loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
         <>
           <SmCriteriaForm
             data={data} update={update} calc={calc} area={salon.area} showAmounts
