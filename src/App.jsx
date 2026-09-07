@@ -6949,6 +6949,8 @@ function TmOverview({ tmKey }) {
         <div className="ov-tile"><b>{invMoney(s.invPaid)}</b><span>з них оплачено+</span></div>
       </div>
 
+      <TurnoverRings />
+
       <div className="ov-charts">
         <div className="chart-wrap">
           <div className="ov-card-h">Моя ЗП по блоках · {chartData ? `${chartData.length} міс` : "історія накопичується"}</div>
