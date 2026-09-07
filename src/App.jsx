@@ -6948,6 +6948,7 @@ function useNavPrefs(cabKey, itemKeys) {
 
 const NAV_PINNED_GROUP = "Головне";
 const NAV_DEFAULT_GROUP = "Інше";
+const ORG_GROUP = "Орг-структура";
 
 function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const items = modules.filter(Boolean);
@@ -6988,7 +6989,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
     shownItems.forEach((m) => { const g = effGroup(m); if (!out.includes(g)) out.push(g); });
     return out;
   })();
-  const grouped = groupOrder.length > 1 && items.length > 6;
+  const grouped = groupOrder.length > 1 && items.length > 4;
   const activeGroup = effGroup(byKey[active] || items[0]);
 
   const rowFor = (m) => {
@@ -7221,18 +7222,18 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
     { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
     { key: "salons", label: "ЗП салонів", group: "Головне", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
-    { key: "tasks", label: "Задачі", group: "Щоденне", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "shifts", label: "Графік змін", group: "Щоденне", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "bonus", label: "Рух бонусів", group: "Склад і гроші", icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "bn", label: "Безнальні рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "regionsheet", label: "Офіційні виплати", group: "Склад і гроші", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
-    { key: "team", label: "Команда", group: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "archive", label: "Архів", group: "Команда", icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
+    { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "archive", label: "Архів", group: ORG_GROUP, icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
+    { key: "tasks", label: "Задачі", group: ORG_GROUP, icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "shifts", label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "regionsheet", label: "Офіційні виплати", group: "Ще", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
     { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={tmKey} /> },
-    { key: "directory", label: "Довідник", group: "Ще", icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "docs", label: "Документи й стандарти", group: "Ще", icon: <FileText size={16} />, render: () => <ModuleStub name="Документи й стандарти" /> },
     isAdmin ? { key: "admin", label: "Адміністрування", group: "Адміністрування", icon: <User size={16} />, render: () => <AdminPanel /> } : null,
   ];
@@ -7251,16 +7252,16 @@ function ManagerCabinet({ onExit, onLogout }) {
     { key: "byTm", label: "По ТМ", group: "Головне", icon: <Users size={16} />, render: () => <ManagerView embedded /> },
     { key: "consol", label: "Зведення ЗП", group: "Головне", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="manager" /> },
     { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <ManagerCashTab /> },
-    { key: "tasks", label: "Задачі", group: "Щоденне", icon: <CheckSquare size={16} />, render: () => <TasksModule cab={cab} /> },
-    { key: "shifts", label: "Графік", group: "Щоденне", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={cab} /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={cab} /> },
-    { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
-    { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
-    { key: "bonus", label: "Рух бонусів", group: "Склад і гроші", icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
-    { key: "inv", label: "Рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
-    { key: "sheet", label: "Офіційні виплати", group: "Склад і гроші", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
-    { key: "team", label: "Команда", group: "Команда", icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
-    { key: "directory", label: "Довідник", group: "Ще", icon: <FileText size={16} />, render: () => <DirectoryModule cab={cab} /> },
+    { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
+    { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
+    { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
+    { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: () => <DirectoryModule cab={cab} /> },
+    { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
+    { key: "tasks", label: "Задачі", group: ORG_GROUP, icon: <CheckSquare size={16} />, render: () => <TasksModule cab={cab} /> },
+    { key: "shifts", label: "Графік", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={cab} /> },
+    { key: "inv", label: "Рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
+    { key: "sheet", label: "Офіційні виплати", group: ORG_GROUP, icon: <Table size={16} />, render: () => <RegionSheetModule /> },
   ];
   return <CabinetShell title={MANAGER.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="manager" />;
 }
@@ -7268,12 +7269,12 @@ function ManagerCabinet({ onExit, onLogout }) {
 function AccountantCabinet({ onExit, onLogout }) {
   const cab = { key: "accountant", type: "accountant" };
   const modules = [
-    { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="accountant" /> },
-    { key: "inv", label: "Безнальні рахунки", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
-    { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
-    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
-    { key: "bonus", label: "Рух бонусів", icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
-    { key: "directory", label: "Довідник", icon: <FileText size={16} />, render: () => <DirectoryModule cab={cab} /> },
+    { key: "consol", label: "Зведення ЗП", group: "Головне", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="accountant" /> },
+    { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
+    { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
+    { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
+    { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: () => <DirectoryModule cab={cab} /> },
+    { key: "inv", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
   ];
   return <CabinetShell title={ACCOUNTANT.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="accountant" />;
 }
@@ -7310,18 +7311,18 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
   const modules = [
     { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
     { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
-    { key: "tasks", label: "Задачі й чек-листи", group: "Щоденне", icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "shifts", label: "Графік змін", group: "Щоденне", icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <CashModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "kpi", label: "Показники магазину", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "warehouse", label: "Склад", group: "Склад і гроші", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "expenses", label: "Витрати по СМ", group: "Склад і гроші", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "bonus", label: "Рух бонусів", group: "Щоденне", icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "bn", label: "Безнальні рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "team", label: "Команда", group: "Команда й розвиток", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "standards", label: "Стандарти й навчання", group: "Команда й розвиток", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
+    { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "tasks", label: "Задачі й чек-листи", group: ORG_GROUP, icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "shifts", label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "standards", label: "Стандарти й навчання", group: "Ще", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
     { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={salonTmOn(salonKey)} /> },
-    { key: "directory", label: "Довідник", group: "Ще", icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "requests", label: "Заявки", group: "Ще", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
     { key: "reports", label: "Звіти", group: "Ще", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
   ];
@@ -7347,7 +7348,7 @@ function OfficeCabinet({ cabKey, onExit, onLogout }) {
     );
   }
   const modules = [
-    { key: "home", label: "Кабінет", icon: <LayoutGrid size={16} />, render: () => (
+    { key: "home", label: "Кабінет", group: "Головне", icon: <LayoutGrid size={16} />, render: () => (
       <div className="office-stub">
         <span className="office-stub-ic"><Clock size={26} /></span>
         <h3>{person?.name}</h3>
@@ -7355,14 +7356,14 @@ function OfficeCabinet({ cabKey, onExit, onLogout }) {
       </div>
     ) },
     caps.includes("view_consolidation")
-      ? { key: "consol", label: "Зведення ЗП", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role={caps.includes("manage_payments") ? "accountant" : "viewer"} /> }
+      ? { key: "consol", label: "Зведення ЗП", group: "Головне", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role={caps.includes("manage_payments") ? "accountant" : "viewer"} /> }
       : null,
     cabKey === "olha"
-      ? { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: cabKey, type: "office" }} /> }
+      ? { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: cabKey, type: "office" }} /> }
       : null,
-    { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: cabKey, type: "office" }} /> },
-    { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <ModuleStub name="Безнальні рахунки" /> },
-    { key: "directory", label: "Довідник", icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: cabKey, type: "office" }} /> },
+    { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: cabKey, type: "office" }} /> },
+    { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: cabKey, type: "office" }} /> },
+    { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <ModuleStub name="Безнальні рахунки" /> },
   ];
   return <CabinetShell title={person?.name || "Офіс"} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={cabKey} />;
 }
