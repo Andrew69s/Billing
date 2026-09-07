@@ -29,8 +29,10 @@ export const dateOf = (ym, day) => `${ym}-${String(day).padStart(2, "0")}`;
 
 /* усі рядки за місяць (RLS сама обмежує видимі салони) */
 export async function listMetrics(ym) {
-  const from = `${ym}-01`;
-  const to = dateOf(ym, daysInYm(ym));
+  return listMetricsRange(`${ym}-01`, dateOf(ym, daysInYm(ym)));
+}
+/* рядки за довільний діапазон дат (YYYY-MM-DD .. YYYY-MM-DD, включно) */
+export async function listMetricsRange(from, to) {
   const { data, error } = await supabase
     .from("territory_metrics")
     .select("*")
@@ -39,6 +41,9 @@ export async function listMetrics(ym) {
   if (error) throw error;
   return data || [];
 }
+/* кількість днів у діапазоні (включно) */
+export const daysBetween = (from, to) =>
+  Math.max(1, Math.round((new Date(to) - new Date(from)) / 86400000) + 1);
 
 /* актуальні місячні плани салонів (territory_plans); fallback — SALON_MONTH_PLAN */
 export async function listPlans() {

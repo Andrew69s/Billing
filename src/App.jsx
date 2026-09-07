@@ -51,7 +51,7 @@ import {
 } from "./lib/notifications.js";
 import {
   TM_METRICS, SALON_MONTH_PLAN, daysInYm, dateOf,
-  listMetrics, listPlans, planOf, effective, saveManual, resetManual, syncFromPlanner, subscribeMetrics, monthAgg, planAgg,
+  listMetrics, listMetricsRange, daysBetween, listPlans, planOf, effective, saveManual, resetManual, syncFromPlanner, subscribeMetrics, monthAgg, planAgg,
 } from "./lib/territory.js";
 import { getMaintenance, setMaintenance, subscribeFlags } from "./lib/appFlags.js";
 import { submitFeedback, listFeedback, setFeedbackStatus, resolveFeedback, deleteFeedback, subscribeFeedback } from "./lib/feedback.js";
@@ -5307,18 +5307,21 @@ const uahK = (n) => {
 const turnoverBand = (pct) => (pct < 50 ? "lo" : pct < 80 ? "mid" : pct <= 105 ? "ok" : "over");
 const salonShortName = (s) => (s.city === "Львів" ? shortAddr(s.addr).split(",")[0] : s.city);
 
-function Ring({ pct, size = 82, sw = 8, children }) {
-  const r = (size - sw) / 2;
+/* Кільце — розмір задає CSS (ширина комірки), SVG масштабується через viewBox */
+function Ring({ pct, size = 104, sw = 9, children }) {
+  const VB = 100; // внутрішня система координат
+  const r = (VB - (sw / size) * VB) / 2;
   const C = 2 * Math.PI * r;
   const off = C * (1 - Math.min(Math.max(pct, 0), 100) / 100);
+  const strokeW = (sw / size) * VB;
   return (
-    <div className="rg-ring" style={{ width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <circle className="rg-track" cx={size / 2} cy={size / 2} r={r} strokeWidth={sw} fill="none" />
+    <div className="rg-ring" style={{ "--rg-max": `${size}px` }}>
+      <svg viewBox={`0 0 ${VB} ${VB}`} preserveAspectRatio="xMidYMid meet">
+        <circle className="rg-track" cx={VB / 2} cy={VB / 2} r={r} strokeWidth={strokeW} fill="none" />
         <circle
-          className={`rg-prog ${turnoverBand(pct)}`} cx={size / 2} cy={size / 2} r={r} strokeWidth={sw} fill="none"
-          strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`}
-          strokeDasharray={C.toFixed(1)} strokeDashoffset={off.toFixed(1)}
+          className={`rg-prog ${turnoverBand(pct)}`} cx={VB / 2} cy={VB / 2} r={r} strokeWidth={strokeW} fill="none"
+          strokeLinecap="round" transform={`rotate(-90 ${VB / 2} ${VB / 2})`}
+          strokeDasharray={C.toFixed(2)} strokeDashoffset={off.toFixed(2)}
         />
       </svg>
       <div className="rg-center">{children}</div>
@@ -5333,18 +5336,23 @@ function TurnoverRings({ scopeSalons }) {
   const dim = daysInYm(ym);
   const [rows, setRows] = useState(null);
   const [plans, setPlans] = useState(SALON_MONTH_PLAN);
-  const [mtd, setMtd] = useState(false);
+  const [mode, setMode] = useState("today"); // today | month | range
+  const [rFrom, setRFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10); });
+  const [rTo, setRTo] = useState(today);
   const [syncing, setSyncing] = useState(false);
 
   const reload = () => {
-    listMetrics(ym).then(setRows).catch(() => setRows([]));
+    const p = mode === "range" && rFrom && rTo && rFrom <= rTo
+      ? listMetricsRange(rFrom, rTo)
+      : listMetrics(ym);
+    p.then(setRows).catch(() => setRows([]));
     listPlans().then(setPlans).catch(() => {});
   };
   useEffect(() => {
     reload();
     return subscribeMetrics(reload);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ym]);
+  }, [ym, mode, rFrom, rTo]);
 
   const runSync = async () => {
     setSyncing(true);
@@ -5361,18 +5369,20 @@ function TurnoverRings({ scopeSalons }) {
   if (rows === null) return <div className="loading">Завантаження…</div>;
 
   const dayCount = Math.min(new Date().getDate(), dim);
+  const rangeDays = mode === "range" ? daysBetween(rFrom, rTo) : 0;
+  // множник норми відносно денної: today → 1, month → минуло днів, range → днів у діапазоні
+  const normMult = mode === "today" ? 1 : mode === "month" ? dayCount : rangeDays;
+
   const byKey = {};
   for (const r of rows) {
     const e = effective(r);
-    const b = (byKey[r.salon_key] = byKey[r.salon_key] || { today: 0, mtd: 0 });
+    const b = (byKey[r.salon_key] = byKey[r.salon_key] || { today: 0, sum: 0 });
     if (r.work_date === today) b.today = e.assort;
-    b.mtd += e.assort;
+    b.sum += e.assort;
   }
-  const normOf = (k) => {
-    const p = planOf(plans, k).assort || 0;
-    return mtd ? (p / dim) * dayCount : p / dim;
-  };
-  const valOf = (k) => (mtd ? byKey[k]?.mtd || 0 : byKey[k]?.today || 0);
+  const valOf = (k) => (mode === "today" ? byKey[k]?.today || 0 : byKey[k]?.sum || 0);
+  const dailyNorm = (k) => (planOf(plans, k).assort || 0) / dim;
+  const normOf = (k) => dailyNorm(k) * normMult;
 
   const cells = salons
     .map((s) => {
@@ -5386,33 +5396,49 @@ function TurnoverRings({ scopeSalons }) {
   const totN = cells.reduce((a, c) => a + c.n, 0);
   const totPct = totN ? (totV / totN) * 100 : 0;
 
-  // виконання плану по територіях (місто / область) — завжди наростаючим за місяць
+  const heroLab = mode === "today" ? "сьогодні"
+    : mode === "month" ? "з початку місяця"
+    : `${fmtDate(rFrom).split(",")[0]} – ${fmtDate(rTo).split(",")[0]}`;
+
   const territories = [
     { label: "Територія · місто", area: "місто" },
     { label: "Територія · область", area: "область" },
   ].map((t) => {
     const keys = SALONS.filter((s) => s.area === t.area).map((s) => s.key);
-    const done = keys.reduce((a, k) => a + (byKey[k]?.mtd || 0), 0);
+    const done = keys.reduce((a, k) => a + valOf(k), 0);
     const plan = keys.reduce((a, k) => a + (planOf(plans, k).assort || 0), 0);
-    const normToday = plan ? (plan / dim) * dayCount : 0;
+    const norm = keys.reduce((a, k) => a + normOf(k), 0);
+    const normToDatePct = plan ? ((plan / dim) * dayCount / plan) * 100 : 0; // = dayCount/dim
+    const mtdSum = mode === "range" ? null : done;
     return {
-      ...t, done, plan, normToday,
-      donePct: plan ? (done / plan) * 100 : 0,
-      gap: done - normToday,                                   // <0 — відстаємо
-      gapPct: normToday ? ((done - normToday) / normToday) * 100 : 0,
-      remain: Math.max(0, plan - done),
+      ...t, done, plan, norm, mtdSum, normToDatePct,
+      donePct: plan && mtdSum != null ? (mtdSum / plan) * 100 : null,
+      gap: done - norm,
+      gapPct: norm ? ((done - norm) / norm) * 100 : 0,
+      remain: mtdSum != null ? Math.max(0, plan - mtdSum) : null,
     };
   });
+
+  const gapWhen = mode === "today" ? "на сьогодні" : mode === "month" ? "на сьогодні" : "за період";
 
   return (
     <div className="rg-mod">
       <div className="rg-head">
         <h3 className="ov-h">Оборот салонів</h3>
         <div className="rg-toggle">
-          <button className={!mtd ? "on" : ""} onClick={() => setMtd(false)}>Сьогодні</button>
-          <button className={mtd ? "on" : ""} onClick={() => setMtd(true)}>За місяць</button>
+          <button className={mode === "today" ? "on" : ""} onClick={() => setMode("today")}>Сьогодні</button>
+          <button className={mode === "month" ? "on" : ""} onClick={() => setMode("month")}>За місяць</button>
+          <button className={mode === "range" ? "on" : ""} onClick={() => setMode("range")}>Період</button>
         </div>
       </div>
+
+      {mode === "range" && (
+        <div className="rg-range">
+          <label>з <input type="date" value={rFrom} max={rTo} onChange={(e) => setRFrom(e.target.value)} /></label>
+          <label>по <input type="date" value={rTo} min={rFrom} max={today} onChange={(e) => setRTo(e.target.value)} /></label>
+          <span className="rg-range-n">{rangeDays} {plural(rangeDays, "день", "дні", "днів")}</span>
+        </div>
+      )}
 
       <div className="rg-hero">
         <Ring pct={totPct} size={112} sw={12}>
@@ -5421,7 +5447,7 @@ function TurnoverRings({ scopeSalons }) {
         </Ring>
         <div className="rg-hero-meta">
           <div className="rg-hero-val">{fmt(totV)}</div>
-          <div className="rg-hero-lab">оборот мережі · {mtd ? "з початку місяця" : "сьогодні"}</div>
+          <div className="rg-hero-lab">оборот мережі · {heroLab}</div>
           <div className="rg-hero-norm">Норма: <b>{fmt(totN)}</b></div>
         </div>
       </div>
@@ -5429,18 +5455,20 @@ function TurnoverRings({ scopeSalons }) {
       <div className="rg-terr">
         {territories.map((x) => (
           <div className="rg-terr-card" key={x.area}>
-            <div className="rg-terr-h">{x.label}<span className="rg-terr-done">{Math.round(x.donePct)}% плану</span></div>
-            <div className="rg-terr-bar">
-              <div className={`rg-terr-fill ${x.gap < 0 ? "behind" : "ahead"}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
-              <span className="rg-terr-mark" style={{ left: `${Math.min(100, x.plan ? (x.normToday / x.plan) * 100 : 0)}%` }} title={`норма на сьогодні: ${fmt(x.normToday)}`} />
-            </div>
+            <div className="rg-terr-h">{x.label}{x.donePct != null && <span className="rg-terr-done">{Math.round(x.donePct)}% плану</span>}</div>
+            {x.donePct != null && (
+              <div className="rg-terr-bar">
+                <div className={`rg-terr-fill ${x.gap < 0 ? "behind" : "ahead"}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
+                <span className="rg-terr-mark" style={{ left: `${Math.min(100, x.normToDatePct)}%` }} title={`норма на сьогодні: ${Math.round(x.normToDatePct)}% плану`} />
+              </div>
+            )}
             <div className="rg-terr-rows">
-              <div><span>Оборот за місяць</span><b>{fmt(x.done)}</b></div>
+              <div><span>Оборот {mode === "range" ? "за період" : "за місяць"}</span><b>{fmt(x.done)}</b></div>
               <div>
-                <span>{x.gap < 0 ? "Відставання від норми на сьогодні" : "Випередження норми на сьогодні"}</span>
+                <span>{x.gap < 0 ? `Відставання від норми ${gapWhen}` : `Випередження норми ${gapWhen}`}</span>
                 <b className={x.gap < 0 ? "neg" : "pos"}>{x.gap < 0 ? "−" : "+"}{fmt(Math.abs(x.gap))} · {Math.abs(Math.round(x.gapPct))}%</b>
               </div>
-              <div><span>Залишок до закриття плану</span><b>{fmt(x.remain)}</b></div>
+              {x.remain != null && <div><span>Залишок до закриття плану</span><b>{fmt(x.remain)}</b></div>}
             </div>
           </div>
         ))}
@@ -5457,9 +5485,9 @@ function TurnoverRings({ scopeSalons }) {
           </button>
         ))}
         <button className="rg-cell rg-sync" onClick={runSync} disabled={syncing} title="Підтягнути свіжі цифри з планера">
-          <div className="rg-ring" style={{ width: 82, height: 82 }}>
-            <svg width="82" height="82" viewBox="0 0 82 82">
-              <circle className="rg-track" cx="41" cy="41" r="37" strokeWidth="8" fill="none" />
+          <div className="rg-ring" style={{ "--rg-max": "104px" }}>
+            <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+              <circle className="rg-track" cx="50" cy="50" r="45.5" strokeWidth="9" fill="none" />
             </svg>
             <div className="rg-center"><RefreshCw size={19} className={syncing ? "rg-spin" : ""} /></div>
           </div>
@@ -7288,7 +7316,10 @@ const CSS = `
 
 /* ---------- shell ---------- */
 .view{max-width:900px;margin:0 auto;padding:8px 22px 96px;animation:fadeIn .3s ease both;}
-.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;padding:16px 22px 14px;margin:0 -22px 10px;background:var(--bg-2);border-bottom:1px solid var(--line-dark);box-shadow:0 10px 22px -14px rgba(0,0,0,.6);}
+.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;
+  padding:calc(16px + env(safe-area-inset-top)) calc(22px + env(safe-area-inset-right)) 14px calc(22px + env(safe-area-inset-left));
+  margin:calc(-1 * env(safe-area-inset-top)) -22px 10px;min-height:58px;
+  background:var(--bg-2);border-bottom:1px solid var(--line-dark);box-shadow:0 10px 22px -14px rgba(0,0,0,.6);}
 .topbar-menu{display:none;background:rgba(var(--sf),.05);border:1px solid var(--line-dark);color:var(--on-dark-2);width:36px;height:36px;border-radius:999px;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
 .topbar-menu:hover{color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
 .cab-scrim{display:none;position:fixed;inset:0;z-index:65;background:rgba(6,10,14,.6);opacity:0;pointer-events:none;transition:opacity .2s var(--ease);}
@@ -7548,11 +7579,12 @@ const CSS = `
 /* ---------- responsive ---------- */
 @media (max-width:640px){
   .view{padding:4px 13px 84px;}
-  .topbar{padding:12px 13px;margin:0 -13px 10px;gap:8px;}
+  .topbar{padding:calc(12px + env(safe-area-inset-top)) calc(13px + env(safe-area-inset-right)) 12px calc(13px + env(safe-area-inset-left));margin:calc(-1 * env(safe-area-inset-top)) -13px 10px;gap:8px;}
   .topbar-title{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;}
-  .topbar-back{padding:7px 9px;font-size:0;flex-shrink:0;}
-  .topbar-back svg{width:17px;height:17px;}
-  .topbar-right{gap:7px;flex-shrink:0;}
+  .topbar .topbar-back{padding:9px 10px;font-size:0;flex-shrink:0;}
+  .topbar-back svg{width:18px;height:18px;}
+  .topbar-right{gap:8px;flex-shrink:0;}
+  .topbar .topbar-fb,.topbar .topbar-theme,.topbar .notif-bell,.topbar .topbar-menu{width:40px;height:40px;}
   .role-select-inner h1{font-size:27px;}
   .item-body{flex-direction:column;}
   .shot-slot{align-self:flex-start;}
@@ -8292,11 +8324,16 @@ td.sh.sh-plan{font-weight:400;}
 .rg-toggle{display:inline-flex;background:rgba(var(--sf),.06);border:1px solid var(--line-dark);border-radius:999px;padding:3px;gap:2px;}
 .rg-toggle button{border:0;background:none;color:var(--on-dark-3);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 13px;border-radius:999px;cursor:pointer;letter-spacing:.02em;}
 .rg-toggle button.on{background:var(--gold);color:var(--gold-ink);font-weight:600;}
-.rg-ring{position:relative;flex-shrink:0;}
-.rg-ring svg{display:block;}
+.rg-range{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;font-size:12px;color:var(--on-dark-3);}
+.rg-range label{display:inline-flex;align-items:center;gap:6px;}
+.rg-range input[type=date]{background:rgba(var(--sf),.06);border:1px solid var(--line-dark);color:var(--on-dark);border-radius:8px;padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color-scheme:dark;}
+:root[data-theme="light"] .rg-range input[type=date]{color-scheme:light;}
+.rg-range-n{font-family:'IBM Plex Mono',monospace;color:var(--on-dark-2);}
+.rg-ring{position:relative;width:100%;max-width:var(--rg-max,82px);aspect-ratio:1;margin:0 auto;flex-shrink:0;container-type:inline-size;}
+.rg-ring svg{display:block;width:100%;height:100%;}
 .rg-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;}
-.rg-center b{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:var(--on-dark);font-variant-numeric:tabular-nums;}
-.rg-center i{font-style:normal;font-size:10px;margin-top:3px;font-family:'IBM Plex Mono',monospace;}
+.rg-center b{font-family:'IBM Plex Mono',monospace;font-size:14px;font-size:clamp(11px,17cqi,16px);font-weight:600;color:var(--on-dark);font-variant-numeric:tabular-nums;}
+.rg-center i{font-style:normal;font-size:10px;font-size:clamp(8px,11cqi,11px);margin-top:3px;font-family:'IBM Plex Mono',monospace;}
 .rg-track{stroke:rgba(var(--sf),.10);}
 .rg-prog{transition:stroke-dashoffset .9s cubic-bezier(.2,.8,.2,1);}
 .rg-prog.lo{stroke:var(--negative-bright);} .rg-prog.mid{stroke:var(--gold-bright);} .rg-prog.ok{stroke:var(--positive-bright);} .rg-prog.over{stroke:var(--gold-bright);}
@@ -8307,8 +8344,8 @@ td.sh.sh-plan{font-weight:400;}
 .rg-hero-lab{font-size:.83rem;color:var(--on-dark-3);margin-top:6px;}
 .rg-hero-norm{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--on-dark-2);margin-top:10px;}
 .rg-hero-norm b{color:var(--on-dark);}
-.rg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(102px,1fr));gap:18px 10px;justify-items:center;}
-.rg-cell{display:flex;flex-direction:column;align-items:center;gap:8px;background:none;border:0;cursor:pointer;padding:6px 2px;font-family:inherit;transition:transform .13s;}
+.rg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:20px 12px;}
+.rg-cell{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;background:none;border:0;cursor:pointer;padding:6px 2px;font-family:inherit;transition:transform .13s;}
 .rg-cell:hover{transform:translateY(-2px);}
 .rg-cell:hover .rg-nm{color:var(--on-dark);}
 .rg-nm{font-size:12px;color:var(--on-dark-2);font-weight:500;text-align:center;line-height:1.2;}
@@ -8360,13 +8397,19 @@ td.sh.sh-plan{font-weight:400;}
 .rg-spin{animation:rgspin .9s linear infinite;}
 @keyframes rgspin{to{transform:rotate(360deg);}}
 @media(max-width:560px){
-  .rg-grid{grid-template-columns:repeat(3,1fr);gap:16px 8px;}
-  .rg-hero{gap:14px;}
-  .rg-hero-val{font-size:1.35rem;}
+  .rg-grid{grid-template-columns:repeat(3,1fr);gap:18px 8px;}
+  .rg-cell .rg-ring{max-width:none;}   /* кільце заповнює комірку */
+  .rg-hero{gap:16px;}
+  .rg-hero .rg-ring{max-width:96px;}
+  .rg-hero-val{font-size:1.4rem;}
+  .rg-nm{font-size:11.5px;}
 }
-@media(max-width:360px){.rg-grid{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:380px){
+  .rg-grid{gap:16px 6px;}
+  .rg-hero .rg-ring{max-width:84px;}
+}
 @media (max-width:400px){
-  .topbar{gap:6px;padding:11px 11px;margin:0 -11px 10px;}
+  .topbar{gap:6px;padding:calc(11px + env(safe-area-inset-top)) 11px 11px;margin:calc(-1 * env(safe-area-inset-top)) -11px 10px;}
   .topbar-logout{padding:6px 9px;font-size:0;}
   .topbar-logout::before{content:"⎋";font-size:15px;}
   .view{padding:4px 11px 84px;}
