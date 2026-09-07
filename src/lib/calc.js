@@ -4,12 +4,20 @@ import { supabase } from "./supabase.js";
 /* Розрахунок мотивації тепер на сервері (Edge Function «calc»).
    Формули й таблиці у браузер не потрапляють. */
 
-async function invoke(body) {
+async function invoke(body, _retried = false) {
   const { data, error } = await supabase.functions.invoke("calc", { body });
   if (error) {
     // Edge Function повертає {error} з кодом 4xx — витягнемо текст
     let msg = error.message || "calc error";
+    let status = 0;
+    try { status = error.context?.status || 0; } catch { /* ignore */ }
     try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch { /* ignore */ }
+    // токен доступу міг протухнути (вкладка відкрита годинами) — оновлюємо сесію й пробуємо ще раз
+    if (!_retried && (status === 401 || /unauthorized|no auth|jwt/i.test(msg))) {
+      const { data: s } = await supabase.auth.refreshSession().catch(() => ({ data: null }));
+      if (s?.session) return invoke(body, true);
+      throw new Error("Сесія застаріла — увійдіть знову");
+    }
     throw new Error(msg);
   }
   return data;
