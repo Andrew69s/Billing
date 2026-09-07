@@ -20,6 +20,7 @@ import {
   ADMIN_KEY, ADMIN_NAME, listRecoveryRequests, clearRecovery,
   masterLogin, confirmRecovery, adminSetPassword,
   listReassignments, addReassignment, removeReassignment,
+  listFopHistory, addFopAssignment, removeFopAssignment, fopEntryOn, fopOn, currentFop, fopHistoryAll,
   CAPABILITIES, getCapabilities, setCapabilities, listLog, ALL_CAB_KEYS,
   cabType, PARTICIPANTS, canAssign,
 } from "./org.js";
@@ -3046,6 +3047,105 @@ function AdminReassign() {
   );
 }
 
+/* дата → «7 вер. 2026» коротко */
+const fmtDay = (d) => { try { return new Date(d).toLocaleDateString("uk-UA", { day: "numeric", month: "short", year: "numeric" }); } catch { return d; } };
+
+/* активний запис ФОП для магазину зі списку історії (локально, без кешу) */
+function currentFopEntry(list, salonKey, onDate) {
+  const d = onDate || todayISO();
+  const rows = list
+    .filter((r) => r.salonKey === salonKey && r.fromDate <= d)
+    .sort((a, b) => (a.fromDate < b.fromDate ? -1 : a.fromDate > b.fromDate ? 1 : a.id - b.id));
+  return rows.length ? rows[rows.length - 1] : null;
+}
+
+function AdminFop() {
+  const [list, setList] = useState(null);
+  const [salonKey, setSalonKey] = useState(SALONS[0].key);
+  const [fop, setFop] = useState("");
+  const [fromDate, setFromDate] = useState(todayISO());
+  const [busy, setBusy] = useState(false);
+  const load = () => listFopHistory().then((l) => setList(l.slice().sort((a, b) => (a.fromDate < b.fromDate ? 1 : a.fromDate > b.fromDate ? -1 : b.id - a.id))));
+  useEffect(() => { load(); }, []);
+  const add = async () => {
+    if (!fop.trim() || !fromDate) return;
+    setBusy(true);
+    try {
+      await addFopAssignment({ salonKey, fop: fop.trim(), fromDate });
+      pushToast({ title: "ФОП призначено", body: `${salonByKey(salonKey)?.city} · ${fop.trim()} · з ${fmtDay(fromDate)}` });
+      setFop(""); load();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy(false);
+  };
+  const del = async (id) => {
+    if (!confirm("Видалити цей запис з історії ФОП? Відповідність перерахується.")) return;
+    try { await removeFopAssignment(id); load(); }
+    catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+  };
+
+  return (
+    <div className="admin-panel">
+      <h3>ФОП по СМ</h3>
+      <p className="hint">
+        Призначте ФОП магазину й дату, з якої він діє. Дані підтягуються у вкладку «Довідник» і на плитки рахунків.
+        Рахунки, виставлені до зміни, ФОП не змінюють — береться значення на дату документа.
+      </p>
+      <div className="admin-reassign-form">
+        <label className="over-field"><span>Магазин</span>
+          <select value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
+            {SALONS.map((s) => <option key={s.key} value={s.key}>{salonLabel(s)}</option>)}
+          </select>
+        </label>
+        <label className="over-field"><span>ФОП</span>
+          <input value={fop} onChange={(e) => setFop(e.target.value)} placeholder="напр. ФОП Фещук Ю.Б" />
+        </label>
+        <label className="over-field"><span>Діє з дати</span>
+          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+        </label>
+        <button className="btn-primary" disabled={busy || !fop.trim()} onClick={add}>Призначити</button>
+      </div>
+
+      {list === null ? <div className="loading">Завантаження…</div> : (
+        <>
+          <h4 className="admin-sub-h">Актуальна відповідність ФОП до СМ</h4>
+          <div className="tm-all">
+            <table className="tm-all-tbl">
+              <thead><tr><th>Магазин</th><th>Поточний ФОП</th><th>Діє з</th></tr></thead>
+              <tbody>
+                {SALONS.map((s) => {
+                  const e = currentFopEntry(list, s.key);
+                  return (
+                    <tr key={s.key}>
+                      <td>{s.city}, {shortAddr(s.addr)}</td>
+                      <td>{e ? e.fop : <span className="muted">— не задано —</span>}</td>
+                      <td className="num muted">{e ? fmtDay(e.fromDate) : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <h4 className="admin-sub-h">Історія ФОП</h4>
+          {list.length === 0 ? <div className="admin-empty">Записів немає.</div> : (
+            <div className="admin-list">
+              {list.map((r) => (
+                <div className="admin-req" key={r.id}>
+                  <div className="admin-req-info">
+                    <span className="admin-req-name">{salonByKey(r.salonKey)?.city || r.salonKey} · {r.fop}</span>
+                    <span className="admin-req-time">діє з {fmtDay(r.fromDate)} · запис {fmtDate(r.at)}</span>
+                  </div>
+                  <button className="btn-secondary small" onClick={() => del(r.id)}>Видалити</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function AdminRights() {
   const people = OFFICE;
   const [caps, setCaps] = useState(null);
@@ -3099,7 +3199,7 @@ function AdminLog() {
   useEffect(() => { let a = true; listLog().then((l) => { if (a) setLog(l); }); return () => { a = false; }; }, []);
   const label = {
     login_master: "вхід за майстер-кодом", recovery_request: "запит відновлення", recovery_done: "змінено пароль",
-    reassign: "перепризначено магазин", caps: "змінено права",
+    reassign: "перепризначено магазин", caps: "змінено права", fop_assign: "призначено ФОП",
   };
   return (
     <div className="admin-panel">
@@ -3278,6 +3378,7 @@ function AdminPanel() {
     ["recovery", "Відновлення паролю"],
     ["access", "Доступи"],
     ["reassign", "Магазини й ТМ"],
+    ["fop", "ФОП по СМ"],
     ["rights", "Права"],
     ["feedback", "Звернення"],
     ["maint", "Технічна перерва"],
@@ -3293,10 +3394,71 @@ function AdminPanel() {
       {tab === "recovery" && <AdminRecovery />}
       {tab === "access" && <AdminAccess />}
       {tab === "reassign" && <AdminReassign />}
+      {tab === "fop" && <AdminFop />}
       {tab === "rights" && <AdminRights />}
       {tab === "feedback" && <AdminFeedback />}
       {tab === "maint" && <AdminMaintenance />}
       {tab === "log" && <AdminLog />}
+    </div>
+  );
+}
+
+/* =========================================================
+   ДОВІДНИК — спільна вкладка (усі кабінети, лише перегляд)
+========================================================= */
+function DirectoryModule({ cab }) {
+  const [list, setList] = useState(null);
+  const ownSalon = cab?.type === "sm" ? cab.key : null;
+  useEffect(() => {
+    let a = true;
+    listFopHistory().then((l) => { if (a) setList(l); });
+    return () => { a = false; };
+  }, []);
+  return (
+    <div className="dir-mod">
+      <div className="tm-head"><h3 className="ov-h">Довідник</h3></div>
+
+      <section className="dir-sec">
+        <h4 className="admin-sub-h">Актуальна відповідність ФОП до СМ</h4>
+        {list === null ? <div className="loading">Завантаження…</div> : (
+          <div className="tm-all">
+            <table className="tm-all-tbl">
+              <thead><tr><th>Магазин</th><th>ФОП</th><th>Діє з</th></tr></thead>
+              <tbody>
+                {SALONS.map((s) => {
+                  const e = currentFopEntry(list, s.key);
+                  return (
+                    <tr key={s.key} className={s.key === ownSalon ? "active" : ""}>
+                      <td>{s.city}, {shortAddr(s.addr)}</td>
+                      <td>{e ? e.fop : <span className="muted">— не задано —</span>}</td>
+                      <td className="num muted">{e ? fmtDay(e.fromDate) : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="dir-sec">
+        <h4 className="admin-sub-h">Історія ФОП</h4>
+        {list === null ? null
+          : list.length === 0 ? <div className="admin-empty">Записів немає.</div>
+          : (
+            <div className="dir-hist">
+              {list.slice().sort((a, b) => (a.fromDate < b.fromDate ? 1 : a.fromDate > b.fromDate ? -1 : b.id - a.id)).map((r) => (
+                <div className="dir-hist-row" key={r.id}>
+                  <span className="dir-hist-salon">{salonByKey(r.salonKey)?.city || r.salonKey}</span>
+                  <span className="dir-hist-fop">{r.fop}</span>
+                  <span className="dir-hist-from">з {fmtDay(r.fromDate)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+      </section>
+
+      <p className="muted" style={{ fontSize: 12 }}>Керування — у кабінеті адміністратора, вкладка «Адміністрування → ФОП по СМ».</p>
     </div>
   );
 }
@@ -3707,6 +3869,8 @@ function TasksModule({ cab }) {
 ========================================================= */
 const invMoney = (n) => (Number(n) || 0).toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " грн";
 const INV_TONE = { issued: "badge-warn", paid: "badge-ok", shipped: "badge-ok", documented: "badge-ok", cancelled: "badge-off" };
+/* ФОП рахунку — з довідника, на дату виставлення (раніші документи не чіпаємо) */
+const invFop = (inv) => fopOn(inv.created_by, inv.created_at);
 
 function useInvoices() {
   const [rows, setRows] = useState(null);
@@ -3910,6 +4074,12 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
           </button>
         )}
       </div>
+      {salonByKey(inv.created_by) && (
+        <div className="inv-fop-line">
+          {salonByKey(inv.created_by).city}
+          {invFop(inv) ? ` (${invFop(inv)})` : ""}
+        </div>
+      )}
       {open && (
         <div className="inv-detail">
           <div className="inv-meta">
@@ -7061,6 +7231,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "team", label: "Команда", group: "Команда", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "archive", label: "Архів", group: "Команда", icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
     { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={tmKey} /> },
+    { key: "directory", label: "Довідник", group: "Ще", icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "docs", label: "Документи й стандарти", group: "Ще", icon: <FileText size={16} />, render: () => <ModuleStub name="Документи й стандарти" /> },
     isAdmin ? { key: "admin", label: "Адміністрування", group: "Адміністрування", icon: <User size={16} />, render: () => <AdminPanel /> } : null,
   ];
@@ -7088,6 +7259,7 @@ function ManagerCabinet({ onExit, onLogout }) {
     { key: "inv", label: "Рахунки", group: "Склад і гроші", icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
     { key: "sheet", label: "Офіційні виплати", group: "Склад і гроші", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
     { key: "team", label: "Команда", group: "Команда", icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
+    { key: "directory", label: "Довідник", group: "Ще", icon: <FileText size={16} />, render: () => <DirectoryModule cab={cab} /> },
   ];
   return <CabinetShell title={MANAGER.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="manager" />;
 }
@@ -7100,6 +7272,7 @@ function AccountantCabinet({ onExit, onLogout }) {
     { key: "warehouse", label: "Склад", icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
     { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
     { key: "bonus", label: "Рух бонусів", icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
+    { key: "directory", label: "Довідник", icon: <FileText size={16} />, render: () => <DirectoryModule cab={cab} /> },
   ];
   return <CabinetShell title={ACCOUNTANT.name} onExit={onExit} onLogout={onLogout} modules={modules} cabKey="accountant" />;
 }
@@ -7147,6 +7320,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "team", label: "Команда", group: "Команда й розвиток", icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "standards", label: "Стандарти й навчання", group: "Команда й розвиток", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
     { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={salonTmOn(salonKey)} /> },
+    { key: "directory", label: "Довідник", group: "Ще", icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "requests", label: "Заявки", group: "Ще", icon: <Package size={16} />, render: () => <ModuleStub name="Заявки" /> },
     { key: "reports", label: "Звіти", group: "Ще", icon: <FileText size={16} />, render: () => <ModuleStub name="Звіти (клінінг, лічильники)" /> },
   ];
@@ -7187,6 +7361,7 @@ function OfficeCabinet({ cabKey, onExit, onLogout }) {
       : null,
     { key: "expenses", label: "Витрати по СМ", icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: cabKey, type: "office" }} /> },
     { key: "bn", label: "Безнальні рахунки", icon: <CreditCard size={16} />, divider: true, render: () => <ModuleStub name="Безнальні рахунки" /> },
+    { key: "directory", label: "Довідник", icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: cabKey, type: "office" }} /> },
   ];
   return <CabinetShell title={person?.name || "Офіс"} onExit={onExit} onLogout={onLogout} modules={modules} cabKey={cabKey} />;
 }
@@ -7786,6 +7961,16 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .admin-reassign-form{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin:14px 0;padding:14px;background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);}
 .admin-reassign-form .over-field{max-width:none;flex:1 1 200px;margin-bottom:0;}
 .admin-reassign-form select{width:100%;}
+.admin-reassign-form input[type=date],.admin-reassign-form input[type=text],.admin-reassign-form input:not([type]){width:100%;padding:8px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:13px;background:var(--surface);color:var(--ink);}
+.admin-sub-h{font-family:'Fraunces',serif;font-size:14px;font-weight:600;color:var(--ink);margin:22px 0 10px;}
+.dir-mod{display:flex;flex-direction:column;gap:6px;}
+.dir-sec{margin-bottom:4px;}
+.dir-hist{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;}
+.dir-hist-row{display:grid;grid-template-columns:1fr 1.4fr auto;gap:10px;padding:9px 12px;font-size:12.5px;border-bottom:1px solid var(--line);background:var(--surface);}
+.dir-hist-row:last-child{border-bottom:none;}
+.dir-hist-salon{font-weight:600;color:var(--ink);}
+.dir-hist-fop{color:var(--ink-soft);}
+.dir-hist-from{font-family:'IBM Plex Mono',monospace;color:var(--muted);white-space:nowrap;}
 .admin-rights{display:flex;flex-direction:column;gap:14px;margin-top:14px;}
 .admin-rights-person{background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);padding:14px 16px;}
 .admin-rights-name{font-weight:700;font-size:13.5px;color:var(--ink);margin-bottom:9px;}
@@ -7980,6 +8165,7 @@ td.sh.sh-plan{font-weight:400;}
 .inv-vat.on{background:rgba(190,138,46,.16);color:var(--gold-ink);border-color:rgba(220,169,74,.3);}
 .inv-amount{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-soft);white-space:nowrap;}
 .inv-badge{flex-shrink:0;}
+.inv-fop-line{padding:0 14px 8px 36px;margin-top:-4px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .inv-detail{padding:4px 14px 14px;border-top:1px solid var(--line);}
 .inv-meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin:10px 0;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;}
 .inv-meta b{color:var(--ink-soft);}

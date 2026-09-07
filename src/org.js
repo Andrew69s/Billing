@@ -82,6 +82,48 @@ export function salonTmOn(salonKey, ym) {
 export const salonsOfTm = (tmKey, ym) => SALONS.filter((s) => salonTmOn(s.key, ym) === tmKey);
 
 /* =========================================================
+   ВІДПОВІДНІСТЬ ФОП ↔ СМ (магазин)
+   Запис: { id, salonKey, fop, fromDate (YYYY-MM-DD), at }.
+   Діє від дати fromDate і далі. Документи, виставлені раніше за зміну,
+   ФОП не змінюють — резолвер бере значення на дату документа.
+========================================================= */
+const FOP_KEY = "fop:history";
+let _fop = [];
+
+export async function loadFopCache() {
+  _fop = await listFopHistory();
+  return _fop;
+}
+export async function listFopHistory() {
+  try { return JSON.parse((await window.storage.get(FOP_KEY)).value) || []; }
+  catch { return []; }
+}
+export async function addFopAssignment({ salonKey, fop, fromDate }) {
+  const list = await listFopHistory();
+  list.push({ id: Date.now(), salonKey, fop: String(fop || "").trim(), fromDate, at: new Date().toISOString() });
+  await window.storage.set(FOP_KEY, JSON.stringify(list));
+  await loadFopCache();
+  await logAction("fop_assign", { salonKey, fop, fromDate });
+}
+export async function removeFopAssignment(id) {
+  const list = (await listFopHistory()).filter((x) => x.id !== id);
+  await window.storage.set(FOP_KEY, JSON.stringify(list));
+  await loadFopCache();
+}
+const isoDay = (d) => (d ? String(d) : new Date().toISOString()).slice(0, 10);
+/* активний запис ФОП для магазину на дату (за замовч. — сьогодні) */
+export function fopEntryOn(salonKey, dateISO) {
+  const d = isoDay(dateISO);
+  const applicable = _fop
+    .filter((r) => r.salonKey === salonKey && r.fromDate <= d)
+    .sort((a, b) => (a.fromDate < b.fromDate ? -1 : a.fromDate > b.fromDate ? 1 : a.id - b.id));
+  return applicable.length ? applicable[applicable.length - 1] : null;
+}
+export const fopOn = (salonKey, dateISO) => fopEntryOn(salonKey, dateISO)?.fop || null;
+export const currentFop = (salonKey) => fopOn(salonKey);
+export const fopHistoryAll = () => _fop.slice();
+
+/* =========================================================
    ДОСТУПИ — Supabase Auth
    Кожен кабінет = один користувач (email <login>@dnipro-m.local).
    Правила доступу до даних — RLS у базі (supabase/schema.sql).
@@ -138,7 +180,7 @@ export async function currentCabinet() {
 }
 export async function signOutCab() { await supabase.auth.signOut(); }
 export function onAuthChange(cb) { return supabase.auth.onAuthStateChange((_e, s) => cb(s)); }
-export async function initAfterAuth() { await loadReassignCache(); }
+export async function initAfterAuth() { await Promise.all([loadReassignCache(), loadFopCache()]); }
 
 /* самостійна зміна свого паролю (коли залогінений) */
 export async function changeOwnPassword(newPassword) {
