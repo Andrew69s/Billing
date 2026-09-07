@@ -4935,12 +4935,13 @@ function TerritorySummaryStrip({ salonKeys, rows, daysPassed, dim, plans }) {
   );
 }
 
-function TerritoryAllSalons({ salons, rows, activeKey, onPick, plans, withEz }) {
+function TerritoryAllSalons({ salons, rows, activeKey, onPick, plans, withEz, daysPassed, dim }) {
+  const pace = dim > 0 ? Math.min(Math.max(daysPassed, 0), dim) / dim : 0;
   return (
     <div className="tm-all">
       <table className="tm-all-tbl">
         <thead>
-          <tr><th>Салон</th><th>Оборот{withEz ? " (з ЕЗ)" : ""}, міс.</th><th>План</th><th>%</th><th>Днів</th></tr>
+          <tr><th>Салон</th><th>Оборот{withEz ? " (з ЕЗ)" : ""}, міс.</th><th>План</th><th>%</th><th title="відхилення від норми на поточний день">Темп</th><th>Днів</th></tr>
         </thead>
         <tbody>
           {salons.map((s) => {
@@ -4948,12 +4949,18 @@ function TerritoryAllSalons({ salons, rows, activeKey, onPick, plans, withEz }) 
             const done = sum.assort + (withEz ? sum.ez : 0);
             const plan = planTurnover(planOf(plans, s.key), withEz);
             const pct = plan ? Math.round((done / plan) * 100) : null;
+            const normToDate = plan * pace;
+            const devPct = normToDate > 0 ? ((done - normToDate) / normToDate) * 100 : null;
+            const devRound = devPct == null ? null : Math.round(devPct);
             return (
               <tr key={s.key} className={s.key === activeKey ? "active" : ""} onClick={() => onPick(s.key)}>
                 <td>{s.city}, {shortAddr(s.addr)}</td>
                 <td className="num">{tmMoney(done)} ₴</td>
                 <td className="num muted">{tmMoney(plan)}</td>
                 <td className="num">{pct == null ? "—" : `${pct}%`}</td>
+                <td className={`num dev ${devRound == null ? "" : devRound >= 0 ? "pos" : "neg"}`}>
+                  {devRound == null ? "—" : `${devRound > 0 ? "+" : ""}${devRound}%`}
+                </td>
                 <td className="num">{daysBySalon[s.key] || 0}</td>
               </tr>
             );
@@ -5124,7 +5131,7 @@ function TerritoryModule({ cab }) {
           <TerritorySummaryStrip salonKeys={scopeKeys} rows={rowsArr} daysPassed={daysPassed} dim={dim} plans={plans} />
 
           {scopeSalons.length > 1 && (
-            <TerritoryAllSalons salons={scopeSalons} rows={rowsArr} activeKey={activeSalon} onPick={setSalonKey} plans={plans} withEz={withEz} />
+            <TerritoryAllSalons salons={scopeSalons} rows={rowsArr} activeKey={activeSalon} onPick={setSalonKey} plans={plans} withEz={withEz} daysPassed={daysPassed} dim={dim} />
           )}
 
           {scopeSalons.length > 1 && (
@@ -8150,6 +8157,11 @@ td.sh.sh-plan{font-weight:400;}
 .tm-all-tbl th:first-child{text-align:left;}
 .tm-all-tbl td{padding:9px 12px;border-bottom:1px solid var(--line);color:var(--ink);}
 .tm-all-tbl td.num{text-align:right;font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;}
+.tm-all-tbl td.dev{font-weight:700;}
+.tm-all-tbl td.dev.pos{color:var(--positive-bright);}
+.tm-all-tbl td.dev.neg{color:var(--negative-bright);}
+:root[data-theme="light"] .tm-all-tbl td.dev.pos{color:var(--positive);}
+:root[data-theme="light"] .tm-all-tbl td.dev.neg{color:var(--negative);}
 .tm-all-tbl td.muted{color:var(--muted);}
 .tm-all-tbl tr:last-child td{border-bottom:none;}
 .tm-all-tbl tbody tr{cursor:pointer;}
