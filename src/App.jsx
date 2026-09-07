@@ -5434,20 +5434,24 @@ function TurnoverRings({ scopeSalons }) {
   ].map((t) => {
     const keys = SALONS.filter((s) => s.area === t.area).map((s) => s.key);
     const done = keys.reduce((a, k) => a + valOf(k), 0);
-    const plan = keys.reduce((a, k) => a + planTurnover(planOf(plans, k), withEz), 0);
-    const norm = keys.reduce((a, k) => a + normOf(k), 0);
+    const monthPlan = keys.reduce((a, k) => a + planTurnover(planOf(plans, k), withEz), 0);
+    const norm = keys.reduce((a, k) => a + normOf(k), 0); // сьогодні: денна норма · місяць: денна×минуло · період: денна×днів
     const normToDatePct = dim ? (dayCount / dim) * 100 : 0;
-    const mtdSum = mode === "range" ? null : done;
+    // за що порівнюємо: місяць — з місячним планом, інакше — з нормою за обраний період
+    const ref = mode === "month" ? monthPlan : norm;
     return {
-      ...t, done, plan, norm, mtdSum, normToDatePct,
-      donePct: plan && mtdSum != null ? (mtdSum / plan) * 100 : null,
+      ...t, done, monthPlan, norm, normToDatePct,
+      donePct: ref ? (done / ref) * 100 : null,
+      markPct: mode === "month" ? normToDatePct : 100,
       gap: done - norm,
       gapPct: norm ? ((done - norm) / norm) * 100 : 0,
-      remain: mtdSum != null ? Math.max(0, plan - mtdSum) : null,
+      remain: mode === "month" ? Math.max(0, monthPlan - done) : null,
     };
   });
 
-  const gapWhen = mode === "range" ? "за період" : "на сьогодні";
+  const gapWhen = mode === "today" ? "сьогодні" : mode === "range" ? "за період" : "на сьогодні";
+  const planLab = mode === "month" ? "План на місяць" : mode === "range" ? "Норма за період" : "Норма на сьогодні";
+  const doneLab = mode === "today" ? "Оборот сьогодні" : mode === "range" ? "Оборот за період" : "Оборот за місяць";
 
   return (
     <div className="rg-mod">
@@ -5489,16 +5493,16 @@ function TurnoverRings({ scopeSalons }) {
       <div className="rg-terr">
         {territories.map((x) => (
           <div className="rg-terr-card" key={x.area}>
-            <div className="rg-terr-h">{x.label}{x.donePct != null && <span className="rg-terr-done">{Math.round(x.donePct)}% плану</span>}</div>
+            <div className="rg-terr-h">{x.label}{x.donePct != null && <span className="rg-terr-done">{Math.round(x.donePct)}% {mode === "month" ? "плану" : "норми"}</span>}</div>
             {x.donePct != null && (
               <div className="rg-terr-bar">
                 <div className={`rg-terr-fill ${x.gap < 0 ? "behind" : "ahead"}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
-                <span className="rg-terr-mark" style={{ left: `${Math.min(100, x.normToDatePct)}%` }} title={`норма на сьогодні: ${Math.round(x.normToDatePct)}% плану`} />
+                <span className="rg-terr-mark" style={{ left: `${Math.min(100, x.markPct)}%` }} title={mode === "month" ? `норма на сьогодні: ${Math.round(x.normToDatePct)}% плану` : "норма за обраний період"} />
               </div>
             )}
             <div className="rg-terr-rows">
-              <div><span>План на місяць</span><b>{fmt(x.plan)}</b></div>
-              <div><span>Оборот {mode === "range" ? "за період" : "за місяць"}</span><b>{fmt(x.done)}</b></div>
+              <div><span>{planLab}</span><b>{fmt(mode === "month" ? x.monthPlan : x.norm)}</b></div>
+              <div><span>{doneLab}</span><b>{fmt(x.done)}</b></div>
               <div>
                 <span>{x.gap < 0 ? `Відставання від норми ${gapWhen}` : `Випередження норми ${gapWhen}`}</span>
                 <b className={x.gap < 0 ? "neg" : "pos"}>{x.gap < 0 ? "−" : "+"}{fmt(Math.abs(x.gap))} · {Math.abs(Math.round(x.gapPct))}%</b>
