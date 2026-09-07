@@ -28,7 +28,7 @@ import { emptySmData, SM_FIELD_LABELS } from "./smCalc.js";
 import { onUpdateReady, applyUpdate } from "./lib/pwaUpdate.js";
 import {
   calcTm, calcTmBatch, calcSm, calcSmBatch, useTmCalc, useSmCalc,
-  subscribeCalcBusy, calcBusyNow,
+  subscribeCalcBusy, calcBusyNow, warmCalc,
 } from "./lib/calc.js";
 import {
   loadCalcRefs, tmCond, smCond, planBracketLabel, smCategoryOptions, managerCoefOptions,
@@ -198,13 +198,24 @@ const makeRemoveShot = (setData) => (key, i) => setData((prev) => {
 /* =========================================================
    STORAGE
 ========================================================= */
+/* дедуп одночасних читань одного ключа (кілька компонентів монтуються разом
+   і всі просять data:<tm>:<ym>) — без кешу в часі, лише спільний in-flight промис */
+const _loadDataInflight = new Map();
 async function loadData(tmKey, ym) {
-  try {
-    const r = await window.storage.get(`data:${tmKey}:${ym}`, true);
-    return r ? { ...emptyData(), ...JSON.parse(r.value) } : emptyData();
-  } catch { return emptyData(); }
+  const key = `data:${tmKey}:${ym}`;
+  if (_loadDataInflight.has(key)) return _loadDataInflight.get(key);
+  const p = (async () => {
+    try {
+      const r = await window.storage.get(key, true);
+      return r ? { ...emptyData(), ...JSON.parse(r.value) } : emptyData();
+    } catch { return emptyData(); }
+    finally { _loadDataInflight.delete(key); }
+  })();
+  _loadDataInflight.set(key, p);
+  return p;
 }
 async function saveData(tmKey, ym, data) {
+  _loadDataInflight.delete(`data:${tmKey}:${ym}`);
   try { await window.storage.set(`data:${tmKey}:${ym}`, JSON.stringify(data), true); } catch (e) { console.error(e); }
 }
 async function loadAdj(tmKey, ym) {
@@ -7218,6 +7229,7 @@ function SmOverview({ salon }) {
 function TmCabinet({ tmKey, onExit, onLogout }) {
   const tm = tmByKey(tmKey);
   const isAdmin = tmKey === ADMIN_KEY;
+  useEffect(() => { warmCalc(); }, []); // прогрів Edge-функції розрахунку ЗП
   const modules = [
     { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
     { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
@@ -7284,6 +7296,7 @@ const markCheckedInLocal = (salonKey) => { try { localStorage.setItem(checkinFla
 
 function SmCabinet({ salonKey, onExit, onLogout }) {
   const salon = salonByKey(salonKey);
+  useEffect(() => { warmCalc(); }, []); // прогрів Edge-функції розрахунку ЗП
   // локальна відмітка → миттєво пропускаємо гейт (без запиту), навіть якщо БД гальмує
   const [checkedIn, setCheckedIn] = useState(() => {
     try { return localStorage.getItem(checkinFlag(salonKey)) === "1" ? true : null; } catch { return null; }

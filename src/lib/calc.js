@@ -21,6 +21,14 @@ export const calcSm = (data, salonKey, ym) => invoke({ op: "sm", data, salonKey,
 export const calcSmBatch = (items) => invoke({ op: "sm-batch", items });
 export const getConditions = () => invoke({ op: "conditions" });
 export const getCalcMeta = () => invoke({ op: "meta" });
+/* прогрів Edge-функції (щоб перший розрахунок ЗП не чекав холодний старт) */
+let _warmedAt = 0;
+export function warmCalc() {
+  const now = Date.now();
+  if (now - _warmedAt < 120_000) return; // не частіше, ніж раз на 2 хв
+  _warmedAt = now;
+  invoke({ op: "meta" }).catch(() => {});
+}
 
 /* ---- глобальний індикатор «іде розрахунок» (показуємо у шапці, не в потоці) ---- */
 let _busy = 0;
@@ -38,16 +46,22 @@ export function subscribeCalcBusy(cb) {
 function useDebouncedCalc(fn, deps, delay = 400) {
   const [state, setState] = useState({ calc: null, loading: true, error: null });
   const seq = useRef(0);
+  const first = useRef(true);
   useEffect(() => {
     const my = ++seq.current;
     setState((s) => ({ ...s, loading: true }));
-    const t = setTimeout(() => {
+    // перший розрахунок (маунт) — одразу, без затримки; далі debounce на введення
+    const wait = first.current ? 0 : delay;
+    first.current = false;
+    const run = () => {
       busyInc();
       fn()
         .then((calc) => { if (my === seq.current) setState({ calc, loading: false, error: null }); })
         .catch((e) => { if (my === seq.current) setState((s) => ({ calc: s.calc, loading: false, error: e.message })); })
         .finally(busyDec);
-    }, delay);
+    };
+    if (wait === 0) { run(); return undefined; }
+    const t = setTimeout(run, wait);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
