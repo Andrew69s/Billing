@@ -35,6 +35,8 @@ export default defineConfig({
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
         importScripts: ["/push-sw.js"],
         cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true,
         navigateFallback: "/index.html",
         // не кешувати запити до Supabase — завжди свіжі дані
         navigateFallbackDenylist: [/^\/api/, /supabase\.co/],
