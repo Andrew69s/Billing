@@ -58,6 +58,7 @@ import { submitFeedback, listFeedback, setFeedbackStatus, resolveFeedback, delet
 import {
   bDaysInYm, bDateOf, bonusNet, listBonusYear, saveBonusDay, subscribeBonus, bonusYearAgg,
 } from "./lib/bonus.js";
+import { pushState, enablePush, disablePush } from "./lib/push.js";
 import {
   listCashDays, outstandingBySalon, setCashDay, cashHandover, listHandovers, subscribeCash,
   yesterdayISO as cashYesterday,
@@ -841,6 +842,37 @@ const relTime = (iso) => {
   return `${Math.floor(s / 86400)} дн тому`;
 };
 
+function PushToggle({ cabKey }) {
+  const [state, setState] = useState(null); // unsupported|denied|on|off|null
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { pushState().then(setState); }, []);
+  if (state === null || state === "unsupported") return null;
+
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      if (state === "on") { await disablePush(); setState("off"); pushToast({ title: "Ранкові сповіщення вимкнено" }); }
+      else { await enablePush(cabKey); setState("on"); pushToast({ title: "Ранкові сповіщення увімкнено", body: "Підсумок приходитиме зранку" }); }
+    } catch (e) {
+      pushToast({ title: "Не вдалося", body: String(e.message || e) });
+      pushState().then(setState);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <button className={`notif-push ${state === "on" ? "on" : ""}`} onClick={toggle} disabled={busy || state === "denied"}>
+      <Bell size={14} />
+      <span>
+        {state === "denied" ? "Сповіщення заблоковано в браузері"
+          : state === "on" ? "Ранкові сповіщення · увімкнено"
+          : "Увімкнути ранкові сповіщення"}
+      </span>
+      {state !== "denied" && <span className={`notif-push-sw ${state === "on" ? "on" : ""}`} />}
+    </button>
+  );
+}
+
 function NotificationCenter({ cabKey }) {
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
@@ -892,6 +924,7 @@ function NotificationCenter({ cabKey }) {
                   </button>
                 )}
               </div>
+              <PushToggle cabKey={cabKey} />
               <div className="notif-list">
                 {items.length === 0 && <div className="notif-empty">Поки що порожньо</div>}
                 {items.map((n) => {
@@ -7673,6 +7706,17 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .notif-panel{position:absolute;top:46px;right:0;width:min(340px,86vw);max-height:70vh;overflow:auto;z-index:61;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 24px 60px -18px rgba(0,0,0,.55);}
 .notif-panel-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--line);font-family:'Fraunces',serif;font-size:15px;color:var(--ink);font-weight:600;}
 .notif-clear{background:none;border:none;color:var(--gold);font-size:12px;cursor:pointer;font-family:inherit;}
+.notif-push{display:flex;align-items:center;gap:9px;width:100%;padding:11px 15px;border:0;border-bottom:1px solid var(--line);background:none;color:var(--ink-soft);font-family:inherit;font-size:12.5px;cursor:pointer;text-align:left;}
+.notif-push:hover:not(:disabled){background:var(--surface-alt);}
+.notif-push:disabled{cursor:default;opacity:.7;}
+.notif-push>span:first-of-type{flex:1;}
+.notif-push.on{color:var(--ink);}
+.notif-push svg{color:var(--muted);flex-shrink:0;}
+.notif-push.on svg{color:var(--gold);}
+.notif-push-sw{width:32px;height:18px;border-radius:999px;background:var(--surface-sink);position:relative;flex-shrink:0;transition:background .15s;}
+.notif-push-sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--input-bg);box-shadow:var(--sh-1);transition:transform .16s var(--ease);}
+.notif-push-sw.on{background:var(--gold);}
+.notif-push-sw.on::after{transform:translateX(14px);}
 .notif-list{display:flex;flex-direction:column;}
 .notif-empty{padding:26px 15px;text-align:center;color:var(--muted);font-size:13px;}
 .notif-item{display:flex;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line);align-items:flex-start;width:100%;text-align:left;background:none;border-left:none;border-right:none;border-top:none;font-family:inherit;cursor:default;}

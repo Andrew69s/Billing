@@ -33,6 +33,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+        importScripts: ["/push-sw.js"],
         navigateFallback: "/index.html",
         // не кешувати запити до Supabase — завжди свіжі дані
         navigateFallbackDenylist: [/^\/api/, /supabase\.co/],
