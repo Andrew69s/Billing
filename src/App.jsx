@@ -5493,10 +5493,10 @@ function TurnoverRings({ scopeSalons }) {
       <div className="rg-terr">
         {territories.map((x) => (
           <div className="rg-terr-card" key={x.area}>
-            <div className="rg-terr-h">{x.label}{x.donePct != null && <span className="rg-terr-done">{Math.round(x.donePct)}% {mode === "month" ? "плану" : "норми"}</span>}</div>
+            <div className="rg-terr-h">{x.label}{x.donePct != null && <span className={`rg-terr-done ${turnoverBand(x.donePct)}`}>{Math.round(x.donePct)}% {mode === "month" ? "плану" : "норми"}</span>}</div>
             {x.donePct != null && (
               <div className="rg-terr-bar">
-                <div className={`rg-terr-fill ${x.gap < 0 ? "behind" : "ahead"}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
+                <div className={`rg-terr-fill ${turnoverBand(x.donePct)}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
                 <span className="rg-terr-mark" style={{ left: `${Math.min(100, x.markPct)}%` }} title={mode === "month" ? `норма на сьогодні: ${Math.round(x.normToDatePct)}% плану` : "норма за обраний період"} />
               </div>
             )}
@@ -8356,12 +8356,12 @@ td.sh.sh-plan{font-weight:400;}
 .rg-terr{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:24px;}
 .rg-terr-card{border:1px solid var(--line-dark);border-radius:var(--radius-md);padding:14px 16px;background:rgba(var(--sf),.03);}
 .rg-terr-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-family:'Fraunces',serif;font-size:1rem;font-weight:600;color:var(--on-dark);}
-.rg-terr-done{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--gold-bright);}
-.rg-terr-bar{position:relative;height:8px;border-radius:999px;background:rgba(var(--sf),.10);margin:11px 0 12px;overflow:visible;}
-.rg-terr-fill{position:absolute;left:0;top:0;bottom:0;border-radius:999px;transition:width .8s cubic-bezier(.2,.8,.2,1);}
-.rg-terr-fill.behind{background:var(--negative-bright);}
-.rg-terr-fill.ahead{background:var(--positive-bright);}
-.rg-terr-mark{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--on-dark);border-radius:2px;opacity:.7;}
+.rg-terr-done{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:var(--gold-bright);}
+.rg-terr-done.lo{color:var(--negative-bright);} .rg-terr-done.mid{color:var(--gold-bright);} .rg-terr-done.ok{color:var(--positive-bright);} .rg-terr-done.over{color:var(--gold-bright);}
+.rg-terr-bar{position:relative;height:12px;border-radius:4px;background:rgba(var(--sf),.10);margin:11px 0 13px;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(var(--sf),.06);}
+.rg-terr-fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;transition:width .8s cubic-bezier(.2,.8,.2,1);}
+.rg-terr-fill.lo{background:var(--negative-bright);} .rg-terr-fill.mid{background:var(--gold-bright);} .rg-terr-fill.ok{background:var(--positive-bright);} .rg-terr-fill.over{background:var(--gold-bright);}
+.rg-terr-mark{position:absolute;top:0;bottom:0;width:2px;background:var(--on-dark);opacity:.55;}
 .rg-terr-rows{display:flex;flex-direction:column;gap:7px;}
 .rg-terr-rows>div{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:12px;color:var(--on-dark-3);}
 .rg-terr-rows b{font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;color:var(--on-dark);text-align:right;font-variant-numeric:tabular-nums;}
