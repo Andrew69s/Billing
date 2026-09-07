@@ -25,6 +25,7 @@ import {
   cabType, PARTICIPANTS, canAssign,
 } from "./org.js";
 import { emptySmData, SM_FIELD_LABELS } from "./smCalc.js";
+import { onUpdateReady, applyUpdate } from "./lib/pwaUpdate.js";
 import {
   calcTm, calcTmBatch, calcSm, calcSmBatch, useTmCalc, useSmCalc,
   subscribeCalcBusy, calcBusyNow,
@@ -7934,6 +7935,9 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .notif-body p{margin:2px 0 0;font-size:12.5px;color:var(--ink-soft);}
 .notif-body time{font-size:11px;color:var(--muted);}
 .toast-stack{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:10px;align-items:center;pointer-events:none;width:max-content;max-width:92vw;}
+.update-banner{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom));z-index:10000;display:flex;align-items:center;gap:12px;padding:10px 12px 10px 16px;border-radius:999px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);box-shadow:0 16px 40px -12px rgba(0,0,0,.5);font-size:13px;font-weight:600;}
+.update-banner button{display:inline-flex;align-items:center;gap:5px;border:none;background:rgba(20,16,8,.16);color:inherit;font:inherit;padding:6px 12px;border-radius:999px;cursor:pointer;}
+.update-banner button:hover{background:rgba(20,16,8,.28);}
 .toast{display:flex;align-items:center;gap:11px;background:#1b2530;color:#f4f1ea;border:1px solid rgba(220,169,74,.45);border-left:3px solid var(--gold-bright);border-radius:12px;padding:13px 20px;font-size:13.5px;line-height:1.35;box-shadow:0 20px 44px -12px rgba(0,0,0,.55);animation:toastIn .34s cubic-bezier(.2,.9,.3,1) both;}
 .toast b{font-weight:700;display:block;}
 .toast span{color:#c9c2b2;font-size:12.5px;}
@@ -8964,6 +8968,18 @@ function TerritoryWidget() {
   );
 }
 
+function UpdateBanner() {
+  const [show, setShow] = useState(false);
+  useEffect(() => onUpdateReady(() => setShow(true)), []);
+  if (!show) return null;
+  return (
+    <div className="update-banner">
+      <span>Доступна нова версія</span>
+      <button onClick={() => applyUpdate()}><RefreshCw size={13} /> Оновити</button>
+    </div>
+  );
+}
+
 export default function App() {
   const isWidget = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("w") === "1";
   if (isWidget) {
@@ -9036,6 +9052,7 @@ function AppMain() {
     <div className="app-root">
       <style>{CSS}</style>
       <LivingBackground />
+      <UpdateBanner />
       {!ready && <div className="loading" style={{ paddingTop: 120 }}>Завантаження…</div>}
       {ready && !session && !pending && (
         <HierarchyHome onPick={pick} remembered={remembered} onLogout={logout} />

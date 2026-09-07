@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: "autoUpdate",
+      registerType: "prompt",
       includeAssets: ["favicon-32.png", "favicon-64.png", "apple-touch-icon.png"],
       manifest: {
         name: "Dnipro-M · Мотивація ТМ",
@@ -34,6 +34,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
         importScripts: ["/push-sw.js"],
+        cleanupOutdatedCaches: true,
         navigateFallback: "/index.html",
         // не кешувати запити до Supabase — завжди свіжі дані
         navigateFallbackDenylist: [/^\/api/, /supabase\.co/],
