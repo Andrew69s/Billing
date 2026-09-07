@@ -5479,15 +5479,17 @@ function TurnoverRings({ scopeSalons }) {
       )}
 
       <div className="rg-hero">
-        <Ring pct={totPct} size={88} sw={9}>
-          <b>{uahK(totV)}</b>
-          <i className={`rg-pct ${turnoverBand(totPct)}`}>{Math.round(totPct)}%</i>
-        </Ring>
-        <div className="rg-hero-meta">
-          <div className="rg-hero-val">{fmt(totV)}</div>
-          <div className="rg-hero-lab">оборот мережі · {heroLab}</div>
-          <div className="rg-hero-norm">Норма: <b>{fmt(totN)}</b></div>
+        <div className="rg-hero-top">
+          <div className="rg-hero-meta">
+            <div className="rg-hero-val">{fmt(totV)}</div>
+            <div className="rg-hero-lab">оборот мережі · {heroLab}</div>
+          </div>
+          <div className={`rg-hero-pct ${turnoverBand(totPct)}`}>{Math.round(totPct)}%</div>
         </div>
+        <div className="rg-terr-bar rg-hero-bar">
+          <div className={`rg-terr-fill ${turnoverBand(totPct)}`} style={{ width: `${Math.min(100, Math.max(0, totPct))}%` }} />
+        </div>
+        <div className="rg-hero-norm">Норма: <b>{fmt(totN)}</b></div>
       </div>
 
       <div className="rg-terr">
@@ -8340,11 +8342,15 @@ td.sh.sh-plan{font-weight:400;}
 .rg-prog{transition:stroke-dashoffset .9s cubic-bezier(.2,.8,.2,1);}
 .rg-prog.lo{stroke:var(--negative-bright);} .rg-prog.mid{stroke:var(--gold-bright);} .rg-prog.ok{stroke:var(--positive-bright);} .rg-prog.over{stroke:var(--gold-bright);}
 .rg-pct.lo{color:var(--negative-bright);} .rg-pct.mid{color:var(--gold-bright);} .rg-pct.ok{color:var(--positive-bright);} .rg-pct.over{color:var(--gold-bright);}
-.rg-hero{display:flex;align-items:center;gap:20px;margin-bottom:24px;padding-bottom:22px;border-bottom:1px solid var(--line-dark);}
+.rg-hero{display:flex;flex-direction:column;gap:10px;margin-bottom:24px;padding:15px 17px;border:1px solid var(--line-dark);border-radius:var(--radius-md);background:rgba(var(--sf),.03);}
+.rg-hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;}
 .rg-hero-meta{min-width:0;}
 .rg-hero-val{font-family:'Fraunces',serif;font-size:1.7rem;font-weight:600;color:var(--on-dark);font-variant-numeric:tabular-nums;line-height:1;}
 .rg-hero-lab{font-size:.83rem;color:var(--on-dark-3);margin-top:6px;}
-.rg-hero-norm{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--on-dark-2);margin-top:10px;}
+.rg-hero-pct{font-family:'IBM Plex Mono',monospace;font-size:1.15rem;font-weight:700;line-height:1;}
+.rg-hero-pct.lo{color:var(--negative-bright);} .rg-hero-pct.mid{color:var(--gold-bright);} .rg-hero-pct.ok{color:var(--positive-bright);} .rg-hero-pct.over{color:var(--gold-bright);}
+.rg-hero-bar{height:14px;margin:2px 0 0;}
+.rg-hero-norm{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--on-dark-2);}
 .rg-hero-norm b{color:var(--on-dark);}
 .rg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:20px 12px;}
 .rg-cell{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;background:none;border:0;cursor:pointer;padding:6px 2px;font-family:inherit;transition:transform .13s;}
@@ -8398,9 +8404,8 @@ td.sh.sh-plan{font-weight:400;}
 @media(max-width:560px){
   .rg-grid{grid-template-columns:repeat(3,1fr);gap:16px 8px;}
   .rg-cell .rg-ring{max-width:88px;}
-  .rg-hero{gap:16px;}
-  .rg-hero .rg-ring{max-width:80px;}
   .rg-hero-val{font-size:1.3rem;}
+  .rg-hero-pct{font-size:1rem;}
   .rg-nm{font-size:11.5px;}
 }
 @media(max-width:380px){
