@@ -4950,7 +4950,8 @@ function TerritoryAllSalons({ salons, rows, activeKey, onPick, plans, withEz, da
             const plan = planTurnover(planOf(plans, s.key), withEz);
             const pct = plan ? Math.round((done / plan) * 100) : null;
             const normToDate = plan * pace;
-            const devPct = normToDate > 0 ? ((done - normToDate) / normToDate) * 100 : null;
+            // відхилення у процентних пунктах від плану: (факт% плану) − (норма% плану на сьогодні)
+            const devPct = plan > 0 ? ((done - normToDate) / plan) * 100 : null;
             const devRound = devPct == null ? null : Math.round(devPct);
             return (
               <tr key={s.key} className={s.key === activeKey ? "active" : ""} onClick={() => onPick(s.key)}>
