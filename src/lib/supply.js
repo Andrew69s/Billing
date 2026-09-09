@@ -103,29 +103,12 @@ export async function writeoffLines({ from, to, salonKey } = {}) {
   return (lines || []).map((l) => ({ ...l, act: byAct[l.act_id] }));
 }
 
-/* Витрати магазину на госп.потреби — автоматично з руху складу:
-   усе, що НАДІЙШЛО на склад магазину (отримання зі складу + прямий прихід
-   магазину) за собівартістю + окремо списання (псування/нестача).
-   Отримання = основна стаття витрат: магазин «витратив» бюджет на цей товар.
-   Списання «використано» не рахуємо повторно — тільки не-споживчі причини. */
-const WRITEOFF_CONSUME = /викорис|спожи|витрач/i; // причини, що вже враховані в отриманні
+/* Витрати магазину на госп.потреби = ФАКТИЧНИЙ РОЗХІД (акти списання),
+   а не надходження: прийшло на 4 тис., списали на 2 → витрата 2 тис.
+   Собівартість — на момент списання. Причина будь-яка (використано,
+   псування, куплено за готівку тощо). */
 export async function salonSupplyExpenseLines({ from, to, salonKey } = {}) {
-  let aq = supabase.from("supply_acts")
-    .select("id,warehouse,kind,created_at,counterparty,reason")
-    .in("kind", ["receive", "receipt", "writeoff"])
-    .neq("warehouse", CENTRAL);
-  if (from) aq = aq.gte("created_at", from);
-  if (to) aq = aq.lte("created_at", to);
-  if (salonKey) aq = aq.eq("warehouse", salonKey);
-  const { data: acts, error } = await aq;
-  if (error) throw error;
-  const useActs = (acts || []).filter((a) => a.kind !== "writeoff" || !WRITEOFF_CONSUME.test(a.reason || ""));
-  if (!useActs.length) return [];
-  const ids = useActs.map((a) => a.id);
-  const { data: lines, error: e2 } = await supabase.from("supply_act_lines").select("*").in("act_id", ids);
-  if (e2) throw e2;
-  const byAct = Object.fromEntries(useActs.map((a) => [a.id, a]));
-  return (lines || []).map((l) => ({ ...l, act: byAct[l.act_id] }));
+  return writeoffLines({ from, to, salonKey });
 }
 
 /* ---------- рух товару (RPC) ---------- */
