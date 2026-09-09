@@ -22,6 +22,7 @@ import {
   listReassignments, addReassignment, removeReassignment,
   listFopHistory, addFopAssignment, removeFopAssignment, fopEntryOn, fopOn, currentFop, fopHistoryAll,
   CAPABILITIES, getCapabilities, setCapabilities, listLog, ALL_CAB_KEYS,
+  getModuleAccess, setModuleAccess, moduleAccessAllows, getModuleCatalog, saveModuleCatalog, subscribeModuleAccess,
   cabType, PARTICIPANTS, canAssign,
 } from "./org.js";
 import { emptySmData, SM_FIELD_LABELS } from "./smCalc.js";
@@ -3222,6 +3223,7 @@ function AdminLog() {
   const label = {
     login_master: "вхід за майстер-кодом", recovery_request: "запит відновлення", recovery_done: "змінено пароль",
     reassign: "перепризначено магазин", caps: "змінено права", fop_assign: "призначено ФОП",
+    modaccess: "доступ до вкладки",
   };
   return (
     <div className="admin-panel">
@@ -3295,6 +3297,91 @@ function AdminMaintenance() {
           Оновити текст
         </button>
       )}
+    </div>
+  );
+}
+
+function AdminModuleAccess() {
+  const [rows, setRows] = useState(null); // [{ cabKey, name, catalog:[{key,label,group}], access:{k:false} }]
+  const [openCab, setOpenCab] = useState(null);
+  const [savingKey, setSavingKey] = useState("");
+
+  const load = async () => {
+    const out = await Promise.all(ALL_CAB_KEYS.map(async (k) => {
+      const [catalog, access] = await Promise.all([getModuleCatalog(k), getModuleAccess(k)]);
+      return { cabKey: k, name: cabName(k), catalog, access };
+    }));
+    setRows(out);
+  };
+  useEffect(() => { load(); }, []);
+
+  const toggle = async (cabKey, modKey, enabled) => {
+    setSavingKey(cabKey + modKey);
+    setRows((rs) => rs.map((r) => {
+      if (r.cabKey !== cabKey) return r;
+      const access = { ...r.access };
+      if (enabled) delete access[modKey]; else access[modKey] = false;
+      return { ...r, access };
+    }));
+    try { await setModuleAccess(cabKey, modKey, enabled); }
+    catch (e) { pushToast({ title: "Не збережено", body: String(e.message || e) }); load(); }
+    setSavingKey("");
+  };
+
+  if (rows === null) return <div className="loading">Завантаження…</div>;
+
+  return (
+    <div className="admin-panel">
+      <h3>Доступ до вкладок</h3>
+      <p className="hint">
+        Вмикайте / вимикайте будь-яку вкладку будь-якому кабінету. Список вкладок кожного кабінету
+        оновлюється сам — коли додається нова вкладка, вона зʼявляється тут після першого входу в той кабінет
+        (за замовчуванням — увімкнена). Перша вкладка кабінету («Головна» / «Огляд») вимкнути не можна.
+      </p>
+      <div className="admin-list">
+        {rows.map((r) => {
+          const off = Object.keys(r.access).filter((k) => r.access[k] === false).length;
+          const isOpen = openCab === r.cabKey;
+          return (
+            <div className="modacc-cab" key={r.cabKey}>
+              <button className="modacc-head" onClick={() => setOpenCab(isOpen ? null : r.cabKey)}>
+                <ChevronRight size={14} className={`modacc-chev ${isOpen ? "open" : ""}`} />
+                <span className="modacc-name">{r.name}</span>
+                <span className="modacc-count">
+                  {r.catalog.length === 0 ? "не відкривали" : off > 0 ? `${off} вимкнено` : "усі увімкнені"}
+                </span>
+              </button>
+              {isOpen && (
+                <div className="modacc-body">
+                  {r.catalog.length === 0 ? (
+                    <p className="muted" style={{ fontSize: 12, padding: "4px 2px" }}>
+                      Кабінет ще не відкривали після оновлення. Вкладки зʼявляться тут після першого входу користувача.
+                    </p>
+                  ) : r.catalog.map((m, i) => {
+                    const enabled = r.access[m.key] !== false;
+                    const locked = i === 0;
+                    const prevGroup = i > 0 ? (r.catalog[i - 1].group || "") : null;
+                    const showGroup = m.group && m.group !== prevGroup;
+                    return (
+                      <React.Fragment key={m.key}>
+                        {showGroup && <div className="modacc-group">{m.group}</div>}
+                        <label className={`modacc-row ${locked ? "locked" : ""}`}>
+                          <input
+                            type="checkbox" checked={enabled} disabled={locked || savingKey === r.cabKey + m.key}
+                            onChange={(e) => toggle(r.cabKey, m.key, e.target.checked)}
+                          />
+                          <span>{m.label}</span>
+                          {locked && <span className="modacc-lock">завжди</span>}
+                        </label>
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -3401,6 +3488,7 @@ function AdminPanel() {
     ["access", "Доступи"],
     ["reassign", "Магазини й ТМ"],
     ["fop", "ФОП по СМ"],
+    ["modaccess", "Доступ до вкладок"],
     ["rights", "Права"],
     ["feedback", "Звернення"],
     ["maint", "Технічна перерва"],
@@ -3417,6 +3505,7 @@ function AdminPanel() {
       {tab === "access" && <AdminAccess />}
       {tab === "reassign" && <AdminReassign />}
       {tab === "fop" && <AdminFop />}
+      {tab === "modaccess" && <AdminModuleAccess />}
       {tab === "rights" && <AdminRights />}
       {tab === "feedback" && <AdminFeedback />}
       {tab === "maint" && <AdminMaintenance />}
@@ -6972,7 +7061,25 @@ const NAV_DEFAULT_GROUP = "Інше";
 const ORG_GROUP = "Орг-структура";
 
 function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
-  const items = modules.filter(Boolean);
+  const allModules = modules.filter(Boolean);
+  const catSig = allModules.map((m) => `${m.key}~${m.label}~${m.group || ""}`).join("|");
+
+  // адмін-керований доступ до вкладок + самореєстрація каталогу модулів
+  const [modAccess, setModAccess] = useState(null);
+  useEffect(() => {
+    let a = true;
+    const reload = () => getModuleAccess(cabKey)
+      .then((x) => { if (a) setModAccess(x); })
+      .catch(() => { if (a) setModAccess({}); });
+    reload();
+    saveModuleCatalog(cabKey, allModules.map((m) => ({ key: m.key, label: m.label, group: m.group || null })));
+    const unsub = subscribeModuleAccess(cabKey, reload);
+    return () => { a = false; unsub(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cabKey, catSig]);
+
+  // перший модуль лишається завжди (не можна замкнути кабінет у ніщо)
+  const items = allModules.filter((m, i) => i === 0 || moduleAccessAllows(modAccess, m.key));
   const byKey = React.useMemo(() => Object.fromEntries(items.map((m) => [m.key, m])), [items]);
   const nav = useNavPrefs(cabKey, items.map((m) => m.key));
   const [editNav, setEditNav] = useState(false);
@@ -7999,6 +8106,20 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .dir-hist-salon{font-weight:600;color:var(--ink);}
 .dir-hist-fop{color:var(--ink-soft);}
 .dir-hist-from{font-family:'IBM Plex Mono',monospace;color:var(--muted);white-space:nowrap;}
+.modacc-cab{border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;background:var(--surface);}
+.modacc-head{width:100%;display:flex;align-items:center;gap:9px;padding:11px 13px;background:none;border:none;cursor:pointer;font-family:inherit;text-align:left;color:var(--ink);}
+.modacc-head:hover{background:var(--surface-alt);}
+.modacc-chev{flex-shrink:0;transition:transform .15s var(--ease);color:var(--muted);}
+.modacc-chev.open{transform:rotate(90deg);}
+.modacc-name{flex:1;font-weight:600;font-size:13px;}
+.modacc-count{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);}
+.modacc-body{padding:6px 13px 12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:2px;}
+.modacc-group{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:9px 0 3px;}
+.modacc-row{display:flex;align-items:center;gap:9px;padding:6px 4px;font-size:13px;color:var(--ink);cursor:pointer;border-radius:6px;}
+.modacc-row:hover{background:var(--surface-alt);}
+.modacc-row.locked{cursor:default;color:var(--muted);}
+.modacc-row input{width:16px;height:16px;flex-shrink:0;accent-color:var(--gold);}
+.modacc-lock{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--faint);}
 .admin-rights{display:flex;flex-direction:column;gap:14px;margin-top:14px;}
 .admin-rights-person{background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);padding:14px 16px;}
 .admin-rights-name{font-weight:700;font-size:13.5px;color:var(--ink);margin-bottom:9px;}

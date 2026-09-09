@@ -288,6 +288,46 @@ export async function setCapabilities(cabKey, caps) {
 }
 
 /* =========================================================
+   ДОСТУП ДО ВКЛАДОК (модулів кабінету) — адмін вмикає/вимикає
+   будь-яку вкладку будь-якому кабінету.
+   modaccess:<cabKey>  = { [moduleKey]: false }  — лише ВИМКНЕНІ; нема ключа = увімкнено.
+   modcatalog:<cabKey> = [{ key, label, group }] — самореєстрація: CabinetShell пише
+     цей список при відкритті кабінету, адмін-панель читає, щоб знати, які вкладки
+     бувають у цьому кабінеті (нові додаються автоматично).
+========================================================= */
+export async function getModuleAccess(cabKey) {
+  try { const v = JSON.parse((await window.storage.get(`modaccess:${cabKey}`)).value); return v && typeof v === "object" ? v : {}; }
+  catch { return {}; }
+}
+export async function setModuleAccess(cabKey, moduleKey, enabled) {
+  const cur = await getModuleAccess(cabKey);
+  if (enabled) delete cur[moduleKey]; else cur[moduleKey] = false;
+  await window.storage.set(`modaccess:${cabKey}`, JSON.stringify(cur));
+  await logAction("modaccess", { cabKey, moduleKey, enabled });
+}
+export const moduleAccessAllows = (access, moduleKey) => (access || {})[moduleKey] !== false;
+
+export async function getModuleCatalog(cabKey) {
+  try { const v = JSON.parse((await window.storage.get(`modcatalog:${cabKey}`)).value); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+export async function saveModuleCatalog(cabKey, list) {
+  try {
+    const prev = await getModuleCatalog(cabKey).catch(() => []);
+    if (JSON.stringify(prev) === JSON.stringify(list)) return; // без зайвих записів
+    await window.storage.set(`modcatalog:${cabKey}`, JSON.stringify(list));
+  } catch { /* тихо — не критично */ }
+}
+/* realtime — коли адмін змінює доступ до вкладок, кабінет оновлюється без перезаходу */
+export function subscribeModuleAccess(cabKey, cb) {
+  const ch = supabase
+    .channel(`modaccess:${cabKey}:${Math.random().toString(36).slice(2)}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "kv", filter: `key=eq.modaccess:${cabKey}` }, cb)
+    .subscribe();
+  return () => { supabase.removeChannel(ch); };
+}
+
+/* =========================================================
    ЖУРНАЛ ДІЙ
 ========================================================= */
 const LOG_KEY = "auditlog";
