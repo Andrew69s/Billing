@@ -12,7 +12,7 @@ import {
   Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
   Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
   Wrench, MessageSquare, Send, Banknote, Menu,
-  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun,
+  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -73,6 +73,7 @@ import {
   listItems, upsertItem, deleteItem, setPrice, listStock, stockMap, stockState,
   listActs, actLines, writeoffLines, salonSupplyExpenseLines, actSalon, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
   shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
+  markOrderedFromSupplier, extractNakladna,
   subscribeSupply,
 } from "./lib/supply.js";
 
@@ -6140,7 +6141,7 @@ function ManagerCashTab() {
 /* ==================== СКЛАД ГОСПОДАРСЬКИХ ПОТРЕБ ==================== */
 const whName = (w) => (w === CENTRAL ? "Основний склад" : salonByKey(w) ? salonLabel(salonByKey(w)) : w);
 const catRank = (c) => { const i = SUPPLY_CATEGORIES.indexOf(c); return i < 0 ? 99 : i; };
-const ORDER_ST = { draft: "чернетка", submitted: "подано", shipped: "відправлено", received: "отримано" };
+const ORDER_ST = { draft: "чернетка", submitted: "подано", ordered: "їде", shipped: "відправлено", received: "отримано" };
 
 function useSupply() {
   const [items, setItems] = useState(null);
@@ -6265,8 +6266,29 @@ function SupplyCentral({ items, stock, canManage, cabKey, onReload }) {
 }
 
 /* --- Прихід (модалка) --- */
+const _normName = (s) => String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+function matchCatalogItem(items, name) {
+  const n = _normName(name);
+  if (!n) return "";
+  const nt = new Set(n.split(" ").filter((w) => w.length > 2));
+  let best = "", score = 0;
+  for (const it of items) {
+    const c = _normName(it.name);
+    let s = 0;
+    if (c === n) s = 100;
+    else if (c.includes(n) || n.includes(c)) s = 60;
+    else s = c.split(" ").filter((w) => w.length > 2 && nt.has(w)).length * 22;
+    if (s > score) { score = s; best = it.id; }
+  }
+  return score >= 22 ? best : "";
+}
+
 function SupplyReceipt({ items, warehouse, cabKey, prefill, onClose, onDone }) {
   const [cp, setCp] = useState("");
+  const isCentral = warehouse === CENTRAL;
+  const fileRef = useRef(null);
+  const [ocr, setOcr] = useState("");       // "" | run | ok | fail
+  const [ocrNote, setOcrNote] = useState("");
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
   const [lines, setLines] = useState(() =>
     (prefill || [{ item_id: "", qty: "", unit_cost: "" }]).map((l) =>
@@ -6277,6 +6299,26 @@ function SupplyReceipt({ items, warehouse, cabKey, prefill, onClose, onDone }) {
   );
   const [busy, setBusy] = useState(false);
   const set = (idx, ln) => setLines((ls) => ls.map((x, i) => (i === idx ? ln : x)));
+  const onNakladna = async (file) => {
+    if (!file) return;
+    setOcr("run"); setOcrNote("");
+    try {
+      const url = await resizeImage(file);
+      const r = await extractNakladna(url, items.map((i) => i.name));
+      const rows = (r?.items || []).map((it) => ({
+        item_id: matchCatalogItem(items, it.name),
+        qty: it.qty ? String(it.qty) : "",
+        unit_cost: it.unit_price ? String(it.unit_price) : "",
+      }));
+      if (!rows.length) { setOcr("fail"); setOcrNote("Позицій не зчитано — введіть вручну"); return; }
+      setLines(rows);
+      const miss = rows.filter((x) => !x.item_id).length;
+      setOcr("ok");
+      setOcrNote(miss
+        ? `Розпізнано ${rows.length}, ${miss} не знайдено в довіднику — оберіть у рядку вручну`
+        : `Розпізнано ${rows.length} позицій — перевірте кількість і ціну`);
+    } catch (e) { setOcr("fail"); setOcrNote(String(e.message || e)); }
+  };
   const total = lines.reduce((s, l) => {
     const c = l.unit_cost !== "" ? Number(l.unit_cost) : (byId[l.item_id]?.unit_cost || 0);
     return s + (Number(l.qty) || 0) * c;
@@ -6307,6 +6349,16 @@ function SupplyReceipt({ items, warehouse, cabKey, prefill, onClose, onDone }) {
           <label className="over-field" style={{ maxWidth: "100%" }}><span>Постачальник / № накладної</span>
             <input value={cp} onChange={(e) => setCp(e.target.value)} placeholder="напр. ФОП Іваненко, накл. №142" />
           </label>
+          {isCentral && (
+            <div className="wh-ocr">
+              <button type="button" className="btn-secondary small" disabled={ocr === "run"} onClick={() => fileRef.current?.click()}>
+                <ScanLine size={14} /> {ocr === "run" ? "Розпізнаю накладну…" : "Сфотографувати накладну"}
+              </button>
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
+                onChange={(e) => { onNakladna(e.target.files?.[0]); e.target.value = ""; }} />
+              {ocrNote && <span className={`wh-ocr-note ${ocr}`}>{ocrNote}</span>}
+            </div>
+          )}
           <div className="wh-lines">
             {lines.map((l, i) => (
               <SupplyLineRow key={i} items={items} line={l} exclude={new Set(lines.map((x) => x.item_id).filter((_, j) => j !== i))}
@@ -6532,13 +6584,15 @@ function SupplyOrderBuilder({ salonKey, items, stock, order, prefill, onDone }) 
 }
 
 /* --- Замовлення (списки) --- */
-const ORDER_ST_TONE = { draft: "st-draft", submitted: "st-sub", shipped: "st-ship", received: "st-recv" };
+const ORDER_ST_TONE = { draft: "st-draft", submitted: "st-sub", ordered: "st-ordered", shipped: "st-ship", received: "st-recv" };
 const lineMismatch = (l) => l.qty_shipped != null && Number(l.qty_shipped) !== Number(l.qty_req);
 
 function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, onEditDraft }) {
   const [orders, setOrders] = useState(null);
   const [open, setOpen] = useState(null); // { order, lines }
   const [ship, setShip] = useState(null); // order being shipped
+  const [rcpt, setRcpt] = useState(null); // { orderId, prefill } — прихід під замовлення
+  const [busyId, setBusyId] = useState("");
   const byId = Object.fromEntries((items || []).map((i) => [i.id, i]));
   const load = async () => {
     let list = [];
@@ -6558,6 +6612,22 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
   if (!orders.length) return <div className="admin-empty">Замовлень немає.</div>;
 
   const openOrder = async (o) => setOpen({ order: o, lines: o._lines || await orderLines(o.id) });
+  const markOrdered = async (o) => {
+    if (!confirm(`Замовлення для «${salonByKey(o.salon_key)?.city}»: позначити, що замовлено в постачальників?`)) return;
+    setBusyId(o.id);
+    try {
+      await markOrderedFromSupplier(o.id);
+      pushToast({ title: "Позначено «Їде»", body: salonByKey(o.salon_key)?.city });
+      notify({ recipient: o.salon_key, kind: "supply", title: "Ваше замовлення в дорозі 🚚", body: "Оля замовила товар у постачальників", actor: cabKey || "", link: "warehouse" });
+      notifyWhManagers(cabKey, { kind: "supply", title: `Замовлення в дорозі: ${salonByKey(o.salon_key)?.city}`, body: "Оля замовила в постачальників", actor: cabKey || "", link: "warehouse" });
+      load(); onReload && onReload();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusyId("");
+  };
+  const receiptForOrder = async (o) => {
+    const ls = o._lines || await orderLines(o.id).catch(() => []);
+    setRcpt({ orderId: o.id, prefill: ls.map((l) => ({ item_id: l.item_id, qty: String(l.qty_req || ""), unit_cost: "" })) });
+  };
   const receive = async (o) => {
     const ls = o._lines || await orderLines(o.id);
     const recv = ls.map((l) => ({ item_id: l.item_id, qty: Number(l.qty_shipped ?? l.qty_req) || 0 }));
@@ -6585,14 +6655,28 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
                 {o._mismatch && <span className="wh-ord-warn"><AlertTriangle size={12} /> розбіжність</span>}
               </span>
               <span className="wh-ord-at">{fmtDate(o.created_at)}</span>
-              <span className={`wh-ord-st ${ORDER_ST_TONE[o.status] || ""}`}>{ORDER_ST[o.status]}</span>
+              <span className={`wh-ord-st ${ORDER_ST_TONE[o.status] || ""}`}>
+                {o.status === "ordered" && <Truck size={12} style={{ marginRight: 4, verticalAlign: "-2px" }} />}
+                {ORDER_ST[o.status]}
+              </span>
             </div>
             <div className="wh-ord-act">
               <button className="wh-link" onClick={() => openOrder(o)}>позиції</button>
               {scope === "mine" && o.status === "draft" && <button className="wh-link" onClick={() => onEditDraft(o)}>редагувати</button>}
               {scope === "mine" && o.status === "draft" && <button className="wh-link" onClick={() => { if (confirm("Видалити чернетку?")) deleteOrder(o.id).then(load); }}>видалити</button>}
               {scope === "mine" && o.status === "shipped" && <button className="btn-primary small" onClick={() => receive(o)}>Прийняти</button>}
-              {scope === "incoming" && o.status === "submitted" && <button className="btn-primary small" onClick={() => setShip(o)}>Відправити</button>}
+              {scope === "incoming" && o.status === "submitted" && (
+                <button className="btn-glow small" disabled={busyId === o.id} onClick={() => markOrdered(o)}>
+                  <Truck size={13} /> Замовлено в постачальників
+                </button>
+              )}
+              {scope === "incoming" && o.status === "ordered" && (
+                <>
+                  <button className="btn-secondary small" onClick={() => receiptForOrder(o)}>Створити прихід</button>
+                  <button className="btn-primary small" onClick={() => setShip(o)}>Відправити салону</button>
+                </>
+              )}
+              {scope === "incoming" && o.status === "submitted" && <button className="wh-link" onClick={() => setShip(o)}>відправити одразу</button>}
             </div>
           </div>
         ))}
@@ -6617,6 +6701,10 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
         document.body
       )}
       {ship && <SupplyShip order={ship} items={items} stock={stock} cabKey={cabKey} onClose={() => setShip(null)} onDone={() => { setShip(null); load(); onReload && onReload(); }} />}
+      {rcpt && (
+        <SupplyReceipt items={items} warehouse={CENTRAL} cabKey={cabKey} prefill={rcpt.prefill}
+          onClose={() => setRcpt(null)} onDone={() => { setRcpt(null); load(); onReload && onReload(); }} />
+      )}
     </div>
   );
 }
@@ -9135,6 +9223,7 @@ td.sh.sh-plan{font-weight:400;}
 .wh-ord-list{display:flex;flex-direction:column;gap:8px;}
 .wh-ord{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:11px 14px;}
 .wh-ord.submitted{border-left:3px solid var(--gold);}
+.wh-ord.ordered{border-left:3px solid #3c8dc9;}
 .wh-ord.shipped{border-left:3px solid var(--positive);}
 .wh-ord-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
 .wh-ord-nm{font-weight:600;color:var(--ink);font-size:13px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
@@ -9143,8 +9232,17 @@ td.sh.sh-plan{font-weight:400;}
 .wh-ord-st{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;padding:3px 10px;border-radius:999px;background:var(--surface-alt);color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
 .wh-ord-st.st-draft{background:var(--surface-alt);color:var(--faint);}
 .wh-ord-st.st-sub{background:rgba(190,138,46,.16);color:var(--gold);}
+.wh-ord-st.st-ordered{background:rgba(46,120,180,.16);color:#3c8dc9;}
 .wh-ord-st.st-ship{background:rgba(46,120,180,.16);color:#3c8dc9;}
 .wh-ord-st.st-recv{background:rgba(60,107,74,.16);color:var(--positive);}
+.btn-glow{display:inline-flex;align-items:center;gap:6px;border:none;border-radius:999px;padding:7px 14px;font:inherit;font-weight:700;font-size:12px;cursor:pointer;color:var(--gold-ink);background:linear-gradient(180deg,var(--gold-bright),var(--gold));box-shadow:0 0 0 0 rgba(220,169,74,.55);animation:glowpulse 1.8s ease-in-out infinite;}
+.btn-glow:disabled{opacity:.6;animation:none;cursor:default;}
+@keyframes glowpulse{0%,100%{box-shadow:0 0 0 0 rgba(220,169,74,.5);}50%{box-shadow:0 0 0 6px rgba(220,169,74,0);}}
+.wh-ocr{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:2px 0 10px;}
+.wh-ocr-note{font-size:11.5px;color:var(--muted);}
+.wh-ocr-note.ok{color:var(--positive-bright);}
+.wh-ocr-note.fail{color:var(--negative-bright);}
+.wh-ocr-note.run{color:var(--gold-bright);}
 .wh-ord-at{margin-left:auto;font-size:11px;color:var(--faint);font-family:'IBM Plex Mono',monospace;}
 .wh-ord-act{display:flex;gap:10px;align-items:center;margin-top:7px;}
 .wh-mismatch>td{background:rgba(179,58,58,.09);color:var(--negative);}

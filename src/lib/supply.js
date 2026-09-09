@@ -220,6 +220,23 @@ export async function submitOrder(orderId) {
     .update({ status: "submitted", submitted_at: new Date().toISOString() }).eq("id", orderId);
   if (error) throw error;
 }
+/* Оля позначає: замовила товар у постачальників → статус «Їде» */
+export async function markOrderedFromSupplier(orderId) {
+  const { error } = await supabase.from("supply_orders")
+    .update({ status: "ordered", ordered_at: new Date().toISOString() }).eq("id", orderId);
+  if (error) throw error;
+}
+/* Розпізнавання фото видаткової накладної (лише прийом на Основний склад).
+   names — довідник наших позицій для точнішого зіставлення. */
+export async function extractNakladna(dataUrl, names) {
+  const { data, error } = await supabase.functions.invoke("supply-nakladna", { body: { image: dataUrl, names } });
+  if (error) {
+    let m = error.message || "не вдалося розпізнати";
+    try { const j = await error.context?.json?.(); if (j?.error) m = j.error; } catch { /* ignore */ }
+    throw new Error(m);
+  }
+  return data; // { items: [{ name, qty, unit_price }] }
+}
 export async function deleteOrder(orderId) {
   const { error } = await supabase.from("supply_orders").delete().eq("id", orderId);
   if (error) throw error;
