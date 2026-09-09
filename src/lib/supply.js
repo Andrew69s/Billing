@@ -15,6 +15,38 @@ export const ACT_KIND = {
   adjust: "Коригування (інвентаризація)",
 };
 
+/* Статті списань. Вбудовані не видаляються; `expense: true` → сума
+   тягнеться у «Витрати по СМ». Кастомні статті адмін додає у kv. */
+export const WRITEOFF_ARTICLES_BUILTIN = [
+  { key: "store", label: "Витрати на магазин", expense: true, builtin: true },
+  { key: "defect", label: "Брак товару", expense: false, builtin: true },
+  { key: "office", label: "Витрати Офіс", expense: false, builtin: true },
+  { key: "viktor", label: "Потреба Віктора", expense: false, builtin: true },
+];
+const ARTICLES_KEY = "supply:articles";
+export async function listWriteoffArticles() {
+  let custom = [];
+  try {
+    const { data } = await supabase.from("kv").select("value").eq("key", ARTICLES_KEY).maybeSingle();
+    if (Array.isArray(data?.value)) custom = data.value;
+  } catch { /* ignore */ }
+  const builtinKeys = new Set(WRITEOFF_ARTICLES_BUILTIN.map((a) => a.key));
+  const extra = custom
+    .filter((a) => a && a.key && !builtinKeys.has(a.key))
+    .map((a) => ({ key: String(a.key), label: String(a.label || a.key), expense: !!a.expense, builtin: false }));
+  return [...WRITEOFF_ARTICLES_BUILTIN, ...extra];
+}
+export async function saveWriteoffArticles(customList) {
+  const builtinKeys = new Set(WRITEOFF_ARTICLES_BUILTIN.map((a) => a.key));
+  const clean = (customList || [])
+    .filter((a) => a && a.key && !builtinKeys.has(a.key))
+    .map((a) => ({ key: String(a.key), label: String(a.label || a.key), expense: !!a.expense }));
+  const { error } = await supabase.from("kv").upsert({ key: ARTICLES_KEY, value: clean }, { onConflict: "key" });
+  if (error) throw error;
+}
+export const articleLabel = (articles, key) =>
+  (articles || WRITEOFF_ARTICLES_BUILTIN).find((a) => a.key === key)?.label || key || "—";
+
 export const uahN = (n) => Math.round(Number(n) || 0).toLocaleString("uk-UA");
 export const uah = (n) => uahN(n) + " ₴";
 
@@ -87,28 +119,31 @@ export async function actLines(actId) {
   if (error) throw error;
   return data || [];
 }
-/* усі рядки актів списання за період */
-export async function writeoffLines({ from, to, salonKey } = {}) {
-  let aq = supabase.from("supply_acts").select("id,warehouse,kind,created_at,reason").eq("kind", "writeoff");
+/* усі рядки актів списання за період (+ стаття) */
+export async function writeoffLines({ from, to, salonKey, articles } = {}) {
+  let aq = supabase.from("supply_acts").select("id,warehouse,kind,article,created_at,reason").eq("kind", "writeoff");
   if (from) aq = aq.gte("created_at", from);
   if (to) aq = aq.lte("created_at", to);
   if (salonKey) aq = aq.eq("warehouse", salonKey);
+  if (Array.isArray(articles) && articles.length) aq = aq.in("article", articles);
   const { data: acts, error } = await aq;
   if (error) throw error;
   if (!acts?.length) return [];
   const ids = acts.map((a) => a.id);
   const { data: lines, error: e2 } = await supabase.from("supply_act_lines").select("*").in("act_id", ids);
   if (e2) throw e2;
-  const byAct = Object.fromEntries(acts.map((a) => [a.id, a]));
+  const byAct = Object.fromEntries(acts.map((a) => [a.id, ({ ...a, article: a.article || "store" })]));
   return (lines || []).map((l) => ({ ...l, act: byAct[l.act_id] }));
 }
 
-/* Витрати магазину на госп.потреби = ФАКТИЧНИЙ РОЗХІД (акти списання),
-   а не надходження: прийшло на 4 тис., списали на 2 → витрата 2 тис.
-   Собівартість — на момент списання. Причина будь-яка (використано,
-   псування, куплено за готівку тощо). */
+/* Витрати магазину на госп.потреби = ФАКТИЧНИЙ РОЗХІД (акти списання)
+   лише за статтями з expense:true (за замовч. — «Витрати на магазин»).
+   Прийшло 4 тис., списали 2 → витрата 2 тис. Собівартість — на момент списання. */
 export async function salonSupplyExpenseLines({ from, to, salonKey } = {}) {
-  return writeoffLines({ from, to, salonKey });
+  const arts = await listWriteoffArticles();
+  const expenseKeys = arts.filter((a) => a.expense).map((a) => a.key);
+  if (!expenseKeys.length) return [];
+  return writeoffLines({ from, to, salonKey, articles: expenseKeys });
 }
 
 /* ---------- рух товару (RPC) ---------- */
@@ -124,8 +159,8 @@ export async function doAct(payload) {
 }
 export const receipt = (warehouse, counterparty, lines) =>
   doAct({ kind: "receipt", warehouse, counterparty, lines });
-export const writeoff = (warehouse, reason, lines) =>
-  doAct({ kind: "writeoff", warehouse, reason, lines });
+export const writeoff = (warehouse, article, note, lines) =>
+  doAct({ kind: "writeoff", warehouse, article, reason: note, lines });
 export const adjust = (warehouse, reason, lines) =>
   doAct({ kind: "adjust", warehouse, reason, lines });
 export const shipOrder = (orderId, warehouseFromCentral, lines) =>

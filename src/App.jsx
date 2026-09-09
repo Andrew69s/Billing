@@ -69,8 +69,9 @@ import {
 } from "./lib/cash.js";
 import {
   SUPPLY_CATEGORIES, SUPPLY_UNITS, CENTRAL, ACT_KIND, uah as suah, uahN as suahN,
+  WRITEOFF_ARTICLES_BUILTIN, listWriteoffArticles, saveWriteoffArticles, articleLabel,
   listItems, upsertItem, deleteItem, setPrice, listStock, stockMap, stockState,
-  listActs, actLines, salonSupplyExpenseLines, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
+  listActs, actLines, writeoffLines, salonSupplyExpenseLines, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
   shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
   subscribeSupply,
 } from "./lib/supply.js";
@@ -3302,6 +3303,82 @@ function AdminMaintenance() {
   );
 }
 
+function AdminSupplyArticles() {
+  const [all, setAll] = useState(null);   // повний список (builtin + custom)
+  const [label, setLabel] = useState("");
+  const [asExpense, setAsExpense] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => listWriteoffArticles().then(setAll).catch(() => setAll(WRITEOFF_ARTICLES_BUILTIN));
+  useEffect(() => { load(); }, []);
+
+  const custom = (all || []).filter((a) => !a.builtin);
+  const persist = async (nextCustom) => {
+    setBusy(true);
+    try { await saveWriteoffArticles(nextCustom); await load(); }
+    catch (e) { pushToast({ title: "Не збережено", body: String(e.message || e) }); }
+    setBusy(false);
+  };
+  const add = async () => {
+    if (!label.trim()) return;
+    await persist([...custom, { key: `c${Date.now()}`, label: label.trim(), expense: asExpense }]);
+    setLabel(""); setAsExpense(false);
+    pushToast({ title: "Статтю додано", body: label.trim() });
+  };
+  const toggleExpense = (key) => persist(custom.map((a) => (a.key === key ? { ...a, expense: !a.expense } : a)));
+  const rename = (key, v) => persist(custom.map((a) => (a.key === key ? { ...a, label: v } : a)));
+  const remove = (key) => { if (confirm("Видалити статтю? Наявні акти з нею залишаться, але статтю не буде видно у виборі.")) persist(custom.filter((a) => a.key !== key)); };
+
+  if (all === null) return <div className="loading">Завантаження…</div>;
+
+  return (
+    <div className="admin-panel">
+      <h3>Статті списань</h3>
+      <p className="hint">
+        Статті, з яких обирає магазин при акті списання. «У витрати магазину» — сума статті потрапляє
+        у «Витрати по СМ». Усі статті (і власні) видно в розділі «Витрати по СМ → За статтями».
+      </p>
+
+      <div className="admin-reassign-form">
+        <label className="over-field" style={{ flex: "1 1 240px" }}><span>Нова стаття</span>
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="напр. Реклама / Ремонт" />
+        </label>
+        <label className="admin-cap" style={{ alignSelf: "center" }}>
+          <input type="checkbox" checked={asExpense} onChange={(e) => setAsExpense(e.target.checked)} />
+          <span>рахувати у витрати магазину</span>
+        </label>
+        <button className="btn-primary" disabled={busy || !label.trim()} onClick={add}>Додати</button>
+      </div>
+
+      <h4 className="admin-sub-h">Вбудовані</h4>
+      <div className="admin-list">
+        {all.filter((a) => a.builtin).map((a) => (
+          <div className="admin-access-row" key={a.key}>
+            <span className="modacc-name">{a.label}</span>
+            <span className="modacc-count">{a.expense ? "у витрати магазину" : "лише аналітика"}</span>
+          </div>
+        ))}
+      </div>
+
+      <h4 className="admin-sub-h">Власні статті</h4>
+      {custom.length === 0 ? <div className="admin-empty">Немає. Додайте вище.</div> : (
+        <div className="admin-list">
+          {custom.map((a) => (
+            <div className="admin-access-row" key={a.key}>
+              <input className="art-name" value={a.label} onChange={(e) => rename(a.key, e.target.value)} />
+              <label className="admin-cap">
+                <input type="checkbox" checked={!!a.expense} onChange={() => toggleExpense(a.key)} />
+                <span>у витрати магазину</span>
+              </label>
+              <button className="modacc-rm" onClick={() => remove(a.key)}>видалити</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminModuleAccess() {
   const [rows, setRows] = useState(null); // [{ cabKey, name, catalog, access, extra:[key] }]
   const [openCab, setOpenCab] = useState(null);
@@ -3535,6 +3612,7 @@ function AdminPanel() {
     ["reassign", "Магазини й ТМ"],
     ["fop", "ФОП по СМ"],
     ["modaccess", "Доступ до вкладок"],
+    ["articles", "Статті списань"],
     ["rights", "Права"],
     ["feedback", "Звернення"],
     ["maint", "Технічна перерва"],
@@ -3552,6 +3630,7 @@ function AdminPanel() {
       {tab === "reassign" && <AdminReassign />}
       {tab === "fop" && <AdminFop />}
       {tab === "modaccess" && <AdminModuleAccess />}
+      {tab === "articles" && <AdminSupplyArticles />}
       {tab === "rights" && <AdminRights />}
       {tab === "feedback" && <AdminFeedback />}
       {tab === "maint" && <AdminMaintenance />}
@@ -6587,6 +6666,8 @@ function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
 
 /* --- Акт списання (салон) --- */
 function SupplyWriteoff({ salonKey, items, stock, onReload }) {
+  const [articles, setArticles] = useState(WRITEOFF_ARTICLES_BUILTIN);
+  const [article, setArticle] = useState("store");
   const [reason, setReason] = useState("");
   const [lines, setLines] = useState([{ item_id: "", qty: "" }]);
   const [acts, setActs] = useState(null);
@@ -6596,16 +6677,17 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
   const cs = stockMap(stock, salonKey);
   const load = () => listActs({ warehouse: salonKey, kind: "writeoff" }).then(setActs).catch(() => setActs([]));
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [salonKey]);
+  useEffect(() => { listWriteoffArticles().then(setArticles).catch(() => {}); }, []);
 
   const set = (idx, ln) => setLines((ls) => ls.map((x, i) => (i === idx ? ln : x)));
   const total = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (byId[l.item_id]?.unit_cost || 0), 0);
   const submit = async () => {
     const good = lines.filter((l) => l.item_id && Number(l.qty) > 0).map((l) => ({ item_id: l.item_id, qty: Number(l.qty) }));
-    if (!good.length || !reason.trim()) return;
+    if (!good.length || !article) return;
     setBusy(true);
     try {
-      await whWriteoff(salonKey, reason.trim(), good);
-      pushToast({ title: "Акт списання створено", body: suah(total) });
+      await whWriteoff(salonKey, article, reason.trim(), good);
+      pushToast({ title: "Акт списання створено", body: `${articleLabel(articles, article)} · ${suah(total)}` });
       setReason(""); setLines([{ item_id: "", qty: "" }]); load(); onReload();
     } catch (e) { alert(e.message || e); setBusy(false); }
   };
@@ -6613,7 +6695,12 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
   return (
     <div className="wh-view">
       <div className="wh-form">
-        <label className="over-field" style={{ maxWidth: "100%" }}><span>Причина списання (обовʼязково)</span>
+        <label className="over-field" style={{ maxWidth: "100%" }}><span>Стаття списання (обовʼязково)</span>
+          <select value={article} onChange={(e) => setArticle(e.target.value)}>
+            {articles.map((a) => <option key={a.key} value={a.key}>{a.label}{a.expense ? " — у витрати магазину" : ""}</option>)}
+          </select>
+        </label>
+        <label className="over-field" style={{ maxWidth: "100%" }}><span>Коментар (необовʼязково)</span>
           <textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="напр. використано за вересень / зіпсовано при транспортуванні" />
         </label>
         <div className="wh-lines">
@@ -6624,7 +6711,7 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
           <button className="wh-add" onClick={() => setLines((ls) => [...ls, { item_id: "", qty: "" }])}><Plus size={13} /> Ще позиція</button>
         </div>
         <div className="wh-modal-foot"><span>Сума списання</span><b>{suah(total)}</b></div>
-        <button className="btn-primary small" onClick={submit} disabled={busy || !reason.trim()}>{busy ? "…" : "Створити акт списання"}</button>
+        <button className="btn-primary small" onClick={submit} disabled={busy || !article}>{busy ? "…" : "Створити акт списання"}</button>
       </div>
 
       <h4 className="wh-h4">Складські акти</h4>
@@ -6634,7 +6721,8 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
             <div className="wh-act" key={a.id} onClick={() => setOpen(open === a.id ? null : a.id)}>
               <div className="wh-act-top">
                 <span className="wh-act-sum">−{suahN(a.total)} ₴</span>
-                <span className="wh-act-reason">{a.reason || "—"}</span>
+                <span className="wh-act-article">{articleLabel(articles, a.article || "store")}</span>
+                {a.reason && <span className="wh-act-reason">{a.reason}</span>}
                 <span className="wh-act-at">{fmtDate(a.created_at)}</span>
               </div>
               {open === a.id && <WhActLines actId={a.id} byId={byId} sign="−" />}
@@ -6686,6 +6774,7 @@ function SupplyActsView({ warehouse, items }) {
               <div className="wh-act-top">
                 <span className="wh-act-kind">{ACT_KIND[a.kind]}</span>
                 <span className="wh-act-sum">{signOf(a.kind)}{suahN(a.total)} ₴</span>
+                {a.kind === "writeoff" && <span className="wh-act-article">{articleLabel(null, a.article || "store")}</span>}
                 <span className="wh-act-reason">{whName(a.counterparty) || a.reason || (a.order_id ? "замовлення салону" : "")}</span>
                 <span className="wh-act-at">{fmtDate(a.created_at)}</span>
               </div>
@@ -6918,29 +7007,51 @@ function ExpensesModule({ cab }) {
   const own = cab.type === "sm" ? cab.key : null;
   const scopeSalons = cab.type === "tm" ? salonsOfTm(cab.tmKey || cab.key) : (own ? [salonByKey(own)].filter(Boolean) : SALONS);
   const [pick, setPick] = useState(own || (scopeSalons.length > 1 ? "all" : scopeSalons[0]?.key));
-  const [lines, setLines] = useState(null);
+  const [allLines, setAllLines] = useState(null);   // усі списання (всі статті)
+  const [articles, setArticles] = useState(WRITEOFF_ARTICLES_BUILTIN);
   const [items, setItems] = useState({});
   const [openM, setOpenM] = useState(null);
-  const [cmp, setCmp] = useState(false);
+  const [view, setView] = useState("months"); // months | cmp | articles
   const months = useMemo(() => recentMonths(12), []);
   const [pa, setPa] = useState(months[1]);
   const [pb, setPb] = useState(months[0]);
 
   useEffect(() => {
     listItems({ includeArchived: true }).then((it) => setItems(Object.fromEntries(it.map((i) => [i.id, i]))));
+    listWriteoffArticles().then(setArticles).catch(() => {});
   }, []);
   useEffect(() => {
     const from = `${months[months.length - 1]}-01`;
     const sk = pick === "all" ? undefined : pick;
-    salonSupplyExpenseLines({ from, salonKey: sk })
+    writeoffLines({ from, salonKey: sk })
       .then((ls) => (cab.type === "tm" && pick === "all"
         ? ls.filter((l) => scopeSalons.some((s) => s.key === l.act?.warehouse))
         : ls))
-      .then(setLines).catch(() => setLines([]));
+      .then(setAllLines).catch(() => setAllLines([]));
     // eslint-disable-next-line
   }, [pick]);
 
-  if (lines === null) return <div className="loading">Завантаження…</div>;
+  if (allLines === null) return <div className="loading">Завантаження…</div>;
+
+  const expenseKeys = new Set(articles.filter((a) => a.expense).map((a) => a.key));
+  const lines = allLines.filter((l) => expenseKeys.has(l.act?.article || "store"));
+
+  // розбивка всіх списань за статтями (для «аналітики»)
+  const byArticle = {};
+  for (const l of allLines) {
+    const ak = l.act?.article || "store";
+    const b = byArticle[ak] = byArticle[ak] || { total: 0, byMonth: {} };
+    const v = Number(l.qty) * Number(l.unit_cost);
+    b.total += v;
+    const ym = (l.act?.created_at || "").slice(0, 7);
+    if (ym) b.byMonth[ym] = (b.byMonth[ym] || 0) + v;
+  }
+  const articleRows = articles
+    .map((a) => ({ ...a, ...(byArticle[a.key] || { total: 0, byMonth: {} }) }))
+    .concat(Object.keys(byArticle).filter((k) => !articles.some((a) => a.key === k))
+      .map((k) => ({ key: k, label: k, expense: false, ...byArticle[k] })))
+    .filter((a) => a.total > 0)
+    .sort((a, b) => b.total - a.total);
 
   const byMonth = {};
   for (const l of lines) {
@@ -6967,11 +7078,34 @@ function ExpensesModule({ cab }) {
           {scopeSalons.map((s) => <button key={s.key} className={`chip ${pick === s.key ? "active" : ""}`} onClick={() => setPick(s.key)}>{s.city}</button>)}
         </div>
       )}
-      <button className="btn-secondary small" style={{ marginBottom: 12 }} onClick={() => setCmp((v) => !v)}>
-        {cmp ? "Звичайний вигляд" : "Порівняти витрати"}
-      </button>
+      <div className="inv-viewtabs" style={{ marginBottom: 12 }}>
+        <button className={view === "months" ? "on" : ""} onClick={() => setView("months")}>По місяцях</button>
+        <button className={view === "articles" ? "on" : ""} onClick={() => setView("articles")}>За статтями</button>
+        <button className={view === "cmp" ? "on" : ""} onClick={() => setView("cmp")}>Порівняти</button>
+      </div>
 
-      {cmp ? (
+      {view === "articles" ? (
+        articleRows.length === 0 ? <div className="admin-empty">Списань ще немає.</div> : (
+          <div className="exp-months">
+            {articleRows.map((a) => (
+              <div className="exp-month" key={a.key}>
+                <button className="exp-month-h" onClick={() => setOpenM(openM === `a-${a.key}` ? null : `a-${a.key}`)}>
+                  <span>{a.label}{a.expense ? <span className="exp-art-tag">у витрати магазину</span> : null}</span>
+                  <b>{suah(a.total)}</b>
+                  <ChevronRight size={15} style={{ transform: openM === `a-${a.key}` ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                </button>
+                {openM === `a-${a.key}` && (
+                  <div className="exp-month-b">
+                    {months.filter((m) => a.byMonth[m]).map((m) => (
+                      <div className="exp-row" key={m}><span>{monthLabel(m)}</span><span className="mono">{suahN(a.byMonth[m])} ₴</span></div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )
+      ) : view === "cmp" ? (
         <div className="exp-cmp">
           <div className="exp-cmp-pick">
             <select className="inv-toolbar-sel" value={pa} onChange={(e) => setPa(e.target.value)}>{months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select>
@@ -7012,8 +7146,8 @@ function ExpensesModule({ cab }) {
         </div>
       )}
       <p className="hint" style={{ marginTop: 14 }}>
-        Витрати підтягуються автоматично зі складу господарських потреб — за <b>фактичним розходом</b>
-        (акти списання магазину), за собівартістю на момент списання. Надходження на склад витратою не є.
+        «По місяцях» — витрати магазину: акти списання зі статтею, що йде у витрати (за замовч. «Витрати на магазин»),
+        за собівартістю на момент списання. «За статтями» — усі списання за всіма статтями. Статтями керує адмін.
       </p>
     </div>
   );
@@ -8993,8 +9127,11 @@ td.sh.sh-plan{font-weight:400;}
 .wh-act-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px;}
 .wh-act-kind{font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);}
 .wh-act-sum{font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--ink);}
+.wh-act-article{font-size:10.5px;font-weight:700;letter-spacing:.02em;padding:2px 8px;border-radius:999px;background:rgba(190,138,46,.14);color:var(--gold-ink);white-space:nowrap;}
 .wh-act-reason{color:var(--ink-soft);flex:1;min-width:0;}
 .wh-act-at{margin-left:auto;font-size:11px;color:var(--faint);font-family:'IBM Plex Mono',monospace;}
+.exp-art-tag{margin-left:8px;font-size:10px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:var(--positive-bright);background:rgba(63,107,74,.16);padding:1px 6px;border-radius:999px;}
+.art-name{flex:1;min-width:0;padding:6px 9px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:13px;background:var(--surface);color:var(--ink);}
 .wh-act-lines{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:4px;font-size:12px;}
 .wh-act-lines>div{display:flex;justify-content:space-between;color:var(--ink-soft);}
 .wh-act-lines .mono{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
