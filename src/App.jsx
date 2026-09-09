@@ -5820,7 +5820,7 @@ function EzToggle() {
 }
 
 /* Кільце — розмір задає CSS (ширина комірки), SVG масштабується через viewBox */
-function Ring({ pct, size = 82, sw = 7, children }) {
+function Ring({ pct, band, size = 82, sw = 7, children }) {
   const VB = 100; // внутрішня система координат
   const r = (VB - (sw / size) * VB) / 2;
   const C = 2 * Math.PI * r;
@@ -5831,7 +5831,7 @@ function Ring({ pct, size = 82, sw = 7, children }) {
       <svg viewBox={`0 0 ${VB} ${VB}`} preserveAspectRatio="xMidYMid meet">
         <circle className="rg-track" cx={VB / 2} cy={VB / 2} r={r} strokeWidth={strokeW} fill="none" />
         <circle
-          className={`rg-prog ${turnoverBand(pct)}`} cx={VB / 2} cy={VB / 2} r={r} strokeWidth={strokeW} fill="none"
+          className={`rg-prog ${turnoverBand(band == null ? pct : band)}`} cx={VB / 2} cy={VB / 2} r={r} strokeWidth={strokeW} fill="none"
           strokeLinecap="round" transform={`rotate(-90 ${VB / 2} ${VB / 2})`}
           strokeDasharray={C.toFixed(2)} strokeDashoffset={off.toFixed(2)}
         />
@@ -5894,20 +5894,26 @@ function TurnoverRings({ scopeSalons, single: singleProp }) {
     b.sum += v;
   }
   const valOf = (k) => (mode === "today" ? byKey[k]?.today || 0 : byKey[k]?.sum || 0);
-  const dailyNorm = (k) => planTurnover(planOf(plans, k), withEz) / dim;
-  const normOf = (k) => dailyNorm(k) * normMult;
+  const monthPlanOf = (k) => planTurnover(planOf(plans, k), withEz);
+  const dailyNorm = (k) => monthPlanOf(k) / dim;
+  const normOf = (k) => dailyNorm(k) * normMult; // норма за обраний період (для темпу/кольору)
+  // знаменник для ВІДОБРАЖЕНОГО %: місяць → місячний план СМ; день/період → закриття норми
+  const refOf = (k) => (mode === "month" ? monthPlanOf(k) : normOf(k));
 
   const cells = salons
     .map((s) => {
       const v = valOf(s.key);
       const n = normOf(s.key);
-      return { s, v, n, pct: n ? (v / n) * 100 : 0 };
+      const ref = refOf(s.key);
+      return { s, v, n, pct: ref ? (v / ref) * 100 : 0, bandPct: n ? (v / n) * 100 : 0 };
     })
     .sort((a, b) => a.pct - b.pct);
 
   const totV = cells.reduce((a, c) => a + c.v, 0);
   const totN = cells.reduce((a, c) => a + c.n, 0);
-  const totPct = totN ? (totV / totN) * 100 : 0;
+  const totRef = cells.reduce((a, c) => a + refOf(c.s.key), 0);
+  const totPct = totRef ? (totV / totRef) * 100 : 0;
+  const totBand = totN ? (totV / totN) * 100 : 0;
 
   const heroLab = mode === "today" ? "сьогодні"
     : mode === "month" ? "з початку місяця"
@@ -5930,6 +5936,7 @@ function TurnoverRings({ scopeSalons, single: singleProp }) {
     return {
       ...t, done, monthPlan, norm, normToDatePct,
       donePct: ref ? (done / ref) * 100 : null,
+      bandPct: norm ? (done / norm) * 100 : 0, // темп — для кольору
       markPct: mode === "month" ? normToDatePct : 100,
       gap: done - norm,
       gapPct: norm ? ((done - norm) / norm) * 100 : 0,
@@ -5974,21 +5981,21 @@ function TurnoverRings({ scopeSalons, single: singleProp }) {
             <div className="rg-hero-val">{fmt(totV)}</div>
             <div className="rg-hero-lab">оборот {single ? "магазину" : "мережі"} · {heroLab}</div>
           </div>
-          <div className={`rg-hero-pct ${turnoverBand(totPct)}`}>{Math.round(totPct)}%</div>
+          <div className={`rg-hero-pct ${turnoverBand(totBand)}`}>{Math.round(totPct)}%</div>
         </div>
         <div className="rg-terr-bar rg-hero-bar">
-          <div className={`rg-terr-fill ${turnoverBand(totPct)}`} style={{ width: `${Math.min(100, Math.max(0, totPct))}%` }} />
+          <div className={`rg-terr-fill ${turnoverBand(totBand)}`} style={{ width: `${Math.min(100, Math.max(0, totPct))}%` }} />
         </div>
-        <div className="rg-hero-norm">Норма: <b>{fmt(totN)}</b></div>
+        <div className="rg-hero-norm">{mode === "month" ? "План на місяць" : "Норма"}: <b>{fmt(mode === "month" ? totRef : totN)}</b></div>
       </div>
 
       <div className="rg-terr">
         {territories.map((x) => (
           <div className="rg-terr-card" key={x.label}>
-            <div className="rg-terr-h">{x.label}{x.donePct != null && <span className={`rg-terr-done ${turnoverBand(x.donePct)}`}>{Math.round(x.donePct)}% {mode === "month" ? "плану" : "норми"}</span>}</div>
+            <div className="rg-terr-h">{x.label}{x.donePct != null && <span className={`rg-terr-done ${turnoverBand(x.bandPct)}`}>{Math.round(x.donePct)}% {mode === "month" ? "плану" : "норми"}</span>}</div>
             {x.donePct != null && (
               <div className="rg-terr-bar">
-                <div className={`rg-terr-fill ${turnoverBand(x.donePct)}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
+                <div className={`rg-terr-fill ${turnoverBand(x.bandPct)}`} style={{ width: `${Math.min(100, Math.max(0, x.donePct))}%` }} />
                 <span className="rg-terr-mark" style={{ left: `${Math.min(100, x.markPct)}%` }} title={mode === "month" ? `норма на сьогодні: ${Math.round(x.normToDatePct)}% плану` : "норма за обраний період"} />
               </div>
             )}
@@ -6007,18 +6014,23 @@ function TurnoverRings({ scopeSalons, single: singleProp }) {
 
       {!single && (
         <div className="rg-grid">
-          {cells.map(({ s, v, pct }) => (
+          {cells.map(({ s, v, pct, bandPct }) => (
             <button key={s.key} className="rg-cell" onClick={() => openSalonAnalytics(s.key)} title={`${salonLabel(s)} — відкрити аналітику`}>
-              <Ring pct={pct}>
+              <Ring pct={pct} band={bandPct}>
                 <b>{uahK(v)}</b>
               </Ring>
               <span className="rg-nm">{salonShortName(s)}</span>
-              <span className={`rg-pct ${turnoverBand(pct)}`}>{Math.round(pct)}%</span>
+              <span className={`rg-pct ${turnoverBand(bandPct)}`}>{Math.round(pct)}%</span>
             </button>
           ))}
         </div>
       )}
-      <p className="rg-note">Кільце — оборот проти денної норми (план{withEz ? " з ЕЗ" : ""} ÷ {dim}).{single ? "" : " Клік по салону — його аналітика."}</p>
+      <p className="rg-note">
+        {mode === "month"
+          ? `Число — % виконання місячного плану СМ. Колір — темп (чи встигає за нормою на сьогодні).`
+          : `Кільце — оборот проти денної норми (план${withEz ? " з ЕЗ" : ""} ÷ ${dim}).`}
+        {single ? "" : " Клік по салону — його аналітика."}
+      </p>
     </div>
   );
 }
