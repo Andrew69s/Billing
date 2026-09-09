@@ -119,12 +119,19 @@ export async function actLines(actId) {
   if (error) throw error;
   return data || [];
 }
+/* якому магазину «належить» акт списання (для витрат):
+   свій склад → його ключ; списання з основного складу → хто списав (created_by).
+   Липинського списує госп.потреби прямо з основного складу. */
+export const actSalon = (act) =>
+  (act && act.warehouse && act.warehouse !== CENTRAL ? act.warehouse : (act?.created_by || null));
+
 /* усі рядки актів списання за період (+ стаття) */
 export async function writeoffLines({ from, to, salonKey, articles } = {}) {
-  let aq = supabase.from("supply_acts").select("id,warehouse,kind,article,created_at,reason").eq("kind", "writeoff");
+  let aq = supabase.from("supply_acts")
+    .select("id,warehouse,kind,article,created_at,reason,created_by").eq("kind", "writeoff");
   if (from) aq = aq.gte("created_at", from);
   if (to) aq = aq.lte("created_at", to);
-  if (salonKey) aq = aq.eq("warehouse", salonKey);
+  if (salonKey) aq = aq.or(`warehouse.eq.${salonKey},and(warehouse.eq.${CENTRAL},created_by.eq.${salonKey})`);
   if (Array.isArray(articles) && articles.length) aq = aq.in("article", articles);
   const { data: acts, error } = await aq;
   if (error) throw error;

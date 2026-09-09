@@ -71,7 +71,7 @@ import {
   SUPPLY_CATEGORIES, SUPPLY_UNITS, CENTRAL, ACT_KIND, uah as suah, uahN as suahN,
   WRITEOFF_ARTICLES_BUILTIN, listWriteoffArticles, saveWriteoffArticles, articleLabel,
   listItems, upsertItem, deleteItem, setPrice, listStock, stockMap, stockState,
-  listActs, actLines, writeoffLines, salonSupplyExpenseLines, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
+  listActs, actLines, writeoffLines, salonSupplyExpenseLines, actSalon, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
   shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
   subscribeSupply,
 } from "./lib/supply.js";
@@ -6669,7 +6669,9 @@ function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
 }
 
 /* --- Акт списання (салон) --- */
-function SupplyWriteoff({ salonKey, items, stock, onReload }) {
+function SupplyWriteoff({ salonKey, warehouse, items, stock, onReload }) {
+  const wh = warehouse || salonKey;
+  const fromCentral = wh === CENTRAL;
   const [articles, setArticles] = useState(WRITEOFF_ARTICLES_BUILTIN);
   const [article, setArticle] = useState("store");
   const [reason, setReason] = useState("");
@@ -6678,9 +6680,11 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(null);
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
-  const cs = stockMap(stock, salonKey);
-  const load = () => listActs({ warehouse: salonKey, kind: "writeoff" }).then(setActs).catch(() => setActs([]));
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [salonKey]);
+  const cs = stockMap(stock, wh);
+  const load = () => listActs({ warehouse: wh, kind: "writeoff" })
+    .then((a) => setActs(fromCentral ? a.filter((x) => x.created_by === salonKey) : a))
+    .catch(() => setActs([]));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [wh, salonKey]);
   useEffect(() => { listWriteoffArticles().then(setArticles).catch(() => {}); }, []);
 
   const set = (idx, ln) => setLines((ls) => ls.map((x, i) => (i === idx ? ln : x)));
@@ -6693,7 +6697,7 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
     if (bad) { alert(`«${byId[bad.item_id]?.name || "позиція"}»: на складі лише ${cs[bad.item_id] || 0}, не можна списати ${bad.qty}`); return; }
     setBusy(true);
     try {
-      await whWriteoff(salonKey, article, reason.trim(), good);
+      await whWriteoff(wh, article, reason.trim(), good);
       pushToast({ title: "Акт списання створено", body: `${articleLabel(articles, article)} · ${suah(total)}` });
       setReason(""); setLines([{ item_id: "", qty: "" }]); load(); onReload();
     } catch (e) { alert(e.message || e); setBusy(false); }
@@ -6701,6 +6705,7 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
 
   return (
     <div className="wh-view">
+      {fromCentral && <p className="ov-sub">Списання госп.потреб магазину прямо з Основного складу. Зі статтею «Витрати на магазин» сума йде у ваші витрати.</p>}
       <div className="wh-form">
         <label className="over-field" style={{ maxWidth: "100%" }}><span>Стаття списання (обовʼязково)</span>
           <select value={article} onChange={(e) => setArticle(e.target.value)}>
@@ -6820,9 +6825,12 @@ function SupplyModule({ cab }) {
   const [orderPrefill, setOrderPrefill] = useState(null);
   const [editOrder, setEditOrder] = useState(null);
 
+  // Липинського списує госп.потреби прямо з Основного складу, без «Мого складу»
+  const centralWriteoff = cab.key === "lviv-lypynskoho";
   const subs = [];
   if (manageWh) subs.push(["central", "Основний склад"], ["incoming", "Замовлення салонів"], ["acts", "Складські акти"], ["items", "Довідник"]);
-  if (salonKey) subs.push(["mine", "Мій склад"], ["order", "Замовити"], ["myorders", "Мої замовлення"], ["writeoff", "Акт списання"], ["salonacts", "Рух складу"]);
+  if (centralWriteoff) subs.push(["writeoff", "Акт списання"]);
+  else if (salonKey) subs.push(["mine", "Мій склад"], ["order", "Замовити"], ["myorders", "Мої замовлення"], ["writeoff", "Акт списання"], ["salonacts", "Рух складу"]);
   if (isTm) subs.push(["terr", "Склади території"], ["torders", "Замовлення території"]);
   const [tab, setTab] = useState(subs[0]?.[0] || "central");
 
@@ -6843,7 +6851,7 @@ function SupplyModule({ cab }) {
       {tab === "mine" && <SupplySalonStock salonKey={salonKey} items={items} stock={stock} onOrderAll={goOrder} />}
       {tab === "order" && <SupplyOrderBuilder salonKey={salonKey} items={items} stock={stock} order={editOrder} prefill={orderPrefill} onDone={() => { setOrderPrefill(null); setEditOrder(null); reload(); setTab("myorders"); }} />}
       {tab === "myorders" && <SupplyOrders scope="mine" salonKey={salonKey} cabKey={cab.key} items={items} stock={stock} onReload={reload} onEditDraft={(o) => { orderLines(o.id).then((ls) => { setEditOrder({ ...o, lines: ls }); setOrderPrefill(null); setTab("order"); }); }} />}
-      {tab === "writeoff" && <SupplyWriteoff salonKey={salonKey} items={items} stock={stock} onReload={reload} />}
+      {tab === "writeoff" && <SupplyWriteoff salonKey={salonKey || cab.key} warehouse={centralWriteoff ? CENTRAL : salonKey} items={items} stock={stock} onReload={reload} />}
       {tab === "salonacts" && <SupplyActsView warehouse={salonKey} items={items} />}
       {tab === "terr" && <SupplyTerritory tmKey={cab.tmKey || cab.key} items={items} stock={stock} />}
       {tab === "torders" && <SupplyOrders scope="territory" tmKey={cab.tmKey || cab.key} items={items} stock={stock} onReload={reload} onEditDraft={() => {}} />}
@@ -7035,8 +7043,8 @@ function ExpensesModule({ cab }) {
     const from = `${months[months.length - 1]}-01`;
     const sk = pick === "all" ? undefined : pick;
     writeoffLines({ from, salonKey: sk })
-      .then((ls) => (cab.type === "tm" && pick === "all"
-        ? ls.filter((l) => scopeSalons.some((s) => s.key === l.act?.warehouse))
+      .then((ls) => ((cab.type === "tm" || cab.type === "manager" || cab.type === "accountant") && pick === "all"
+        ? ls.filter((l) => scopeSalons.some((s) => s.key === actSalon(l.act)))
         : ls))
       .then(setAllLines).catch(() => setAllLines([]));
     // eslint-disable-next-line
