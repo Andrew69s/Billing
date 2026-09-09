@@ -18,6 +18,7 @@ create policy kv_select on public.kv for select using (
     or key like 'fop:%'
     or key = ('modaccess:'  || public.my_cabinet_key())
     or key = ('modcatalog:' || public.my_cabinet_key())
+    or key = ('modextra:'   || public.my_cabinet_key())
     or (key like 'caps:%' and split_part(key, ':', 2) = public.my_cabinet_key())
     or key = 'auditlog'
   )

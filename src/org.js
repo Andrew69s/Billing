@@ -307,6 +307,25 @@ export async function setModuleAccess(cabKey, moduleKey, enabled) {
 }
 export const moduleAccessAllows = (access, moduleKey) => (access || {})[moduleKey] !== false;
 
+/* modextra:<cabKey> = [moduleKey, ...] — вкладки, які адмін ДОДАВ кабінету
+   поверх його рідних (з-поза списку модулів цього кабінету). */
+export async function getModuleExtra(cabKey) {
+  try { const v = JSON.parse((await window.storage.get(`modextra:${cabKey}`)).value); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+export async function setModuleExtra(cabKey, keys) {
+  await window.storage.set(`modextra:${cabKey}`, JSON.stringify([...new Set(keys)]));
+  await logAction("modextra", { cabKey, keys });
+}
+export async function addModuleExtra(cabKey, moduleKey) {
+  const cur = await getModuleExtra(cabKey);
+  if (!cur.includes(moduleKey)) await setModuleExtra(cabKey, [...cur, moduleKey]);
+}
+export async function removeModuleExtra(cabKey, moduleKey) {
+  const cur = await getModuleExtra(cabKey);
+  if (cur.includes(moduleKey)) await setModuleExtra(cabKey, cur.filter((k) => k !== moduleKey));
+}
+
 export async function getModuleCatalog(cabKey) {
   try { const v = JSON.parse((await window.storage.get(`modcatalog:${cabKey}`)).value); return Array.isArray(v) ? v : []; }
   catch { return []; }
@@ -323,6 +342,7 @@ export function subscribeModuleAccess(cabKey, cb) {
   const ch = supabase
     .channel(`modaccess:${cabKey}:${Math.random().toString(36).slice(2)}`)
     .on("postgres_changes", { event: "*", schema: "public", table: "kv", filter: `key=eq.modaccess:${cabKey}` }, cb)
+    .on("postgres_changes", { event: "*", schema: "public", table: "kv", filter: `key=eq.modextra:${cabKey}` }, cb)
     .subscribe();
   return () => { supabase.removeChannel(ch); };
 }

@@ -23,6 +23,7 @@ import {
   listFopHistory, addFopAssignment, removeFopAssignment, fopEntryOn, fopOn, currentFop, fopHistoryAll,
   CAPABILITIES, getCapabilities, setCapabilities, listLog, ALL_CAB_KEYS,
   getModuleAccess, setModuleAccess, moduleAccessAllows, getModuleCatalog, saveModuleCatalog, subscribeModuleAccess,
+  getModuleExtra, addModuleExtra, removeModuleExtra,
   cabType, PARTICIPANTS, canAssign,
 } from "./org.js";
 import { emptySmData, SM_FIELD_LABELS } from "./smCalc.js";
@@ -3223,7 +3224,7 @@ function AdminLog() {
   const label = {
     login_master: "вхід за майстер-кодом", recovery_request: "запит відновлення", recovery_done: "змінено пароль",
     reassign: "перепризначено магазин", caps: "змінено права", fop_assign: "призначено ФОП",
-    modaccess: "доступ до вкладки",
+    modaccess: "доступ до вкладки", modextra: "додано вкладку кабінету",
   };
   return (
     <div className="admin-panel">
@@ -3302,21 +3303,21 @@ function AdminMaintenance() {
 }
 
 function AdminModuleAccess() {
-  const [rows, setRows] = useState(null); // [{ cabKey, name, catalog:[{key,label,group}], access:{k:false} }]
+  const [rows, setRows] = useState(null); // [{ cabKey, name, catalog, access, extra:[key] }]
   const [openCab, setOpenCab] = useState(null);
-  const [savingKey, setSavingKey] = useState("");
+  const [busy, setBusy] = useState("");
 
   const load = async () => {
     const out = await Promise.all(ALL_CAB_KEYS.map(async (k) => {
-      const [catalog, access] = await Promise.all([getModuleCatalog(k), getModuleAccess(k)]);
-      return { cabKey: k, name: cabName(k), catalog, access };
+      const [catalog, access, extra] = await Promise.all([getModuleCatalog(k), getModuleAccess(k), getModuleExtra(k)]);
+      return { cabKey: k, name: cabName(k), catalog, access, extra };
     }));
     setRows(out);
   };
   useEffect(() => { load(); }, []);
 
   const toggle = async (cabKey, modKey, enabled) => {
-    setSavingKey(cabKey + modKey);
+    setBusy(cabKey + modKey);
     setRows((rs) => rs.map((r) => {
       if (r.cabKey !== cabKey) return r;
       const access = { ...r.access };
@@ -3324,8 +3325,23 @@ function AdminModuleAccess() {
       return { ...r, access };
     }));
     try { await setModuleAccess(cabKey, modKey, enabled); }
-    catch (e) { pushToast({ title: "Не збережено", body: String(e.message || e) }); load(); }
-    setSavingKey("");
+    catch (e) { pushToast({ title: "Не збережено", body: String(e.message || e) }); await load(); }
+    setBusy("");
+  };
+  const addExtra = async (cabKey, modKey) => {
+    setBusy(cabKey + modKey);
+    try {
+      await addModuleExtra(cabKey, modKey);
+      pushToast({ title: "Вкладку додано", body: `${cabName(cabKey)} · ${ADDABLE_BY_KEY[modKey]?.label || modKey}` });
+      await load();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy("");
+  };
+  const removeExtra = async (cabKey, modKey) => {
+    setBusy(cabKey + modKey);
+    try { await removeModuleExtra(cabKey, modKey); await load(); }
+    catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy("");
   };
 
   if (rows === null) return <div className="loading">Завантаження…</div>;
@@ -3334,32 +3350,36 @@ function AdminModuleAccess() {
     <div className="admin-panel">
       <h3>Доступ до вкладок</h3>
       <p className="hint">
-        Вмикайте / вимикайте будь-яку вкладку будь-якому кабінету. Список вкладок кожного кабінету
-        оновлюється сам — коли додається нова вкладка, вона зʼявляється тут після першого входу в той кабінет
-        (за замовчуванням — увімкнена). Перша вкладка кабінету («Головна» / «Огляд») вимкнути не можна.
+        Вмикайте / вимикайте вкладки кожного кабінету, або <b>додавайте</b> будь-яку вкладку зі спільного набору.
+        Список рідних вкладок кабінету оновлюється сам після першого входу користувача (нові — одразу увімкнені).
+        Перша вкладка кабінету вимкнути не можна. «ЗП ТМ» додати не можна.
       </p>
       <div className="admin-list">
         {rows.map((r) => {
           const off = Object.keys(r.access).filter((k) => r.access[k] === false).length;
           const isOpen = openCab === r.cabKey;
+          const catKeys = new Set(r.catalog.map((m) => m.key));
+          const canAdd = ADDABLE_MODULES.filter((a) => !catKeys.has(a.key) && !r.extra.includes(a.key));
           return (
             <div className="modacc-cab" key={r.cabKey}>
               <button className="modacc-head" onClick={() => setOpenCab(isOpen ? null : r.cabKey)}>
                 <ChevronRight size={14} className={`modacc-chev ${isOpen ? "open" : ""}`} />
                 <span className="modacc-name">{r.name}</span>
                 <span className="modacc-count">
-                  {r.catalog.length === 0 ? "не відкривали" : off > 0 ? `${off} вимкнено` : "усі увімкнені"}
+                  {r.catalog.length === 0 && r.extra.length === 0 ? "не відкривали"
+                    : `${off ? `${off} вимкнено` : "усі увімкнені"}${r.extra.length ? ` · +${r.extra.length}` : ""}`}
                 </span>
               </button>
               {isOpen && (
                 <div className="modacc-body">
-                  {r.catalog.length === 0 ? (
+                  {r.catalog.length === 0 && (
                     <p className="muted" style={{ fontSize: 12, padding: "4px 2px" }}>
-                      Кабінет ще не відкривали після оновлення. Вкладки зʼявляться тут після першого входу користувача.
+                      Рідні вкладки зʼявляться тут після першого входу користувача. Додані нижче — діють одразу.
                     </p>
-                  ) : r.catalog.map((m, i) => {
+                  )}
+                  {r.catalog.map((m, i) => {
                     const enabled = r.access[m.key] !== false;
-                    const locked = i === 0;
+                    const locked = i === 0 && !m.extra;
                     const prevGroup = i > 0 ? (r.catalog[i - 1].group || "") : null;
                     const showGroup = m.group && m.group !== prevGroup;
                     return (
@@ -3367,15 +3387,41 @@ function AdminModuleAccess() {
                         {showGroup && <div className="modacc-group">{m.group}</div>}
                         <label className={`modacc-row ${locked ? "locked" : ""}`}>
                           <input
-                            type="checkbox" checked={enabled} disabled={locked || savingKey === r.cabKey + m.key}
+                            type="checkbox" checked={enabled} disabled={locked || busy === r.cabKey + m.key}
                             onChange={(e) => toggle(r.cabKey, m.key, e.target.checked)}
                           />
                           <span>{m.label}</span>
+                          {m.extra && <span className="modacc-badge">додано</span>}
                           {locked && <span className="modacc-lock">завжди</span>}
+                          {m.extra && (
+                            <button type="button" className="modacc-rm" title="Прибрати вкладку"
+                              onClick={(e) => { e.preventDefault(); removeExtra(r.cabKey, m.key); }}>прибрати</button>
+                          )}
                         </label>
                       </React.Fragment>
                     );
                   })}
+                  {/* додані, яких ще нема в каталозі (кабінет не відкривали після додавання) */}
+                  {r.extra.filter((k) => !catKeys.has(k)).map((k) => (
+                    <label className="modacc-row" key={`x-${k}`}>
+                      <input type="checkbox" checked disabled />
+                      <span>{ADDABLE_BY_KEY[k]?.label || k}</span>
+                      <span className="modacc-badge">додано</span>
+                      <button type="button" className="modacc-rm" onClick={(e) => { e.preventDefault(); removeExtra(r.cabKey, k); }}>прибрати</button>
+                    </label>
+                  ))}
+
+                  {canAdd.length > 0 && (
+                    <div className="modacc-add">
+                      <span className="modacc-add-lbl">Додати вкладку:</span>
+                      {canAdd.map((a) => (
+                        <button key={a.key} type="button" className="modacc-add-chip" disabled={busy === r.cabKey + a.key}
+                          onClick={() => addExtra(r.cabKey, a.key)}>
+                          <Plus size={12} /> {a.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -7060,21 +7106,61 @@ const NAV_PINNED_GROUP = "Головне";
 const NAV_DEFAULT_GROUP = "Інше";
 const ORG_GROUP = "Орг-структура";
 
-function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
-  const allModules = modules.filter(Boolean);
-  const catSig = allModules.map((m) => `${m.key}~${m.label}~${m.group || ""}`).join("|");
+/* Реєстр вкладок, які адмін може ДОДАТИ будь-якому кабінету поверх рідних
+   (вкладка «Доступ до вкладок» → «Додати вкладку»). Портативні модулі —
+   рендеряться від контексту { key, type, tmKey }. «ЗП ТМ»/«ЗП» та інші
+   кабінет-специфічні вкладки сюди навмисно не входять. */
+const ADDABLE_MODULES = [
+  { key: "tasks", label: "Задачі", group: ORG_GROUP, icon: <CheckSquare size={16} />, render: (c) => <TasksModule cab={c} /> },
+  { key: "shifts", label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: (c) => <ShiftScheduleModule cab={c} /> },
+  { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: (c) => <TerritoryModule cab={c} /> },
+  { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: (c) => <SupplyModule cab={c} /> },
+  { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: (c) => <ExpensesModule cab={c} /> },
+  { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: (c) => <BonusModule cab={c} /> },
+  { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: (c) => <InvoicesModule cab={c} /> },
+  { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: (c) => <DirectoryModule cab={c} /> },
+  { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: (c) => <EmployeesModule cab={c} /> },
+  { key: "archive", label: "Архів", group: ORG_GROUP, icon: <ArchiveIcon size={16} />, render: (c) => <EmployeesModule cab={c} archive /> },
+  { key: "regionsheet", label: "Офіційні виплати", group: "Ще", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
+  { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: (c) => <PlannerModule tmKey={c.tmKey || "andriy"} /> },
+];
+const ADDABLE_BY_KEY = Object.fromEntries(ADDABLE_MODULES.map((m) => [m.key, m]));
 
-  // адмін-керований доступ до вкладок + самореєстрація каталогу модулів
+function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
+  const nativeModules = modules.filter(Boolean);
+  const nativeKeys = nativeModules.map((m) => m.key);
+
+  // адмін-керований доступ: modAccess (вимкнені рідні) + modExtra (додані з реєстру)
   const [modAccess, setModAccess] = useState(null);
+  const [modExtra, setModExtra] = useState([]);
   useEffect(() => {
     let a = true;
-    const reload = () => getModuleAccess(cabKey)
-      .then((x) => { if (a) setModAccess(x); })
-      .catch(() => { if (a) setModAccess({}); });
+    const reload = () => Promise.all([getModuleAccess(cabKey), getModuleExtra(cabKey)])
+      .then(([acc, ex]) => { if (a) { setModAccess(acc); setModExtra(ex); } })
+      .catch(() => { if (a) { setModAccess({}); setModExtra([]); } });
     reload();
-    saveModuleCatalog(cabKey, allModules.map((m) => ({ key: m.key, label: m.label, group: m.group || null })));
     const unsub = subscribeModuleAccess(cabKey, reload);
     return () => { a = false; unsub(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cabKey]);
+
+  const cabCtx = React.useMemo(() => {
+    const t = cabType(cabKey);
+    return { key: cabKey, type: t, tmKey: t === "tm" ? cabKey : t === "sm" ? salonTmOn(cabKey) : null };
+  }, [cabKey]);
+
+  // рідні модулі + додані адміном (портативні, з ADDABLE_MODULES, без дублів рідних)
+  const extraModules = modExtra
+    .filter((k) => !nativeKeys.includes(k) && ADDABLE_BY_KEY[k])
+    .map((k) => {
+      const d = ADDABLE_BY_KEY[k];
+      return { key: k, label: d.label, group: d.group, icon: d.icon, extra: true, render: () => d.render(cabCtx) };
+    });
+  const allModules = [...nativeModules, ...extraModules];
+
+  const catSig = allModules.map((m) => `${m.key}~${m.label}~${m.group || ""}`).join("|");
+  useEffect(() => {
+    saveModuleCatalog(cabKey, allModules.map((m) => ({ key: m.key, label: m.label, group: m.group || null, extra: !!m.extra })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cabKey, catSig]);
 
@@ -8120,6 +8206,14 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .modacc-row.locked{cursor:default;color:var(--muted);}
 .modacc-row input{width:16px;height:16px;flex-shrink:0;accent-color:var(--gold);}
 .modacc-lock{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--faint);}
+.modacc-badge{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--gold-bright);background:rgba(190,138,46,.14);padding:2px 6px;border-radius:999px;}
+.modacc-rm{margin-left:auto;background:none;border:none;color:var(--negative-bright);font-size:11px;cursor:pointer;font-family:inherit;padding:2px 4px;}
+.modacc-rm:hover{text-decoration:underline;}
+.modacc-add{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);}
+.modacc-add-lbl{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-right:2px;}
+.modacc-add-chip{display:inline-flex;align-items:center;gap:4px;background:rgba(var(--sf),.06);border:1px solid var(--line-dark);border-radius:999px;padding:5px 10px;font-size:12px;color:var(--ink);cursor:pointer;font-family:inherit;}
+.modacc-add-chip:hover{background:rgba(190,138,46,.12);border-color:rgba(220,169,74,.35);}
+.modacc-add-chip:disabled{opacity:.5;cursor:default;}
 .admin-rights{display:flex;flex-direction:column;gap:14px;margin-top:14px;}
 .admin-rights-person{background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);padding:14px 16px;}
 .admin-rights-name{font-weight:700;font-size:13.5px;color:var(--ink);margin-bottom:9px;}
