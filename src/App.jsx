@@ -70,7 +70,7 @@ import {
 import {
   SUPPLY_CATEGORIES, SUPPLY_UNITS, CENTRAL, ACT_KIND, uah as suah, uahN as suahN,
   listItems, upsertItem, deleteItem, setPrice, listStock, stockMap, stockState,
-  listActs, actLines, writeoffLines, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
+  listActs, actLines, salonSupplyExpenseLines, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
   shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
   subscribeSupply,
 } from "./lib/supply.js";
@@ -6932,9 +6932,9 @@ function ExpensesModule({ cab }) {
   useEffect(() => {
     const from = `${months[months.length - 1]}-01`;
     const sk = pick === "all" ? undefined : pick;
-    writeoffLines({ from, salonKey: sk })
+    salonSupplyExpenseLines({ from, salonKey: sk })
       .then((ls) => (cab.type === "tm" && pick === "all"
-        ? ls.filter((l) => scopeSalons.some((s) => s.key === l.act.warehouse))
+        ? ls.filter((l) => scopeSalons.some((s) => s.key === l.act?.warehouse))
         : ls))
       .then(setLines).catch(() => setLines([]));
     // eslint-disable-next-line
@@ -7011,7 +7011,11 @@ function ExpensesModule({ cab }) {
           ))}
         </div>
       )}
-      <p className="hint" style={{ marginTop: 14 }}>Зараз тут витрати зі складських актів списання. Блок витрат розширюватимемо.</p>
+      <p className="hint" style={{ marginTop: 14 }}>
+        Витрати підтягуються автоматично зі складу господарських потреб — за собівартістю того,
+        що надійшло на кожен магазин (отримання зі складу + прямий прихід магазину). Списання
+        «використано» повторно не рахується.
+      </p>
     </div>
   );
 }

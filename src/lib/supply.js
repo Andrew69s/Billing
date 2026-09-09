@@ -87,9 +87,9 @@ export async function actLines(actId) {
   if (error) throw error;
   return data || [];
 }
-/* усі рядки актів за період (для «Витрат по СМ») */
+/* усі рядки актів списання за період */
 export async function writeoffLines({ from, to, salonKey } = {}) {
-  let aq = supabase.from("supply_acts").select("id,warehouse,created_at").eq("kind", "writeoff");
+  let aq = supabase.from("supply_acts").select("id,warehouse,kind,created_at,reason").eq("kind", "writeoff");
   if (from) aq = aq.gte("created_at", from);
   if (to) aq = aq.lte("created_at", to);
   if (salonKey) aq = aq.eq("warehouse", salonKey);
@@ -100,6 +100,31 @@ export async function writeoffLines({ from, to, salonKey } = {}) {
   const { data: lines, error: e2 } = await supabase.from("supply_act_lines").select("*").in("act_id", ids);
   if (e2) throw e2;
   const byAct = Object.fromEntries(acts.map((a) => [a.id, a]));
+  return (lines || []).map((l) => ({ ...l, act: byAct[l.act_id] }));
+}
+
+/* Витрати магазину на госп.потреби — автоматично з руху складу:
+   усе, що НАДІЙШЛО на склад магазину (отримання зі складу + прямий прихід
+   магазину) за собівартістю + окремо списання (псування/нестача).
+   Отримання = основна стаття витрат: магазин «витратив» бюджет на цей товар.
+   Списання «використано» не рахуємо повторно — тільки не-споживчі причини. */
+const WRITEOFF_CONSUME = /викорис|спожи|витрач/i; // причини, що вже враховані в отриманні
+export async function salonSupplyExpenseLines({ from, to, salonKey } = {}) {
+  let aq = supabase.from("supply_acts")
+    .select("id,warehouse,kind,created_at,counterparty,reason")
+    .in("kind", ["receive", "receipt", "writeoff"])
+    .neq("warehouse", CENTRAL);
+  if (from) aq = aq.gte("created_at", from);
+  if (to) aq = aq.lte("created_at", to);
+  if (salonKey) aq = aq.eq("warehouse", salonKey);
+  const { data: acts, error } = await aq;
+  if (error) throw error;
+  const useActs = (acts || []).filter((a) => a.kind !== "writeoff" || !WRITEOFF_CONSUME.test(a.reason || ""));
+  if (!useActs.length) return [];
+  const ids = useActs.map((a) => a.id);
+  const { data: lines, error: e2 } = await supabase.from("supply_act_lines").select("*").in("act_id", ids);
+  if (e2) throw e2;
+  const byAct = Object.fromEntries(useActs.map((a) => [a.id, a]));
   return (lines || []).map((l) => ({ ...l, act: byAct[l.act_id] }));
 }
 
