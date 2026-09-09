@@ -152,6 +152,11 @@ export async function doAct(payload) {
   if (error) {
     let msg = error.message || "помилка";
     if (/forbidden/i.test(msg)) msg = "Немає прав на цю дію";
+    else if (/negative_adjust/.test(msg)) msg = "Кількість при інвентаризації не може бути відʼємною";
+    else {
+      const m = msg.match(/not_enough:(.+?):([\d.]+):([\d.]+)/);
+      if (m) msg = `«${m[1]}»: на складі лише ${(+m[2]).toLocaleString("uk-UA")}, а операція на ${(+m[3]).toLocaleString("uk-UA")}`;
+    }
     throw new Error(msg);
   }
   // supply_act повертає { act_id, total, price_changes: [{name, old, new}] }

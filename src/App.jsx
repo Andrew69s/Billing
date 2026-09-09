@@ -6154,8 +6154,9 @@ function useSupply() {
 }
 
 /* --- рядок вводу товару (для приходу / списання / замовлення) --- */
-function SupplyLineRow({ items, line, exclude, onChange, onRemove, priceCol }) {
+function SupplyLineRow({ items, line, exclude, onChange, onRemove, priceCol, avail }) {
   const opts = items.filter((i) => i.id === line.item_id || !exclude.has(i.id));
+  const over = avail != null && Number(line.qty) > avail;
   const pickItem = (id) => {
     const next = { ...line, item_id: id };
     // ціну підтягуємо з довідника; лишаємо ручну правку, якщо вона вже введена й відрізняється від попередньої позиції
@@ -6175,12 +6176,15 @@ function SupplyLineRow({ items, line, exclude, onChange, onRemove, priceCol }) {
         <option value="">— позиція —</option>
         {opts.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
       </select>
-      <NumInput className="wh-line-qty" allowEmpty placeholder="к-ть" value={line.qty} onChange={(v) => onChange({ ...line, qty: v })} />
+      <NumInput className={`wh-line-qty ${over ? "wh-over" : ""}`} allowEmpty placeholder="к-ть" value={line.qty} onChange={(v) => onChange({ ...line, qty: v })} />
       {priceCol && (
         <NumInput key={line.item_id} className="wh-line-qty" allowEmpty placeholder="ціна" value={line.unit_cost}
           onChange={(v) => onChange({ ...line, unit_cost: v })} />
       )}
       <button className="wh-line-x" onClick={onRemove}><X size={13} /></button>
+      {avail != null && line.item_id && (
+        <span className={`wh-line-avail ${over ? "over" : ""}`}>{over ? `на складі ${avail}` : `≤ ${avail}`}</span>
+      )}
     </div>
   );
 }
@@ -6681,9 +6685,12 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
 
   const set = (idx, ln) => setLines((ls) => ls.map((x, i) => (i === idx ? ln : x)));
   const total = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (byId[l.item_id]?.unit_cost || 0), 0);
+  const overLine = lines.find((l) => l.item_id && Number(l.qty) > (cs[l.item_id] || 0));
   const submit = async () => {
     const good = lines.filter((l) => l.item_id && Number(l.qty) > 0).map((l) => ({ item_id: l.item_id, qty: Number(l.qty) }));
     if (!good.length || !article) return;
+    const bad = good.find((g) => g.qty > (cs[g.item_id] || 0));
+    if (bad) { alert(`«${byId[bad.item_id]?.name || "позиція"}»: на складі лише ${cs[bad.item_id] || 0}, не можна списати ${bad.qty}`); return; }
     setBusy(true);
     try {
       await whWriteoff(salonKey, article, reason.trim(), good);
@@ -6705,13 +6712,16 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
         </label>
         <div className="wh-lines">
           {lines.map((l, i) => (
-            <SupplyLineRow key={i} items={items} line={l} exclude={new Set(lines.map((x) => x.item_id).filter((_, j) => j !== i))}
+            <SupplyLineRow key={i} items={items.filter((it) => (cs[it.id] || 0) > 0 || it.id === l.item_id)} line={l}
+              avail={l.item_id ? (cs[l.item_id] || 0) : undefined}
+              exclude={new Set(lines.map((x) => x.item_id).filter((_, j) => j !== i))}
               onChange={(ln) => set(i, ln)} onRemove={() => setLines((ls) => ls.filter((_, j) => j !== i))} />
           ))}
           <button className="wh-add" onClick={() => setLines((ls) => [...ls, { item_id: "", qty: "" }])}><Plus size={13} /> Ще позиція</button>
         </div>
+        {overLine && <p className="wh-warn">Списати більше, ніж є на складі, не можна — виправте кількість.</p>}
         <div className="wh-modal-foot"><span>Сума списання</span><b>{suah(total)}</b></div>
-        <button className="btn-primary small" onClick={submit} disabled={busy || !article}>{busy ? "…" : "Створити акт списання"}</button>
+        <button className="btn-primary small" onClick={submit} disabled={busy || !article || !!overLine}>{busy ? "…" : "Створити акт списання"}</button>
       </div>
 
       <h4 className="wh-h4">Складські акти</h4>
@@ -7011,8 +7021,9 @@ function ExpensesModule({ cab }) {
   const [articles, setArticles] = useState(WRITEOFF_ARTICLES_BUILTIN);
   const [items, setItems] = useState({});
   const [openM, setOpenM] = useState(null);
-  const [view, setView] = useState("months"); // months | cmp | articles
+  const [view, setView] = useState("cats"); // cats | cmp | articles
   const months = useMemo(() => recentMonths(12), []);
+  const [ym, setYm] = useState(months[0]);
   const [pa, setPa] = useState(months[1]);
   const [pb, setPb] = useState(months[0]);
 
@@ -7063,14 +7074,19 @@ function ExpensesModule({ cab }) {
     const it = byMonth[ym].items[l.item_id] = byMonth[ym].items[l.item_id] || { qty: 0, sum: 0 };
     it.qty += Number(l.qty); it.sum += v;
   }
-  const monthRows = months.filter((m) => byMonth[m]).map((m) => ({ ym: m, ...byMonth[m] }));
-  const periodItems = (ym) => Object.entries(byMonth[ym]?.items || {})
+  const periodItems = (m) => Object.entries(byMonth[m]?.items || {})
     .map(([id, x]) => ({ name: items[id]?.name || "?", ...x }))
     .sort((a, b) => b.sum - a.sum);
 
+  // категорії витрат за обраний місяць (поки одна — «Хоз-забезпечення»; далі додаватимемо)
+  const categories = [
+    { key: "supply", label: "Хоз-забезпечення", total: byMonth[ym]?.total || 0, items: periodItems(ym) },
+  ];
+  const catTotal = categories.reduce((s, c) => s + c.total, 0);
+
   return (
     <div className="tasks-mod">
-      <div className="tasks-head"><h3 className="ov-h">Витрати по СМ · господарські потреби</h3></div>
+      <div className="tasks-head"><h3 className="ov-h">Витрати по СМ</h3></div>
 
       {scopeSalons.length > 1 && (
         <div className="tm-salon-chips" style={{ marginBottom: 12 }}>
@@ -7079,12 +7095,39 @@ function ExpensesModule({ cab }) {
         </div>
       )}
       <div className="inv-viewtabs" style={{ marginBottom: 12 }}>
-        <button className={view === "months" ? "on" : ""} onClick={() => setView("months")}>По місяцях</button>
-        <button className={view === "articles" ? "on" : ""} onClick={() => setView("articles")}>За статтями</button>
+        <button className={view === "cats" ? "on" : ""} onClick={() => setView("cats")}>Витрати</button>
+        <button className={view === "articles" ? "on" : ""} onClick={() => setView("articles")}>Хоз-забезпечення · за статтями</button>
         <button className={view === "cmp" ? "on" : ""} onClick={() => setView("cmp")}>Порівняти</button>
       </div>
 
-      {view === "articles" ? (
+      {view === "cats" ? (
+        <>
+          <div className="exp-cmp-pick" style={{ marginBottom: 10 }}>
+            <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
+              {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          </div>
+          <div className="exp-months">
+            {categories.map((c) => (
+              <div className="exp-month" key={c.key}>
+                <button className="exp-month-h" onClick={() => setOpenM(openM === c.key ? null : c.key)}>
+                  <span>{c.label}</span>
+                  <b>{suah(c.total)}</b>
+                  <ChevronRight size={15} style={{ transform: openM === c.key ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                </button>
+                {openM === c.key && (
+                  <div className="exp-month-b">
+                    {c.items.length === 0 ? <p className="hint">За цей місяць порожньо.</p> : c.items.map((r) => (
+                      <div className="exp-row" key={r.name}><span>{r.name}</span><span className="mono">{r.qty} · {suahN(r.sum)} ₴</span></div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            <div className="exp-row exp-total"><span>Всього за {monthLabel(ym)}</span><b>{suah(catTotal)}</b></div>
+          </div>
+        </>
+      ) : view === "articles" ? (
         articleRows.length === 0 ? <div className="admin-empty">Списань ще немає.</div> : (
           <div className="exp-months">
             {articleRows.map((a) => (
@@ -7113,41 +7156,20 @@ function ExpensesModule({ cab }) {
             <select className="inv-toolbar-sel" value={pb} onChange={(e) => setPb(e.target.value)}>{months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select>
           </div>
           <div className="exp-cmp-cols">
-            {[pa, pb].map((ym) => (
-              <div className="exp-col" key={ym}>
-                <div className="exp-col-h">{monthLabel(ym)}<b>{suah(byMonth[ym]?.total || 0)}</b></div>
-                {periodItems(ym).length === 0 ? <p className="hint">немає списань</p> : periodItems(ym).map((r) => (
+            {[pa, pb].map((pm) => (
+              <div className="exp-col" key={pm}>
+                <div className="exp-col-h">{monthLabel(pm)}<b>{suah(byMonth[pm]?.total || 0)}</b></div>
+                {periodItems(pm).length === 0 ? <p className="hint">немає списань</p> : periodItems(pm).map((r) => (
                   <div className="exp-row" key={r.name}><span>{r.name}</span><span className="mono">{r.qty} · {suahN(r.sum)} ₴</span></div>
                 ))}
               </div>
             ))}
           </div>
         </div>
-      ) : monthRows.length === 0 ? (
-        <div className="admin-empty">Списань ще немає.</div>
-      ) : (
-        <div className="exp-months">
-          {monthRows.map((m) => (
-            <div className="exp-month" key={m.ym}>
-              <button className="exp-month-h" onClick={() => setOpenM(openM === m.ym ? null : m.ym)}>
-                <span>{monthLabel(m.ym)}</span>
-                <b>{suah(m.total)}</b>
-                <ChevronRight size={15} style={{ transform: openM === m.ym ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
-              </button>
-              {openM === m.ym && (
-                <div className="exp-month-b">
-                  {periodItems(m.ym).map((r) => (
-                    <div className="exp-row" key={r.name}><span>{r.name}</span><span className="mono">{r.qty} · {suahN(r.sum)} ₴</span></div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      ) : null}
       <p className="hint" style={{ marginTop: 14 }}>
-        «По місяцях» — витрати магазину: акти списання зі статтею, що йде у витрати (за замовч. «Витрати на магазин»),
-        за собівартістю на момент списання. «За статтями» — усі списання за всіма статтями. Статтями керує адмін.
+        «Витрати» — по обраному місяцю за категоріями. «Хоз-забезпечення» тягнеться зі складських актів списання
+        (статті, що йдуть у витрати), за собівартістю на момент списання. «За статтями» — усі списання складу за всіма статтями.
       </p>
     </div>
   );
@@ -9087,6 +9109,10 @@ td.sh.sh-plan{font-weight:400;}
 .wh-line-qty{width:72px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;text-align:right;background:var(--input-bg);color:var(--ink);}
 .wh-line-x{background:none;border:none;color:var(--faint);cursor:pointer;padding:4px;flex-shrink:0;}
 .wh-line-x:hover{color:var(--negative);}
+.wh-line-qty.wh-over{border-color:var(--negative);color:var(--negative-bright);background:rgba(160,58,42,.1);}
+.wh-line-avail{font-size:10.5px;font-family:'IBM Plex Mono',monospace;color:var(--faint);flex-shrink:0;min-width:52px;}
+.wh-line-avail.over{color:var(--negative-bright);font-weight:700;}
+.wh-warn{margin:8px 0 0;font-size:12px;color:var(--negative-bright);}
 .wh-add{align-self:flex-start;background:none;border:1px dashed var(--line-strong);border-radius:var(--radius-sm);color:var(--muted);font-size:12px;padding:6px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:inherit;}
 .wh-add:hover{border-color:var(--gold);color:var(--gold);}
 .wh-modal-foot{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid var(--line);font-family:'IBM Plex Mono',monospace;}
@@ -9144,6 +9170,8 @@ td.sh.sh-plan{font-weight:400;}
 .exp-month-h b{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:14px;}
 .exp-month-b{padding:4px 15px 12px;display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--line);}
 .exp-row{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-soft);padding:3px 0;}
+.exp-total{margin-top:6px;padding:10px 15px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);font-size:13px;font-weight:600;color:var(--ink);}
+.exp-total b{font-family:'IBM Plex Mono',monospace;}
 .exp-row .mono{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
 .exp-cmp-pick{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;color:var(--muted);}
 .exp-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
