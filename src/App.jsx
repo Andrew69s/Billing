@@ -5841,8 +5841,9 @@ function Ring({ pct, size = 82, sw = 7, children }) {
   );
 }
 
-function TurnoverRings({ scopeSalons }) {
+function TurnoverRings({ scopeSalons, single: singleProp }) {
   const salons = scopeSalons && scopeSalons.length ? scopeSalons : SALONS;
+  const single = !!singleProp || salons.length === 1;
   const ym = nowYm();
   const today = todayISO();
   const dim = daysInYm(ym);
@@ -5912,11 +5913,14 @@ function TurnoverRings({ scopeSalons }) {
     : mode === "month" ? "з початку місяця"
     : `${fmtDate(rFrom).split(",")[0]} – ${fmtDate(rTo).split(",")[0]}`;
 
-  const territories = [
-    { label: "Територія · місто", area: "місто" },
-    { label: "Територія · область", area: "область" },
-  ].map((t) => {
-    const keys = SALONS.filter((s) => s.area === t.area).map((s) => s.key);
+  const terrDefs = single
+    ? [{ label: salonShortName(salons[0]), keys: [salons[0].key] }]
+    : [
+        { label: "Територія · місто", keys: SALONS.filter((s) => s.area === "місто").map((s) => s.key) },
+        { label: "Територія · область", keys: SALONS.filter((s) => s.area === "область").map((s) => s.key) },
+      ];
+  const territories = terrDefs.map((t) => {
+    const keys = t.keys;
     const done = keys.reduce((a, k) => a + valOf(k), 0);
     const monthPlan = keys.reduce((a, k) => a + planTurnover(planOf(plans, k), withEz), 0);
     const norm = keys.reduce((a, k) => a + normOf(k), 0); // сьогодні: денна норма · місяць: денна×минуло · період: денна×днів
@@ -5940,7 +5944,7 @@ function TurnoverRings({ scopeSalons }) {
   return (
     <div className="rg-mod">
       <div className="rg-head">
-        <h3 className="ov-h">Оборот салонів{withEz ? " · з ЕЗ" : ""}</h3>
+        <h3 className="ov-h">Оборот {single ? "магазину" : "салонів"}{withEz ? " · з ЕЗ" : ""}</h3>
         <div className="rg-head-r">
           <EzToggle />
           <div className="rg-toggle">
@@ -5948,9 +5952,11 @@ function TurnoverRings({ scopeSalons }) {
             <button className={mode === "month" ? "on" : ""} onClick={() => setMode("month")}>Місяць</button>
             <button className={mode === "range" ? "on" : ""} onClick={() => setMode("range")}>Період</button>
           </div>
-          <button className={`rg-refresh ${syncing ? "spin" : ""}`} onClick={runSync} disabled={syncing} title="Підтягнути свіжі цифри з планера">
-            <RefreshCw size={14} /><span>{syncing ? "Оновлення…" : "Оновити"}</span>
-          </button>
+          {!single && (
+            <button className={`rg-refresh ${syncing ? "spin" : ""}`} onClick={runSync} disabled={syncing} title="Підтягнути свіжі цифри з планера">
+              <RefreshCw size={14} /><span>{syncing ? "Оновлення…" : "Оновити"}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -5966,7 +5972,7 @@ function TurnoverRings({ scopeSalons }) {
         <div className="rg-hero-top">
           <div className="rg-hero-meta">
             <div className="rg-hero-val">{fmt(totV)}</div>
-            <div className="rg-hero-lab">оборот мережі · {heroLab}</div>
+            <div className="rg-hero-lab">оборот {single ? "магазину" : "мережі"} · {heroLab}</div>
           </div>
           <div className={`rg-hero-pct ${turnoverBand(totPct)}`}>{Math.round(totPct)}%</div>
         </div>
@@ -5978,7 +5984,7 @@ function TurnoverRings({ scopeSalons }) {
 
       <div className="rg-terr">
         {territories.map((x) => (
-          <div className="rg-terr-card" key={x.area}>
+          <div className="rg-terr-card" key={x.label}>
             <div className="rg-terr-h">{x.label}{x.donePct != null && <span className={`rg-terr-done ${turnoverBand(x.donePct)}`}>{Math.round(x.donePct)}% {mode === "month" ? "плану" : "норми"}</span>}</div>
             {x.donePct != null && (
               <div className="rg-terr-bar">
@@ -5999,18 +6005,68 @@ function TurnoverRings({ scopeSalons }) {
         ))}
       </div>
 
+      {!single && (
+        <div className="rg-grid">
+          {cells.map(({ s, v, pct }) => (
+            <button key={s.key} className="rg-cell" onClick={() => openSalonAnalytics(s.key)} title={`${salonLabel(s)} — відкрити аналітику`}>
+              <Ring pct={pct}>
+                <b>{uahK(v)}</b>
+              </Ring>
+              <span className="rg-nm">{salonShortName(s)}</span>
+              <span className={`rg-pct ${turnoverBand(pct)}`}>{Math.round(pct)}%</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="rg-note">Кільце — оборот проти денної норми (план{withEz ? " з ЕЗ" : ""} ÷ {dim}).{single ? "" : " Клік по салону — його аналітика."}</p>
+    </div>
+  );
+}
+
+/* ---- Некликабельні кільця: оборот усіх магазинів лише за сьогодні ---- */
+function AllSalonsRingsToday({ highlight }) {
+  const [withEz] = useWithEz();
+  const ym = nowYm();
+  const today = todayISO();
+  const dim = daysInYm(ym);
+  const [rows, setRows] = useState(null);
+  const [plans, setPlans] = useState(SALON_MONTH_PLAN);
+  useEffect(() => {
+    const reload = () => {
+      listMetrics(ym).then(setRows).catch(() => setRows([]));
+      listPlans().then(setPlans).catch(() => {});
+    };
+    reload();
+    return subscribeMetrics(reload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ym]);
+  if (rows === null) return null;
+
+  const byToday = {};
+  for (const r of rows) if (r.work_date === today) byToday[r.salon_key] = turnoverVal(effective(r), withEz);
+  const cells = SALONS.map((s) => {
+    const v = byToday[s.key] || 0;
+    const n = planTurnover(planOf(plans, s.key), withEz) / dim;
+    return { s, v, pct: n ? (v / n) * 100 : 0 };
+  }).sort((a, b) => b.v - a.v);
+  const totV = cells.reduce((a, c) => a + c.v, 0);
+
+  return (
+    <div className="rg-mod">
+      <div className="rg-head">
+        <h3 className="ov-h">Усі магазини · сьогодні{withEz ? " · з ЕЗ" : ""}</h3>
+        <span className="rg-allsum">разом {fmt(totV)}</span>
+      </div>
       <div className="rg-grid">
         {cells.map(({ s, v, pct }) => (
-          <button key={s.key} className="rg-cell" onClick={() => openSalonAnalytics(s.key)} title={`${salonLabel(s)} — відкрити аналітику`}>
-            <Ring pct={pct}>
-              <b>{uahK(v)}</b>
-            </Ring>
+          <div key={s.key} className={`rg-cell rg-cell-static ${s.key === highlight ? "rg-cell-me" : ""}`}>
+            <Ring pct={pct}><b>{uahK(v)}</b></Ring>
             <span className="rg-nm">{salonShortName(s)}</span>
             <span className={`rg-pct ${turnoverBand(pct)}`}>{Math.round(pct)}%</span>
-          </button>
+          </div>
         ))}
       </div>
-      <p className="rg-note">Кільце — оборот проти денної норми (план{withEz ? " з ЕЗ" : ""} ÷ {dim}). Клік по салону — його аналітика.</p>
+      <p className="rg-note">Оборот кожного магазину проти денної норми — лише за сьогодні.</p>
     </div>
   );
 }
@@ -7815,33 +7871,14 @@ function TmOverview({ tmKey }) {
 }
 
 function SmOverview({ salon }) {
-  const [s, setS] = useState(null);
-  useEffect(() => {
-    let active = true;
-    const ym = salaryYm();
-    (async () => {
-      const [invoices, employees] = await Promise.all([listInvoices().catch(() => []), listEmployees().catch(() => [])]);
-      const rows = await salonSalaryRows(salon.key, ym, employees);
-      if (!active) return;
-      const invM = invoices.filter((i) => invMonth(i) === ym && i.status !== "cancelled");
-      const pending = rows.filter((r) => r.data.status !== "submitted" && r.data.status !== "corrected").length;
-      setS({
-        payroll: rows.reduce((a, r) => a + r.total, 0), headcount: rows.length, pending,
-        invSum: invM.reduce((a, i) => a + Number(i.amount || 0), 0), invCount: invM.length,
-      });
-    })();
-    return () => { active = false; };
-  }, [salon.key]);
-  if (!s) return <div className="loading">Завантаження…</div>;
   return (
     <div className="ov">
-      <h3 className="ov-h">Огляд</h3>
-      <p className="ov-sub">ЗП за {monthLabel(salaryYm())}</p>
-      <div className="ov-tiles">
-        <div className="ov-tile"><b>{fmt(s.payroll)}</b><span>ФОП магазину за місяць</span></div>
-        <div className="ov-tile"><b>{s.headcount - s.pending} / {s.headcount}</b><span>ЗП подано</span></div>
-        <div className="ov-tile"><b>{invMoney(s.invSum)}</b><span>безнал за місяць · {s.invCount} рах.</span></div>
+      <div className="tm-head">
+        <h3 className="ov-h">Огляд · {salon.city}, {shortAddr(salon.addr)}</h3>
       </div>
+      <TurnoverRings scopeSalons={[salon]} single />
+      <SalesTrendChart scopeSalons={[salon]} />
+      <AllSalonsRingsToday highlight={salon.key} />
     </div>
   );
 }
@@ -9213,6 +9250,12 @@ td.sh.sh-plan{font-weight:400;}
 .rg-cell{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;background:none;border:0;cursor:pointer;padding:6px 2px;font-family:inherit;transition:transform .13s;}
 .rg-cell:hover{transform:translateY(-2px);}
 .rg-cell:hover .rg-nm{color:var(--on-dark);}
+.rg-cell-static{cursor:default;}
+.rg-cell-static:hover{transform:none;}
+.rg-cell-static:hover .rg-nm{color:var(--on-dark-2);}
+.rg-cell-me{background:rgba(190,138,46,.1);border-radius:var(--radius-md);padding:8px 2px;}
+.rg-cell-me .rg-nm{color:var(--gold-bright);font-weight:700;}
+.rg-allsum{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--on-dark-3);}
 .rg-nm{font-size:12px;color:var(--on-dark-2);font-weight:500;text-align:center;line-height:1.2;}
 .rg-pct{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;}
 .rg-note{font-size:.78rem;color:var(--on-dark-3);margin-top:16px;line-height:1.5;}
