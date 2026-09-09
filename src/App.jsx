@@ -6712,7 +6712,7 @@ function SupplyWriteoff({ salonKey, items, stock, onReload }) {
         </label>
         <div className="wh-lines">
           {lines.map((l, i) => (
-            <SupplyLineRow key={i} items={items.filter((it) => (cs[it.id] || 0) > 0 || it.id === l.item_id)} line={l}
+            <SupplyLineRow key={i} items={items} line={l}
               avail={l.item_id ? (cs[l.item_id] || 0) : undefined}
               exclude={new Set(lines.map((x) => x.item_id).filter((_, j) => j !== i))}
               onChange={(ln) => set(i, ln)} onRemove={() => setLines((ls) => ls.filter((_, j) => j !== i))} />
