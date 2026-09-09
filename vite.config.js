@@ -10,9 +10,9 @@ export default defineConfig({
       registerType: "prompt",
       includeAssets: ["favicon-32.png", "favicon-64.png", "apple-touch-icon.png"],
       manifest: {
-        name: "Dnipro-M · Мотивація ТМ",
-        short_name: "Dnipro-M",
-        description: "Мотивація, показники території, склад і готівка мережі салонів Dnipro-M",
+        name: "WorkSpace",
+        short_name: "WorkSpace",
+        description: "Робочий простір мережі салонів Dnipro-M: мотивація, показники, склад, готівка",
         lang: "uk",
         dir: "ltr",
         start_url: "/?utm=pwa",

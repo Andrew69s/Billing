@@ -1,5 +1,12 @@
 import { supabase, rtChannel } from "./supabase.js";
 
+async function myCabKey() {
+  try {
+    const { data } = await supabase.from("cab_map").select("cabinet_key").maybeSingle();
+    return data?.cabinet_key || null;
+  } catch { return null; }
+}
+
 export async function listNotifications(limit = 50) {
   const { data, error } = await supabase
     .from("notifications")
@@ -11,11 +18,24 @@ export async function listNotifications(limit = 50) {
 }
 
 export async function markRead(id) {
-  await supabase.from("notifications").update({ read: true }).eq("id", id);
+  const { error } = await supabase.from("notifications").update({ read: true }).eq("id", id);
+  if (error) throw error;
 }
 
-export async function markAllRead() {
-  await supabase.from("notifications").update({ read: true }).eq("read", false);
+/* Позначити все прочитаним. Явний фільтр по одержувачу + перевірка сесії,
+   щоб не «злітало» через протухлий токен (тоді лічильник повертався). */
+export async function markAllRead(_retried = false) {
+  const key = await myCabKey();
+  let q = supabase.from("notifications").update({ read: true }).eq("read", false);
+  if (key) q = q.eq("recipient", key);
+  const { error } = await q;
+  if (error) {
+    if (!_retried && /jwt|unauthorized|expired|401/i.test(error.message || "")) {
+      await supabase.auth.refreshSession().catch(() => {});
+      return markAllRead(true);
+    }
+    throw error;
+  }
 }
 
 /* створити сповіщення (для авто-подій, які робить клієнт — напр. статуси ЗП) */

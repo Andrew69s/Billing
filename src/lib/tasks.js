@@ -46,6 +46,14 @@ export async function markSeen(tasks, cabKey) {
   );
 }
 
+/* виконавець тисне «Ознайомлений» у модалці нової задачі */
+export async function markTaskAck(task, cabKey) {
+  const { error } = await supabase.from("tasks")
+    .update({ ack: { ...(task.ack || {}), [cabKey]: new Date().toISOString() } })
+    .eq("id", task.id);
+  if (error) throw error;
+}
+
 export function subscribeTasks(onChange) {
   const ch = rtChannel("tasks-changes")
     .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, onChange)

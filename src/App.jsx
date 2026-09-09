@@ -35,7 +35,7 @@ import {
 import {
   loadCalcRefs, tmCond, smCond, planBracketLabel, smCategoryOptions, managerCoefOptions,
 } from "./lib/calcRefs.js";
-import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, markSeen, subscribeTasks } from "./lib/tasks.js";
+import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, markSeen, markTaskAck, subscribeTasks } from "./lib/tasks.js";
 import {
   INVOICE_STATUS, INVOICE_FLOW, nextStatus, deriveVat,
   listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice,
@@ -833,8 +833,26 @@ const navBus = typeof window !== "undefined" ? new EventTarget() : null;
 function goToModule(key) {
   navBus?.dispatchEvent(new CustomEvent("nav", { detail: key }));
 }
-/* link сповіщення → ключ модуля кабінету */
-const NOTIF_LINK_MODULE = { tasks: "tasks", salary: "salary", warehouse: "warehouse", invoices: "invoices", feedback: "feedback" };
+/* шина сповіщень — щоб дзвіночок і бейджі на вкладках синхронно оновлювались */
+const notifBus = typeof window !== "undefined" ? new EventTarget() : null;
+const pokeNotifs = () => notifBus?.dispatchEvent(new Event("c"));
+/* link/kind сповіщення → канонічна ціль (модуль) */
+const NOTIF_LINK_MODULE = {
+  tasks: "tasks", salary: "salary", warehouse: "warehouse", supply: "warehouse",
+  invoices: "invoices", invoice: "invoices", feedback: "feedback", shifts: "shifts", bonus: "bonus",
+};
+/* канонічна ціль → можливі ключі модуля в різних кабінетах */
+const NOTIF_MODULE_KEYS = {
+  invoices: ["bn", "inv"], warehouse: ["warehouse"], tasks: ["tasks"], salary: ["salary"],
+  feedback: ["feedback"], shifts: ["shifts"], bonus: ["bonus"], kpi: ["kpi"],
+};
+const notifTargetOf = (n) => NOTIF_LINK_MODULE[n?.link] || NOTIF_LINK_MODULE[n?.kind] || n?.link || "";
+function moduleKeyForNotif(items, n) {
+  const t = notifTargetOf(n);
+  if (!t) return null;
+  const cands = [t, ...(NOTIF_MODULE_KEYS[t] || [])];
+  return items.find((m) => cands.includes(m.key))?.key || null;
+}
 
 const notifIcon = (kind) => {
   if (kind === "task_new") return <CheckSquare size={15} />;
@@ -844,6 +862,7 @@ const notifIcon = (kind) => {
   if (kind === "birthday") return <Cake size={15} />;
   if (kind === "feedback") return <MessageSquare size={15} />;
   if (kind === "supply") return <Warehouse size={15} />;
+  if (kind === "news") return <Sparkles size={15} />;
   return <Bell size={15} />;
 };
 
@@ -909,7 +928,8 @@ function NotificationCenter({ cabKey }) {
     });
     const onLocal = (e) => showToast(e.detail || {});
     toastBus?.addEventListener("toast", onLocal);
-    return () => { unsub(); toastBus?.removeEventListener("toast", onLocal); };
+    notifBus?.addEventListener("c", reload);
+    return () => { unsub(); toastBus?.removeEventListener("toast", onLocal); notifBus?.removeEventListener("c", reload); };
   }, [cabKey]);
 
   const unread = items.filter((n) => !n.read).length;
@@ -917,8 +937,14 @@ function NotificationCenter({ cabKey }) {
     const next = !open;
     setOpen(next);
     if (next && unread) {
-      await markAllRead().catch(() => {});
-      setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+      try {
+        await markAllRead();
+        setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+        pokeNotifs();
+      } catch (e) {
+        // не позначаємо локально — щоб лічильник лишився правдивим і повторив спробу
+        pushToast({ title: "Не вдалося позначити прочитаним", body: "Спробуйте ще раз" });
+      }
     }
   };
 
@@ -936,7 +962,7 @@ function NotificationCenter({ cabKey }) {
               <div className="notif-panel-head">
                 <span>Сповіщення</span>
                 {items.length > 0 && (
-                  <button className="notif-clear" onClick={async () => { await markAllRead().catch(() => {}); setItems((p) => p.map((n) => ({ ...n, read: true }))); }}>
+                  <button className="notif-clear" onClick={async () => { try { await markAllRead(); setItems((p) => p.map((n) => ({ ...n, read: true }))); pokeNotifs(); } catch { pushToast({ title: "Не вдалося", body: "Спробуйте ще раз" }); } }}>
                     прочитати всі
                   </button>
                 )}
@@ -949,6 +975,7 @@ function NotificationCenter({ cabKey }) {
                   const onClick = async () => {
                     setItems((p) => p.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
                     await markRead(n.id).catch(() => {});
+                    pokeNotifs();
                     if (target) { goToModule(target); setOpen(false); }
                   };
                   return (
@@ -1878,7 +1905,7 @@ function HierarchyHome({ onPick, remembered, onLogout }) {
   return (
     <div className="role-select deck-screen">
       <div className="deck-inner fade-in">
-        <span className="role-eyebrow">Dnipro-M</span>
+        <span className="role-eyebrow">WorkSpace</span>
         <h1>Ваш робочий простір</h1>
         <p>Оберіть кабінет — вхід за логіном і паролем</p>
 
@@ -3304,6 +3331,54 @@ function AdminMaintenance() {
   );
 }
 
+function AdminNews() {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [sel, setSel] = useState(() => new Set(ALL_CAB_KEYS));
+  const [busy, setBusy] = useState(false);
+  const all = sel.size === ALL_CAB_KEYS.length;
+  const toggle = (k) => setSel((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const send = async () => {
+    if (!title.trim() || !sel.size) return;
+    if (!confirm(`Надіслати новину «${title.trim()}» у ${sel.size} кабінет(ів)?`)) return;
+    setBusy(true);
+    try {
+      for (const k of sel) await notify({ recipient: k, kind: "news", title: title.trim(), body: body.trim(), actor: ADMIN_KEY, link: "" });
+      pushToast({ title: "Новину надіслано", body: `${sel.size} кабінет(ів)` });
+      setTitle(""); setBody("");
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy(false);
+  };
+  return (
+    <div className="admin-panel">
+      <h3>Новини</h3>
+      <p className="hint">Прилітає лише у сповіщення (дзвіночок) обраних кабінетів. Модалку не показує.</p>
+      <label className="over-field" style={{ maxWidth: "100%" }}><span>Заголовок</span>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="напр. Оновили розрахунок мотивації" />
+      </label>
+      <label className="over-field" style={{ maxWidth: "100%" }}><span>Текст (необовʼязково)</span>
+        <textarea rows={3} value={body} onChange={(e) => setBody(e.target.value)} />
+      </label>
+      <div className="admin-sub-h" style={{ margin: "16px 0 8px" }}>Кому</div>
+      <label className="admin-cap" style={{ marginBottom: 8 }}>
+        <input type="checkbox" checked={all} onChange={() => setSel(all ? new Set() : new Set(ALL_CAB_KEYS))} />
+        <span>Усі кабінети ({ALL_CAB_KEYS.length})</span>
+      </label>
+      <div className="admin-rights-caps" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 6 }}>
+        {ALL_CAB_KEYS.map((k) => (
+          <label className="admin-cap" key={k}>
+            <input type="checkbox" checked={sel.has(k)} onChange={() => toggle(k)} />
+            <span>{cabName(k)}</span>
+          </label>
+        ))}
+      </div>
+      <button className="btn-primary" style={{ marginTop: 16 }} disabled={busy || !title.trim() || !sel.size} onClick={send}>
+        {busy ? "Надсилаю…" : `Надіслати новину (${sel.size})`}
+      </button>
+    </div>
+  );
+}
+
 function AdminSupplyArticles() {
   const [all, setAll] = useState(null);   // повний список (builtin + custom)
   const [label, setLabel] = useState("");
@@ -3614,6 +3689,7 @@ function AdminPanel() {
     ["fop", "ФОП по СМ"],
     ["modaccess", "Доступ до вкладок"],
     ["articles", "Статті списань"],
+    ["news", "Новини"],
     ["rights", "Права"],
     ["feedback", "Звернення"],
     ["maint", "Технічна перерва"],
@@ -3632,6 +3708,7 @@ function AdminPanel() {
       {tab === "fop" && <AdminFop />}
       {tab === "modaccess" && <AdminModuleAccess />}
       {tab === "articles" && <AdminSupplyArticles />}
+      {tab === "news" && <AdminNews />}
       {tab === "rights" && <AdminRights />}
       {tab === "feedback" && <AdminFeedback />}
       {tab === "maint" && <AdminMaintenance />}
@@ -7381,6 +7458,51 @@ const ADDABLE_MODULES = [
 ];
 const ADDABLE_BY_KEY = Object.fromEntries(ADDABLE_MODULES.map((m) => [m.key, m]));
 
+/* Модалка нової задачі: по центру, ~50% екрана, не зникає, поки виконавець
+   не натисне «Ознайомлений». Показуємо по одній задачі за раз. */
+function TaskAckGate({ cabKey }) {
+  const [queue, setQueue] = useState([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let a = true;
+    const reload = () => listTasks().then((all) => {
+      if (!a) return;
+      setQueue(all.filter((t) => t.assignee === cabKey && t.status !== "done" && !(t.ack || {})[cabKey])
+        .sort((x, y) => (x.priority === y.priority ? (x.created_at < y.created_at ? -1 : 1) : x.priority ? -1 : 1)));
+    }).catch(() => {});
+    reload();
+    const unsub = subscribeTasks(reload);
+    return () => { a = false; unsub(); };
+  }, [cabKey]);
+
+  if (!queue.length) return null;
+  const t = queue[0];
+  const ack = async () => {
+    setBusy(true);
+    try { await markTaskAck(t, cabKey); } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); setBusy(false); return; }
+    setQueue((q) => q.filter((x) => x.id !== t.id));
+    setBusy(false);
+  };
+  return createPortal(
+    <div className="taskgate-overlay">
+      <div className="taskgate">
+        <div className="taskgate-eyebrow">
+          {t.priority && <span className="taskgate-pri">Терміново</span>}
+          Нова задача{queue.length > 1 ? ` · ще ${queue.length - 1}` : ""}
+        </div>
+        <h2 className="taskgate-title">{t.title}</h2>
+        {t.description && <p className="taskgate-desc">{t.description}</p>}
+        <div className="taskgate-meta">
+          <span>від {cabName(t.created_by) || t.created_by}</span>
+          {t.due_at && <span>· термін до {fmtDate(t.due_at)}</span>}
+        </div>
+        <button className="btn-primary taskgate-btn" disabled={busy} onClick={ack}>{busy ? "…" : "Ознайомлений"}</button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const nativeModules = modules.filter(Boolean);
   const nativeKeys = nativeModules.map((m) => m.key);
@@ -7430,7 +7552,14 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const visibleItems = orderedItems.filter((m) => !nav.hidden.includes(m.key));
   const shownItems = editNav ? orderedItems : visibleItems;
 
-  const [activeReq, setActive] = useState(items[0].key);
+  const TAB_KEY = `dnipro-m-tab:${cabKey}`;
+  const [activeReq, setActive] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(TAB_KEY);
+      if (saved && nativeModules.some((m) => m.key === saved)) return saved;
+    } catch { /* ignore */ }
+    return nativeModules[0].key;
+  });
   const [navOpen, setNavOpen] = useState(false); // мобільна шухляда
 
   // клік по сповіщенню → відкрити відповідний модуль
@@ -7446,8 +7575,34 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const active = (!editNav && !visibleItems.some((m) => m.key === activeReq))
     ? (visibleItems[0]?.key ?? activeReq)
     : activeReq;
+  // запамʼятовуємо активну вкладку — щоб оновлення сторінки не викидало на «Огляд»
+  useEffect(() => { try { sessionStorage.setItem(TAB_KEY, active); } catch { /* ignore */ } }, [active, TAB_KEY]);
   const mod = byKey[active] || visibleItems[0] || items[0];
   const pick = (key) => { setActive(key); setNavOpen(false); };
+
+  // --- бейджі: непрочитані сповіщення по вкладках ---
+  const [notifs, setNotifs] = useState([]);
+  useEffect(() => {
+    const reload = () => listNotifications(100).then(setNotifs).catch(() => {});
+    reload();
+    const unsub = subscribeNotifications(cabKey, reload);
+    notifBus?.addEventListener("c", reload);
+    return () => { unsub(); notifBus?.removeEventListener("c", reload); };
+  }, [cabKey]);
+  const badges = {};
+  for (const n of notifs) {
+    if (n.read) continue;
+    const k = moduleKeyForNotif(items, n);
+    if (k) badges[k] = (badges[k] || 0) + 1;
+  }
+  // відкрили вкладку → прочитати її сповіщення (бейдж зникає)
+  useEffect(() => {
+    const mine = notifs.filter((n) => !n.read && moduleKeyForNotif(items, n) === active);
+    if (!mine.length) return;
+    setNotifs((ns) => ns.map((n) => (mine.some((m) => m.id === n.id) ? { ...n, read: true } : n)));
+    Promise.all(mine.map((n) => markRead(n.id).catch(() => {}))).then(pokeNotifs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, notifs]);
 
   // --- групи ---
   const effGroup = (m) => nav.groupOf(m.key) || m.group || NAV_DEFAULT_GROUP;
@@ -7481,6 +7636,9 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
         >
           {m.icon}
           <span className="cab-side-label">{m.label}</span>
+          {!editNav && badges[m.key] > 0 && m.key !== active && (
+            <span className="cab-side-badge">{badges[m.key] > 9 ? "9+" : badges[m.key]}</span>
+          )}
           {!editNav && m.badge != null && <span className={`badge ${m.badgeTone || "badge-warn"}`}>{m.badge}</span>}
           {editNav && <span className="cab-side-eye">{isHidden ? <EyeOff size={15} /> : <Eye size={15} />}</span>}
         </button>
@@ -7508,6 +7666,9 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
               disabled={editNav}
             >
               <span>{g}</span>
+              {isColl && groupItems.reduce((s, m) => s + (badges[m.key] || 0), 0) > 0 && (
+                <span className="cab-side-badge">{Math.min(9, groupItems.reduce((s, m) => s + (badges[m.key] || 0), 0))}{groupItems.reduce((s, m) => s + (badges[m.key] || 0), 0) > 9 ? "+" : ""}</span>
+              )}
               {!editNav && <ChevronRight size={13} className="cab-grp-chev" />}
               {editNav && <span className="cab-grp-count">{groupItems.length}</span>}
             </button>
@@ -7522,6 +7683,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
 
   return (
     <div className="view cab-shell">
+      <TaskAckGate cabKey={cabKey} />
       <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
       <div className={`cab-scrim ${navOpen ? "on" : ""}`} onClick={() => setNavOpen(false)} />
       {banner}
@@ -8407,6 +8569,15 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .notif-body p{margin:2px 0 0;font-size:12.5px;color:var(--ink-soft);}
 .notif-body time{font-size:11px;color:var(--muted);}
 .toast-stack{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:10px;align-items:center;pointer-events:none;width:max-content;max-width:92vw;}
+.taskgate-overlay{position:fixed;inset:0;z-index:10050;display:flex;align-items:center;justify-content:center;background:rgba(6,10,14,.72);backdrop-filter:blur(3px);padding:20px;animation:fadeIn .2s ease both;}
+.taskgate{width:50vw;min-width:min(340px,92vw);max-width:620px;min-height:42vh;display:flex;flex-direction:column;justify-content:center;gap:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 40px 120px -20px rgba(0,0,0,.7);padding:34px 32px;color:var(--ink);text-align:center;}
+.taskgate-eyebrow{display:flex;align-items:center;justify-content:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold-bright);}
+.taskgate-pri{background:rgba(160,58,42,.18);color:var(--negative-bright);padding:2px 8px;border-radius:999px;letter-spacing:.04em;}
+.taskgate-title{font-family:'Fraunces',serif;font-size:1.7rem;font-weight:600;line-height:1.2;color:var(--ink);text-wrap:balance;}
+.taskgate-desc{font-size:14px;line-height:1.55;color:var(--ink-soft);white-space:pre-wrap;max-height:32vh;overflow:auto;}
+.taskgate-meta{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--muted);display:flex;gap:6px;justify-content:center;flex-wrap:wrap;}
+.taskgate-btn{align-self:center;margin-top:6px;padding:12px 32px;font-size:14px;}
+@media(max-width:640px){.taskgate{width:92vw;min-height:46vh;padding:26px 20px;}.taskgate-title{font-size:1.4rem;}}
 .update-banner{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom));z-index:10000;display:flex;align-items:center;gap:12px;padding:10px 12px 10px 16px;border-radius:999px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);box-shadow:0 16px 40px -12px rgba(0,0,0,.5);font-size:13px;font-weight:600;}
 .update-banner button{display:inline-flex;align-items:center;gap:5px;border:none;background:rgba(20,16,8,.16);color:inherit;font:inherit;padding:6px 12px;border-radius:999px;cursor:pointer;}
 .update-banner button:hover{background:rgba(20,16,8,.28);}
@@ -8781,6 +8952,8 @@ td.sh.sh-plan{font-weight:400;}
 .cab-side-item svg{flex-shrink:0;}
 .cab-side-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cab-side-item .badge{margin-left:auto;flex-shrink:0;}
+.cab-side-badge{margin-left:auto;flex-shrink:0;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--negative-bright);color:#1a0f0d;font-size:10.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;}
+.cab-side-item.active .cab-side-badge{background:rgba(20,15,8,.28);color:var(--gold-ink);}
 .cab-side-sep{height:1px;background:var(--line-dark);margin:7px 6px;}
 .cab-content{min-width:0;}
 .cab-content .embedded{animation:none;}
