@@ -806,7 +806,10 @@ function TopBar({ title, onBack, onLogout, cabKey, onMenu }) {
         <button className="topbar-menu" onClick={onMenu} aria-label="Меню"><Menu size={18} /></button>
       )}
       <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> Назад</button>
-      <span className="topbar-title">{title}</span>
+      <button className="topbar-title topbar-title-btn" onClick={openPalette} title="Пошук і швидкі дії (Ctrl/⌘ + K)">
+        <span>{title}</span>
+        <kbd className="topbar-kbd">⌘K</kbd>
+      </button>
       <div className="topbar-right">
         <CalcBusyDot />
         <ThemeToggle />
@@ -833,6 +836,9 @@ const navBus = typeof window !== "undefined" ? new EventTarget() : null;
 function goToModule(key) {
   navBus?.dispatchEvent(new CustomEvent("nav", { detail: key }));
 }
+/* командний рядок (⌘K / Ctrl+K) */
+const paletteBus = typeof window !== "undefined" ? new EventTarget() : null;
+const openPalette = () => paletteBus?.dispatchEvent(new Event("open"));
 /* шина сповіщень — щоб дзвіночок і бейджі на вкладках синхронно оновлювались */
 const notifBus = typeof window !== "undefined" ? new EventTarget() : null;
 const pokeNotifs = () => notifBus?.dispatchEvent(new Event("c"));
@@ -7590,6 +7596,107 @@ function TaskAckGate({ cabKey }) {
   );
 }
 
+/* Командний рядок: пошук по вкладках + салонах + швидкі дії, керування з клавіатури */
+function CommandPalette({ cabKey, items }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState(0);
+  const inputRef = useRef(null);
+
+  const t = cabType(cabKey);
+  const tmKey = t === "tm" ? cabKey : t === "sm" ? salonTmOn(cabKey) : null;
+  const hasKpi = items.some((m) => m.key === "kpi");
+
+  const entries = useMemo(() => {
+    const out = items.map((m) => ({ id: `m-${m.key}`, label: m.label, group: "Вкладка", run: () => goToModule(m.key) }));
+    if (hasKpi) {
+      const salons = t === "tm" ? salonsOfTm(tmKey)
+        : (t === "manager" || t === "accountant" || t === "office") ? SALONS : [];
+      salons.forEach((s) => out.push({
+        id: `s-${s.key}`, label: `${s.city}, ${shortAddr(s.addr)}`, group: "Аналітика салону",
+        run: () => openSalonAnalytics(s.key),
+      }));
+    }
+    const inv = items.find((m) => m.key === "bn" || m.key === "inv");
+    if (inv) out.push({ id: "a-inv", label: "Новий безнальний рахунок", group: "Дія", run: () => goToModule(inv.key) });
+    if (items.some((m) => m.key === "warehouse")) out.push({ id: "a-wh", label: "Склад · прихід / акт списання", group: "Дія", run: () => goToModule("warehouse") });
+    if (items.some((m) => m.key === "tasks")) out.push({ id: "a-task", label: "Нова задача", group: "Дія", run: () => goToModule("tasks") });
+    return out;
+  }, [items, hasKpi, t, tmKey]);
+
+  const norm = (s) => String(s || "").toLowerCase();
+  const results = useMemo(() => {
+    const s = norm(q).trim();
+    if (!s) return entries.slice(0, 9);
+    return entries
+      .map((e) => {
+        const l = norm(e.label);
+        let score = 0;
+        if (l.startsWith(s)) score = 100;
+        else if (l.includes(` ${s}`)) score = 70;
+        else if (l.includes(s)) score = 40;
+        else if (s.split(" ").every((w) => l.includes(w))) score = 20;
+        return { e, score };
+      })
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 9)
+      .map((x) => x.e);
+  }, [q, entries]);
+
+  useEffect(() => {
+    const onKey = (ev) => {
+      if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "K" || ev.key === "л" || ev.key === "Л")) {
+        ev.preventDefault();
+        setOpen((v) => !v);
+      }
+      if (ev.key === "Escape") setOpen(false);
+    };
+    const onOpen = () => setOpen(true);
+    window.addEventListener("keydown", onKey);
+    paletteBus?.addEventListener("open", onOpen);
+    return () => { window.removeEventListener("keydown", onKey); paletteBus?.removeEventListener("open", onOpen); };
+  }, []);
+
+  useEffect(() => {
+    if (open) { setQ(""); setSel(0); setTimeout(() => inputRef.current?.focus(), 30); }
+  }, [open]);
+  useEffect(() => { setSel(0); }, [q]);
+
+  if (!open) return null;
+  const pick = (e) => { if (!e) return; setOpen(false); e.run(); };
+
+  return createPortal(
+    <div className="cmdk-overlay" onMouseDown={() => setOpen(false)}>
+      <div className="cmdk" onMouseDown={(ev) => ev.stopPropagation()}>
+        <input
+          ref={inputRef} className="cmdk-input" value={q} placeholder="Перейти до вкладки, салону або дії…"
+          onChange={(ev) => setQ(ev.target.value)}
+          onKeyDown={(ev) => {
+            if (ev.key === "ArrowDown") { ev.preventDefault(); setSel((i) => Math.min(i + 1, results.length - 1)); }
+            else if (ev.key === "ArrowUp") { ev.preventDefault(); setSel((i) => Math.max(i - 1, 0)); }
+            else if (ev.key === "Enter") { ev.preventDefault(); pick(results[sel]); }
+          }}
+        />
+        <div className="cmdk-list">
+          {results.length === 0 && <div className="cmdk-empty">Нічого не знайдено</div>}
+          {results.map((e, i) => (
+            <button
+              key={e.id} className={`cmdk-row ${i === sel ? "sel" : ""}`}
+              onMouseEnter={() => setSel(i)} onClick={() => pick(e)}
+            >
+              <span className="cmdk-label">{e.label}</span>
+              <span className="cmdk-tag">{e.group}</span>
+            </button>
+          ))}
+        </div>
+        <div className="cmdk-foot"><kbd>↑↓</kbd> вибір · <kbd>↵</kbd> відкрити · <kbd>esc</kbd> закрити</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const nativeModules = modules.filter(Boolean);
   const nativeKeys = nativeModules.map((m) => m.key);
@@ -7784,6 +7891,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   return (
     <div className="view cab-shell">
       <TaskAckGate cabKey={cabKey} />
+      <CommandPalette cabKey={cabKey} items={items} />
       <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
       <div className={`cab-scrim ${navOpen ? "on" : ""}`} onClick={() => setNavOpen(false)} />
       {banner}
@@ -8210,6 +8318,24 @@ const CSS = `
 .topbar-back{background:rgba(var(--sf),.05);border:1px solid var(--line-dark);color:var(--on-dark-2);display:flex;align-items:center;gap:3px;cursor:pointer;font-size:12.5px;padding:7px 12px 7px 8px;border-radius:999px;transition:background .15s var(--ease),color .15s var(--ease);}
 .topbar-back:hover{background:rgba(var(--sf),.1);color:var(--on-dark);}
 .topbar-title{font-family:'Fraunces',serif;font-size:21px;color:var(--on-dark);font-weight:600;letter-spacing:-.01em;}
+.topbar-title-btn{background:none;border:0;cursor:pointer;display:flex;align-items:center;gap:9px;padding:4px 8px 4px 0;font-family:inherit;text-align:left;min-width:0;}
+.topbar-title-btn>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.topbar-title-btn:hover .topbar-kbd{border-color:rgba(var(--sf),.3);color:var(--on-dark-2);}
+.topbar-kbd{flex-shrink:0;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;color:var(--on-dark-3);border:1px solid var(--line-dark);border-radius:6px;padding:2px 6px;}
+@media(max-width:640px){.topbar-kbd{display:none;} .topbar-title-btn{flex:1;}}
+
+.cmdk-overlay{position:fixed;inset:0;z-index:10040;background:rgba(6,10,14,.5);backdrop-filter:blur(2px);display:flex;align-items:flex-start;justify-content:center;padding:12vh 16px 16px;animation:fadeIn .12s ease both;}
+.cmdk{width:min(560px,100%);background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius);box-shadow:0 40px 100px -24px rgba(0,0,0,.6);overflow:hidden;}
+.cmdk-input{width:100%;border:0;background:transparent;color:var(--ink);font-family:'Inter',sans-serif;font-size:16px;padding:16px 18px;border-bottom:1px solid var(--line);outline:none;}
+.cmdk-input::placeholder{color:var(--muted);}
+.cmdk-list{max-height:min(56vh,380px);overflow-y:auto;padding:6px;}
+.cmdk-row{width:100%;display:flex;align-items:center;gap:12px;padding:10px 12px;border:0;background:none;border-radius:9px;cursor:pointer;font-family:'Inter',sans-serif;text-align:left;color:var(--ink-soft);}
+.cmdk-row.sel{background:var(--surface-alt);color:var(--ink);}
+.cmdk-label{flex:1;min-width:0;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cmdk-tag{flex-shrink:0;font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:2px 7px;}
+.cmdk-empty{padding:18px 14px;color:var(--muted);font-size:13px;font-family:'Inter',sans-serif;}
+.cmdk-foot{border-top:1px solid var(--line);padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--faint);display:flex;gap:8px;}
+.cmdk-foot kbd{border:1px solid var(--line);border-radius:4px;padding:1px 5px;}
 
 .month-picker,.month-row{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;}
 .month-picker select,.month-row select{appearance:none;-webkit-appearance:none;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23BE8A2E' d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 12px center;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:9px 32px 9px 13px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);cursor:pointer;box-shadow:var(--sh-1);}
