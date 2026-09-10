@@ -45,8 +45,52 @@ export async function saveBonusDay(salonKey, workDate, patch, by) {
 export function subscribeBonus(onChange) {
   const ch = rtChannel("bonus-moves-rt")
     .on("postgres_changes", { event: "*", schema: "public", table: "bonus_moves" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "bonus_monthly" }, onChange)
     .subscribe();
   return () => { supabase.removeChannel(ch); };
+}
+
+/* ---- зафіксована помісячна аналітика по СМ -------------------------------- */
+const bnum = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
+
+export async function listBonusMonthly(year) {
+  const { data, error } = await supabase
+    .from("bonus_monthly").select("*")
+    .gte("ym", `${year}-01`).lte("ym", `${year}-12`);
+  if (error) throw error;
+  return data || [];
+}
+/* карта { [salonKey]: [12] { net, accrued, writeoff, accrued_bn, frozen } | null } */
+export function bonusMonthlyMap(rows, salonKeys) {
+  const set = new Set(salonKeys);
+  const out = {};
+  for (const k of salonKeys) out[k] = Array(12).fill(null);
+  for (const r of rows || []) {
+    if (!set.has(r.salon_key)) continue;
+    const mi = Number(r.ym.slice(5, 7)) - 1;
+    if (mi >= 0 && mi < 12) out[r.salon_key][mi] = {
+      net: Number(r.net) || 0,
+      accrued: Number(r.accrued) || 0,
+      writeoff: Number(r.writeoff) || 0,
+      accrued_bn: Number(r.accrued_bn) || 0,
+      frozen: r.frozen !== false,
+    };
+  }
+  return out;
+}
+export async function upsertBonusMonthly(rows, by) {
+  if (!rows.length) return;
+  const payload = rows.map((r) => ({
+    salon_key: r.salon_key, ym: r.ym,
+    net: bnum(r.net), accrued: bnum(r.accrued), writeoff: bnum(r.writeoff), accrued_bn: bnum(r.accrued_bn),
+    frozen: r.frozen !== false, updated_by: by || "", updated_at: new Date().toISOString(),
+  }));
+  const { error } = await supabase.from("bonus_monthly").upsert(payload, { onConflict: "salon_key,ym" });
+  if (error) throw error;
+}
+export async function deleteBonusMonthly(salonKey, ym) {
+  const { error } = await supabase.from("bonus_monthly").delete().eq("salon_key", salonKey).eq("ym", ym);
+  if (error) throw error;
 }
 
 /* агрегати за рік: { [salonKey]: { months: number[12], year, sums:{accrued,writeoff,accrued_bn} } } */

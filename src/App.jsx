@@ -63,6 +63,7 @@ import { getMaintenance, setMaintenance, subscribeFlags } from "./lib/appFlags.j
 import { submitFeedback, listFeedback, setFeedbackStatus, resolveFeedback, deleteFeedback, subscribeFeedback } from "./lib/feedback.js";
 import {
   bDaysInYm, bDateOf, bonusNet, listBonusYear, saveBonusDay, subscribeBonus, bonusYearAgg,
+  listBonusMonthly, bonusMonthlyMap, upsertBonusMonthly, deleteBonusMonthly,
 } from "./lib/bonus.js";
 import { pushState, enablePush, disablePush } from "./lib/push.js";
 import {
@@ -7581,15 +7582,19 @@ function BonusModule({ cab }) {
   const year = ym.slice(0, 4);
   const months = useMemo(() => recentMonths(15), []);
   const [rows, setRows] = useState(null);
+  const [mRows, setMRows] = useState([]); // зафіксована помісячна аналітика
   const [pick, setPick] = useState(scopeSalons[0]?.key);
+  const [editCell, setEditCell] = useState(null); // `${salonKey}:${mi}`
+  const [busyFix, setBusyFix] = useState(false);
   const localEdit = useRef(0);
 
   const load = async () => {
     if (Date.now() - localEdit.current < 2500) return;
     setRows(await listBonusYear(year).catch(() => []));
   };
-  useEffect(() => { setRows(null); localEdit.current = 0; load(); /* eslint-disable-next-line */ }, [year]);
-  useEffect(() => subscribeBonus(load), [year]); // eslint-disable-line
+  const loadMonthly = async () => { setMRows(await listBonusMonthly(year).catch(() => [])); };
+  useEffect(() => { setRows(null); localEdit.current = 0; load(); loadMonthly(); /* eslint-disable-next-line */ }, [year]);
+  useEffect(() => subscribeBonus(() => { load(); loadMonthly(); }), [year]); // eslint-disable-line
 
   if (rows === null) return <div className="loading">Завантаження…</div>;
 
@@ -7597,8 +7602,61 @@ function BonusModule({ cab }) {
   for (const r of rows) byDay.set(`${r.salon_key}|${r.work_date}`, r);
   const scopeKeys = scopeSalons.map((s) => s.key);
   const agg = bonusYearAgg(rows, scopeKeys);
+  const mMap = bonusMonthlyMap(mRows, scopeKeys);
   const activeSalon = pick && scopeKeys.includes(pick) ? pick : scopeKeys[0];
   const editable = canEdit(activeSalon);
+  const curYm = nowYm();
+  const canManage = cab.type === "tm" || cab.type === "manager";
+  // показник місяця для салону: зафіксований override → інакше пораховане з днів
+  const cellVal = (k, mi) => {
+    const mo = mMap[k]?.[mi];
+    if (mo) return { v: mo.net, frozen: true };
+    return { v: agg[k]?.months[mi] ?? null, frozen: false };
+  };
+  const monthPast = (mi) => `${year}-${String(mi + 1).padStart(2, "0")}` < curYm;
+
+  const saveCell = async (k, mi, val) => {
+    setEditCell(null);
+    const m = `${year}-${String(mi + 1).padStart(2, "0")}`;
+    localEdit.current = Date.now();
+    try {
+      if (val === "" || val == null) { await deleteBonusMonthly(k, m); }
+      else { await upsertBonusMonthly([{ salon_key: k, ym: m, net: val, frozen: true }], cab.key); }
+      loadMonthly();
+    } catch (e) { pushToast({ title: "Не збережено", body: String(e.message || e) }); }
+  };
+  const freezeMonth = async () => {
+    const mi = Number(ym.slice(5, 7)) - 1;
+    const alreadyFrozen = scopeKeys.some((k) => mMap[k]?.[mi]?.frozen);
+    if (!confirm(`Зафіксувати аналітику за ${monthLabel(ym)} по ${scopeSalons.length} салон(ах)?${alreadyFrozen ? " Раніше зафіксовані значення буде перезаписано пораху­нком із днів." : ""} Далі щоденні зміни не змінюватимуть цей місяць, доки не перефіксуєте.`)) return;
+    setBusyFix(true);
+    try {
+      const payload = scopeSalons.map((s) => {
+        let acc = 0, wr = 0, bn = 0;
+        for (let d = 1; d <= bDaysInYm(ym); d++) {
+          const r = byDay.get(`${s.key}|${bDateOf(ym, d)}`);
+          if (!r) continue;
+          acc += Number(r.accrued) || 0; wr += Number(r.writeoff) || 0; bn += Number(r.accrued_bn) || 0;
+        }
+        return { salon_key: s.key, ym, accrued: acc, writeoff: wr, accrued_bn: bn, net: acc + bn - wr, frozen: true };
+      });
+      await upsertBonusMonthly(payload, cab.key);
+      pushToast({ title: "Місяць зафіксовано", body: monthLabel(ym) });
+      loadMonthly();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusyFix(false);
+  };
+  const unfreezeMonth = async () => {
+    const mi = Number(ym.slice(5, 7)) - 1;
+    if (!confirm(`Розфіксувати ${monthLabel(ym)}? Показники знову рахуватимуться з щоденних записів.`)) return;
+    setBusyFix(true);
+    try {
+      for (const s of scopeSalons) if (mMap[s.key]?.[mi]) await deleteBonusMonthly(s.key, ym);
+      pushToast({ title: "Розфіксовано", body: monthLabel(ym) });
+      loadMonthly();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusyFix(false);
+  };
 
   const dim = bDaysInYm(ym);
   const days = Array.from({ length: dim }, (_, i) => i + 1);
@@ -7635,6 +7693,18 @@ function BonusModule({ cab }) {
         <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
           {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
         </select>
+        {canManage && scopeSalons.length > 1 && (() => {
+          const mi = Number(ym.slice(5, 7)) - 1;
+          const frozenNow = scopeKeys.some((k) => mMap[k]?.[mi]?.frozen);
+          return (
+            <div className="bn-fix-btns">
+              <button className="btn-secondary small" disabled={busyFix} onClick={freezeMonth}>
+                {frozenNow ? "Перефіксувати" : "Зафіксувати"} {MONTH_NAMES[mi].toLowerCase()}
+              </button>
+              {frozenNow && <button className="btn-secondary small" disabled={busyFix} onClick={unfreezeMonth}>Розфіксувати</button>}
+            </div>
+          );
+        })()}
       </div>
 
       {scopeSalons.length > 1 && (
@@ -7645,18 +7715,51 @@ function BonusModule({ cab }) {
             </thead>
             <tbody>
               {scopeSalons.map((s) => {
-                const a = agg[s.key];
+                let yr = 0; let anyYr = false;
                 return (
                   <tr key={s.key} className={s.key === activeSalon ? "on" : ""} onClick={() => setPick(s.key)}>
                     <td className="bn-roll-nm">{s.city === "Львів" ? shortAddr(s.addr).split(",")[0] : s.city}</td>
-                    {a.months.map((v, i) => (
-                      <td key={i} className={`num ${v == null ? "muted" : v < 0 ? "neg" : "pos"}`}>{v == null ? "·" : bnum(v)}</td>
-                    ))}
-                    <td className={`num bn-roll-yr ${a.year < 0 ? "neg" : "pos"}`}>{bnum(a.year)}</td>
+                    {MONTH_SHORT.map((_, i) => {
+                      const { v, frozen } = cellVal(s.key, i);
+                      if (v != null) { yr += v; anyYr = true; }
+                      const key = `${s.key}:${i}`;
+                      const canEditThis = canManage && canEdit(s.key) && (frozen || monthPast(i));
+                      if (editCell === key) {
+                        return (
+                          <td key={i} className="num bn-edit" onClick={(e) => e.stopPropagation()}>
+                            <NumInput className="bn-edit-in" allowEmpty value={v ?? ""} onChange={(nv) => saveCell(s.key, i, nv)} />
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={i}
+                          className={`num ${v == null ? "muted" : v < 0 ? "neg" : "pos"} ${frozen ? "bn-frozen" : ""} ${canEditThis ? "bn-cell-edit" : ""}`}
+                          title={frozen ? "зафіксовано" : ""}
+                          onClick={canEditThis ? (e) => { e.stopPropagation(); setEditCell(key); } : undefined}>
+                          {v == null ? "·" : bnum(v)}
+                        </td>
+                      );
+                    })}
+                    <td className={`num bn-roll-yr ${!anyYr ? "muted" : yr < 0 ? "neg" : "pos"}`}>{anyYr ? bnum(yr) : "·"}</td>
                   </tr>
                 );
               })}
             </tbody>
+            <tfoot>
+              <tr className="bn-roll-terr">
+                <td className="bn-roll-nm">Загально по території</td>
+                {MONTH_SHORT.map((_, i) => {
+                  let sum = 0; let any = false;
+                  for (const k of scopeKeys) { const { v } = cellVal(k, i); if (v != null) { sum += v; any = true; } }
+                  return <td key={i} className={`num ${!any ? "muted" : sum < 0 ? "neg" : "pos"}`}>{any ? bnum(sum) : "·"}</td>;
+                })}
+                {(() => {
+                  let sum = 0; let any = false;
+                  for (const k of scopeKeys) for (let i = 0; i < 12; i++) { const { v } = cellVal(k, i); if (v != null) { sum += v; any = true; } }
+                  return <td className={`num bn-roll-yr ${!any ? "muted" : sum < 0 ? "neg" : "pos"}`}>{any ? bnum(sum) : "·"}</td>;
+                })()}
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
@@ -7677,6 +7780,12 @@ function BonusModule({ cab }) {
         <div className="bn-sum-cell"><span>Нараховано БН</span><b>{bnum(mTot.accrued_bn)}</b></div>
         <div className={`bn-sum-cell hero ${mNet < 0 ? "neg" : "pos"}`}><span>Баланс за {monthWord}</span><b>{bnum(mNet)}</b></div>
       </div>
+      {(() => {
+        const fs = mMap[activeSalon]?.[Number(ym.slice(5, 7)) - 1];
+        return fs ? (
+          <p className="hint bn-frozen-note">🔒 Місяць зафіксовано — у помісячній аналітиці по цьому салону стоїть <b>{bnum(fs.net)}</b>. Щоденні зміни нижче не змінюють цей показник, доки ТМ не перефіксує місяць.</p>
+        ) : null;
+      })()}
 
       <div className="tm-grid-wrap">
         <table className="tm-grid bn-grid">
@@ -10326,6 +10435,14 @@ td.sh.sh-plan{font-weight:400;}
 .bn-roll td.pos{color:var(--positive);}
 .bn-roll td.muted{color:var(--faint);}
 .bn-roll td.bn-roll-yr{font-weight:700;border-left:2px solid var(--line-strong);}
+.bn-roll tfoot td{border-top:2px solid var(--line-strong);border-bottom:none;font-weight:700;background:var(--surface-alt);}
+.bn-roll tfoot .bn-roll-nm{font-family:inherit;}
+.bn-roll td.bn-frozen{box-shadow:inset 0 0 0 1px rgba(220,169,74,.4);border-radius:4px;}
+.bn-roll td.bn-cell-edit{cursor:text;}
+.bn-roll td.bn-cell-edit:hover{background:rgba(220,169,74,.12);}
+.bn-edit-in{width:58px;background:var(--surface);border:1px solid var(--gold);border-radius:4px;padding:3px 4px;font-family:'IBM Plex Mono',monospace;font-size:11px;text-align:right;}
+.bn-fix-btns{display:flex;gap:6px;flex-wrap:wrap;}
+.bn-frozen-note{margin:-6px 0 14px;background:rgba(220,169,74,.08);border:1px solid rgba(220,169,74,.28);border-radius:8px;padding:8px 11px;}
 .bn-sum{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;}
 .bn-sum-cell{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:11px 13px;}
 .bn-sum-cell span{display:block;font-size:11px;color:var(--muted);}
