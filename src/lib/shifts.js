@@ -78,6 +78,60 @@ export function subscribeShifts(onChange) {
   return () => { supabase.removeChannel(ch); };
 }
 
+/* ---- Замок планування ------------------------------------------------------
+   План місяця редагується до 4 числа наступного місяця (00:00 за Києвом ≈
+   збіг із серверним замком). Далі — лише факт, і лише за дозволом ТМ. */
+export function planDeadline(ym) {
+  const [y, m] = ym.split("-").map(Number); // m — 1-based ⇒ new Date(y, m, …) = наступний місяць
+  return new Date(y, m, 4, 0, 0, 0, 0);
+}
+export const planLocked = (ym) => Date.now() >= planDeadline(ym).getTime();
+
+export async function listShiftEditRequests(ym) {
+  let q = supabase.from("shift_edit_requests").select("*").order("requested_at", { ascending: false });
+  if (ym) q = q.eq("ym", ym);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+export async function requestShiftFactEdit(salonKey, ym, note, by) {
+  const { error } = await supabase.from("shift_edit_requests")
+    .insert({ salon_key: salonKey, ym, note: note || "", requested_by: by || "" });
+  if (error) throw error;
+}
+export async function resolveShiftFactEdit(id, approve, by) {
+  const { error } = await supabase.from("shift_edit_requests")
+    .update({ status: approve ? "approved" : "declined", resolved_by: by || "", resolved_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+/* активний дозвіл: схвалений сьогодні запит для цього салону+місяця */
+export function factGrantActive(reqs, salonKey, ym) {
+  const t = todayISO();
+  return (reqs || []).some((r) => r.salon_key === salonKey && r.ym === ym
+    && r.status === "approved" && String(r.resolved_at || "").slice(0, 10) === t);
+}
+export function pendingFactRequest(reqs, salonKey, ym) {
+  return (reqs || []).find((r) => r.salon_key === salonKey && r.ym === ym && r.status === "pending") || null;
+}
+export function subscribeShiftEditRequests(onChange) {
+  const ch = rtChannel("shift-edit-req")
+    .on("postgres_changes", { event: "*", schema: "public", table: "shift_edit_requests" }, onChange)
+    .subscribe();
+  return () => { supabase.removeChannel(ch); };
+}
+/* розбіжності план/факт за минулі дні (для «Потребує уваги» ТМ) */
+export function planFactGaps(shifts, salonKeys) {
+  const today = todayISO();
+  const set = salonKeys ? new Set(salonKeys) : null;
+  return (shifts || []).filter((s) => {
+    if (set && !set.has(s.salon_key)) return false;
+    if (s.work_date >= today) return false;
+    if (s.state === "off" || s.state === "closed" || s.state === "absent") return false;
+    return (s.plan_h != null) !== (s.fact_h != null);
+  });
+}
+
 /* підсумок відпрацьованого за місяць по співробітнику (для ЗП) */
 export function monthTally(shifts, employeeId, homeSalonKey) {
   const mine = shifts.filter((s) => s.employee_id === employeeId);

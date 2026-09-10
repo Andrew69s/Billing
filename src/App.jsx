@@ -49,6 +49,8 @@ import {
   ABSENCE_REASONS, daysInMonth, dayKey, todayISO,
   listShifts, upsertShift, upsertShiftsBatch, deleteShift,
   getStoreDay, setStoreDay, listStoreDays, subscribeShifts, monthTally,
+  planLocked, planDeadline, listShiftEditRequests, requestShiftFactEdit, resolveShiftFactEdit,
+  factGrantActive, pendingFactRequest, subscribeShiftEditRequests, planFactGaps,
 } from "./lib/shifts.js";
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
@@ -5009,6 +5011,13 @@ function useShiftMonth(ym) {
   return [shifts, storeDays, reload];
 }
 
+const shiftErr = (e) => {
+  const m = String(e?.message || e || "");
+  if (m.includes("plan_locked")) return "Планування за цей місяць замкнено — після 3 числа наступного місяця його не змінити.";
+  if (m.includes("fact_locked")) return "Факт за цей місяць замкнено. Магазин може подати запит на коригування, ТМ підтверджує.";
+  return m || "Помилка";
+};
+
 function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
   return createPortal(
     <>
@@ -5038,10 +5047,18 @@ function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
   );
 }
 
-function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey }) {
+function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, locked = false, grantFor }) {
   const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
-  const [editMode, setEditMode] = useState("plan");
+  const [editMode, setEditMode] = useState(locked ? "fact" : "plan");
+  useEffect(() => { if (locked) setEditMode("fact"); }, [locked]);
   const canEdit = salons.some((s) => canEditSalon(s.key));
+  // чи можна редагувати цей режим для цього салону з урахуванням замка планування
+  const modeAllowed = (k, mode) => {
+    if (!canEditSalon(k)) return false;
+    if (!locked) return true;
+    if (mode === "plan") return false;                 // план замкнено назавжди
+    return grantFor ? grantFor(k) : false;             // факт — лише за дозволом ТМ
+  };
   const scrollRef = React.useRef(null);
   const nDays = daysInMonth(ym);
   const today = todayISO();
@@ -5064,7 +5081,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
   }, [storeDays]);
 
   const openMenu = (e, empId, day, homeSalon) => {
-    if (!canEditSalon(homeSalon)) return;
+    if (!modeAllowed(homeSalon, editMode)) return;
     const r = e.currentTarget.getBoundingClientRect();
     setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.min(r.left, window.innerWidth - 210) } });
   };
@@ -5074,12 +5091,19 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
     setMenu(null);
     const cur = shiftMap[`${empId}:${wd}`] || {};
     let row = { employee_id: empId, work_date: wd, salon_key: cur.salon_key || homeSalon, plan_h: cur.plan_h ?? null, fact_h: cur.fact_h ?? null, state: "work", absence_reason: cur.absence_reason || "", is_senior: cur.is_senior || false, updated_by: cabKey };
-    if (action.type === "clear") { await deleteShift(empId, wd).catch(() => {}); onChange(); return; }
+    const factOnly = editMode === "fact"; // у режимі «Факт» план не чіпаємо (він може бути замкнений)
+    if (action.type === "clear") {
+      if (factOnly && cur.plan_h != null) {
+        row.fact_h = null; row.state = "work"; row.absence_reason = "";
+        await upsertShift(row).catch((e) => alert(shiftErr(e))); onChange(); return;
+      }
+      await deleteShift(empId, wd).catch(() => {}); onChange(); return;
+    }
     if (action.type === "worked") {
       if (editMode === "plan") row.plan_h = 1; else row.fact_h = 1;
       row.state = "work"; row.absence_reason = "";
     } else if (action.type === "off") {
-      row.state = "off"; row.plan_h = null; row.fact_h = null;
+      row.state = "off"; row.fact_h = null; if (!factOnly) row.plan_h = null;
     } else if (action.type === "absent") {
       const reason = prompt("Причина (відпустка / лікарняний / відгул / прогул / навчання):", "відпустка") || "";
       const key = Object.entries(ABSENCE_REASONS).find(([, v]) => v.toLowerCase() === reason.trim().toLowerCase())?.[0] || "vacation";
@@ -5089,7 +5113,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
       if (editMode === "plan") row.plan_h = 1; else row.fact_h = 1;
       row.state = "work";
     }
-    await upsertShift(row).catch((e) => alert(e.message || e));
+    await upsertShift(row).catch((e) => alert(shiftErr(e)));
     onChange();
   };
 
@@ -5118,7 +5142,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
       {canEdit && (
         <div className="shift-modebar">
           <span>Клік по клітинці редагує:</span>
-          <button className={editMode === "plan" ? "on" : ""} onClick={() => setEditMode("plan")}>План</button>
+          <button className={editMode === "plan" ? "on" : ""} disabled={locked} title={locked ? "Планування за цей місяць замкнено" : ""} onClick={() => !locked && setEditMode("plan")}>План{locked ? " 🔒" : ""}</button>
           <button className={editMode === "fact" ? "on" : ""} onClick={() => setEditMode("fact")}>Факт</button>
           {salons.length > 1 && !salons.every((s) => canEditSalon(s.key)) && <span className="muted" style={{ marginLeft: 6 }}>· редагувати можна лише свої магазини</span>}
         </div>
@@ -5151,7 +5175,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
                         let s = shiftMap[`${e.id}:${wd}`];
                         if (!s && closedDays[`${e.salon_key}:${wd}`]) s = { state: "closed" };
                         const { txt, cls } = cellContent(s, e.salon_key);
-                        const edit = canEditSalon(e.salon_key);
+                        const edit = modeAllowed(e.salon_key, editMode);
                         return (
                           <td key={d}
                             className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
@@ -5192,9 +5216,13 @@ function ShiftScheduleModule({ cab }) {
   const [ym, setYm] = useState(nowYm());
   const [employees, setEmployees] = useState(null);
   const [shifts, storeDays, reload] = useShiftMonth(ym);
+  const [reqs, setReqs] = useState([]);
   const months = useMemo(() => recentMonths(12), []);
+  const locked = planLocked(ym);
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
+  const reloadReqs = React.useCallback(() => { listShiftEditRequests(ym).then(setReqs).catch(() => setReqs([])); }, [ym]);
+  useEffect(() => { reloadReqs(); return subscribeShiftEditRequests(reloadReqs); }, [reloadReqs]);
 
   // графік показуємо по всіх 8 магазинах усім (ТМ, керівник, СМ) — для підмін і координації
   const salons = SALONS;
@@ -5204,6 +5232,7 @@ function ShiftScheduleModule({ cab }) {
     if (cab.type === "tm") { const my = cab.tmKey || cab.key; return (k) => salonTmOn(k) === my; }
     return () => false;
   }, [cab]);
+  const grantFor = React.useCallback((k) => factGrantActive(reqs, k, ym), [reqs, ym]);
 
   if (employees === null || shifts === null) return <div className="loading">Завантаження…</div>;
 
@@ -5230,10 +5259,105 @@ function ShiftScheduleModule({ cab }) {
         </div>
       )}
 
+      {locked && (
+        <ShiftLockPanel
+          cab={cab} ym={ym} salons={salons} shifts={shifts} employees={employees}
+          reqs={reqs} canEditSalon={canEditSalon} onChange={reloadReqs}
+        />
+      )}
+
       <ShiftGrid
         ym={ym} salons={salons} employees={employees} shifts={shifts} storeDays={storeDays}
         canEditSalon={canEditSalon} onChange={reload} cabKey={cab.key}
+        locked={locked} grantFor={grantFor}
       />
+    </div>
+  );
+}
+
+/* Панель замка планування: статус місяця + запити на коригування факту */
+function ShiftLockPanel({ cab, ym, salons, shifts, employees, reqs, canEditSalon, onChange }) {
+  const [busy, setBusy] = useState(false);
+  const mySalons = salons.filter((s) => canEditSalon(s.key));
+  const isSm = cab.type === "sm";
+  const canApprove = cab.type === "tm" || cab.type === "manager";
+  const pending = reqs.filter((r) => r.status === "pending" && mySalons.some((s) => s.key === r.salon_key));
+
+  const empName = (id) => employees.find((e) => e.id === id)?.full_name || "";
+  const gapsBySalon = (k) => {
+    const set = new Date().toISOString().slice(0, 10);
+    return shifts.filter((s) => s.salon_key === k && s.work_date < set
+      && !["off", "closed", "absent"].includes(s.state)
+      && ((s.plan_h != null) !== (s.fact_h != null)));
+  };
+
+  const ask = async (k) => {
+    const note = prompt(`Запит на коригування факту за ${monthLabel(ym)} — коротко опишіть причину:`, "") ;
+    if (note === null) return;
+    setBusy(true);
+    try {
+      await requestShiftFactEdit(k, ym, note.trim(), cab.key);
+      const tm = salonTmOn(k);
+      for (const r of new Set([tm, ADMIN_KEY].filter(Boolean))) {
+        await notify({ recipient: r, kind: "shifts", title: "Запит на коригування графіку",
+          body: `${salonByKey(k)?.city || k} · ${monthLabel(ym)}${note.trim() ? ` — ${note.trim()}` : ""}`, actor: cab.key, link: "shifts" }).catch(() => {});
+      }
+      pushToast({ title: "Запит надіслано", body: "Очікуйте підтвердження ТМ" });
+      onChange();
+    } catch (e) { pushToast({ title: "Не вдалося", body: shiftErr(e) }); }
+    setBusy(false);
+  };
+  const resolve = async (r, approve) => {
+    setBusy(true);
+    try {
+      await resolveShiftFactEdit(r.id, approve, cab.key);
+      await notify({ recipient: r.salon_key, kind: "shifts",
+        title: approve ? "Дозволено коригувати факт" : "Запит на коригування відхилено",
+        body: approve ? `${monthLabel(r.ym)} — до кінця сьогоднішнього дня` : monthLabel(r.ym),
+        actor: cab.key, link: "shifts" }).catch(() => {});
+      pushToast({ title: approve ? "Підтверджено" : "Відхилено", body: salonByKey(r.salon_key)?.city || r.salon_key });
+      onChange();
+    } catch (e) { pushToast({ title: "Не вдалося", body: shiftErr(e) }); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="shift-lock">
+      <div className="shift-lock-h">🔒 Планування за {monthLabel(ym)} замкнено</div>
+      <p className="hint">Після 3 числа наступного місяця план не змінюється. Вносити можна лише факт.</p>
+
+      {isSm && mySalons.map((s) => {
+        const grant = factGrantActive(reqs, s.key, ym);
+        const pend = pendingFactRequest(reqs, s.key, ym);
+        const gaps = gapsBySalon(s.key);
+        return (
+          <div className="shift-lock-row" key={s.key}>
+            <div className="sl-salon">{salonLabel(s)}</div>
+            {grant
+              ? <span className="sl-state ok">✅ ТМ дозволив коригувати факт — до кінця сьогоднішнього дня</span>
+              : pend
+                ? <span className="sl-state wait">⏳ Запит надіслано {fmtDeadline(pend.requested_at.slice(0, 10))} — очікує ТМ</span>
+                : <button className="btn-secondary" disabled={busy} onClick={() => ask(s.key)}>Запросити коригування факту</button>}
+            {gaps.length > 0 && <span className="sl-gaps">розбіжностей план/факт: <b>{gaps.length}</b></span>}
+          </div>
+        );
+      })}
+
+      {canApprove && (
+        <div className="shift-lock-reqs">
+          <div className="sl-sub">Запити на коригування факту{pending.length ? ` · ${pending.length}` : ""}</div>
+          {pending.length === 0 && <p className="hint">немає відкритих запитів</p>}
+          {pending.map((r) => (
+            <div className="shift-lock-row" key={r.id}>
+              <div className="sl-salon">{salonByKey(r.salon_key)?.city || r.salon_key} · {monthLabel(r.ym)}</div>
+              {r.note && <span className="sl-note">«{r.note}»</span>}
+              <span className="hint">від {fmtDeadline(r.requested_at.slice(0, 10))}</span>
+              <button className="btn-primary" disabled={busy} onClick={() => resolve(r, true)}>Дозволити на сьогодні</button>
+              <button className="btn-secondary" disabled={busy} onClick={() => resolve(r, false)}>Відхилити</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -6284,6 +6408,24 @@ function AttentionQueue({ cab }) {
         const open = tasks.filter((t) => t.assignee === cab.key && t.status === "open");
         if (open.length) out.push({ tone: "info", n: open.length, label: open.length === 1 ? "відкрита задача" : "відкриті задачі", go: "tasks" });
       } catch { /* ignore */ }
+      if (cab.type === "tm" || cab.type === "manager") {
+        try {
+          const my = cab.tmKey || cab.key;
+          const mine = (cab.type === "manager" ? SALONS : SALONS.filter((s) => salonTmOn(s.key) === my)).map((s) => s.key);
+          const cur = nowYm();
+          const [yy, mm] = cur.split("-").map(Number);
+          const prev = mm === 1 ? `${yy - 1}-12` : `${yy}-${String(mm - 1).padStart(2, "0")}`;
+          const [a1, a2] = await Promise.all([listShifts(prev), listShifts(cur)]);
+          const gaps = planFactGaps([...a1, ...a2], mine);
+          if (gaps.length) {
+            const bySalon = [...new Set(gaps.map((g) => g.salon_key))].map((k) => salonByKey(k)?.city).filter(Boolean);
+            out.push({ tone: "warn", n: gaps.length, label: "розбіжностей план/факт у графіку", sub: bySalon.slice(0, 4).join(", "), go: "shifts" });
+          }
+          const reqs = await listShiftEditRequests();
+          const pend = reqs.filter((r) => r.status === "pending" && mine.includes(r.salon_key));
+          if (pend.length) out.push({ tone: "info", n: pend.length, label: "запитів на коригування графіку", sub: [...new Set(pend.map((r) => salonByKey(r.salon_key)?.city))].filter(Boolean).join(", "), go: "shifts" });
+        } catch { /* ignore */ }
+      }
       if (a) setRows(out);
     })();
     return () => { a = false; };
@@ -9055,6 +9197,19 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .shift-modebar{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--on-dark-2);margin-bottom:10px;}
 .shift-modebar button{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:5px 13px;font-size:11.5px;font-family:inherit;cursor:pointer;}
 .shift-modebar button.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.shift-modebar button:disabled{opacity:.45;cursor:not-allowed;}
+.shift-lock{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:12px;}
+.shift-lock-h{font-weight:700;font-size:13px;color:var(--gold-bright);}
+.shift-lock .hint{margin:3px 0 0;}
+.shift-lock-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 0;border-top:1px solid var(--line);margin-top:8px;}
+.shift-lock-row .sl-salon{font-weight:600;font-size:12.5px;min-width:170px;}
+.shift-lock-row .sl-state.ok{color:var(--positive);font-size:12px;}
+.shift-lock-row .sl-state.wait{color:var(--gold-bright);font-size:12px;}
+.shift-lock-row .sl-gaps{color:var(--negative-bright);font-size:11.5px;}
+.shift-lock-row .sl-note{font-style:italic;color:var(--on-dark-2);font-size:12px;}
+.shift-lock-row button{padding:5px 12px;font-size:11.5px;}
+.shift-lock-reqs{margin-top:10px;}
+.shift-lock-reqs .sl-sub{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);}
 .grid-scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
 table.sched{border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;}
 table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
