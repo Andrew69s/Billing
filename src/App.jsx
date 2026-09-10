@@ -5223,8 +5223,69 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
   );
 }
 
+/* ТМ-блок: усі невчасні відкриття магазинів у розрізі місяця */
+function StoreOpeningLog({ cab }) {
+  const [ym, setYm] = useState(nowYm());
+  const [days, setDays] = useState(null);
+  const months = useMemo(() => recentMonths(12), []);
+  const my = cab.tmKey || cab.key;
+  const scope = useMemo(() => (
+    cab.type === "tm" ? SALONS.filter((s) => salonTmOn(s.key) === my) : SALONS
+  ), [cab.type, my]);
+
+  useEffect(() => {
+    setDays(null);
+    listStoreDays(ym).then(setDays).catch(() => setDays([]));
+    return subscribeShifts(() => listStoreDays(ym).then(setDays).catch(() => {}));
+  }, [ym]);
+
+  if (days === null) return <div className="loading">Завантаження…</div>;
+  const scopeKeys = new Set(scope.map((s) => s.key));
+  const late = days
+    .filter((d) => d.open_on_time === false && scopeKeys.has(d.salon_key))
+    .sort((a, b) => (b.work_date || "").localeCompare(a.work_date || ""));
+  const bySalon = {};
+  late.forEach((d) => { bySalon[d.salon_key] = (bySalon[d.salon_key] || 0) + 1; });
+
+  return (
+    <div>
+      <div className="tasks-head" style={{ marginBottom: 10 }}>
+        <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+        <span className="hint">{late.length} невчасн{late.length === 1 ? "е відкриття" : "их відкриттів"} за {monthLabel(ym)}</span>
+      </div>
+      {Object.keys(bySalon).length > 0 && (
+        <div className="open-tally">
+          {scope.filter((s) => bySalon[s.key]).map((s) => (
+            <span key={s.key} className="open-tally-chip">{s.city}, {shortAddr(s.addr)} — <b>{bySalon[s.key]}</b></span>
+          ))}
+        </div>
+      )}
+      {late.length === 0
+        ? <p className="hint">За цей місяць невчасних відкриттів немає.</p>
+        : (
+          <table className="open-log">
+            <thead><tr><th>Дата</th><th>Магазин</th><th>Відкрито</th><th>Причина</th></tr></thead>
+            <tbody>
+              {late.map((d) => (
+                <tr key={`${d.salon_key}:${d.work_date}`}>
+                  <td>{fmtDeadline(d.work_date)}</td>
+                  <td>{salonByKey(d.salon_key)?.city}, {shortAddr(salonByKey(d.salon_key)?.addr || "")}</td>
+                  <td className="open-log-t">{d.open_actual_time || "—"}</td>
+                  <td>{d.late_reason || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+    </div>
+  );
+}
+
 function ShiftScheduleModule({ cab }) {
   const [ym, setYm] = useState(nowYm());
+  const [view, setView] = useState("grid");
   const [employees, setEmployees] = useState(null);
   const [shifts, storeDays, reload] = useShiftMonth(ym);
   const [reqs, setReqs] = useState([]);
@@ -5250,16 +5311,28 @@ function ShiftScheduleModule({ cab }) {
   const today = todayISO();
   const onShiftToday = shifts.filter((s) => s.work_date === today && s.state === "work" && s.fact_h != null);
 
+  const showOpenings = cab.type === "tm" || cab.type === "manager";
+
   return (
     <div className="tasks-mod">
       <div className="tasks-head">
         <h3 className="ov-h">Графік змін</h3>
-        <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
-          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
-        </select>
+        {showOpenings && (
+          <div className="trn-tabs">
+            <button className={view === "grid" ? "on" : ""} onClick={() => setView("grid")}>Зміни</button>
+            <button className={view === "openings" ? "on" : ""} onClick={() => setView("openings")}>Відкриття магазинів</button>
+          </div>
+        )}
+        {view === "grid" && (
+          <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
+            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          </select>
+        )}
       </div>
 
-      {ym === nowYm() && (
+      {view === "openings" && <StoreOpeningLog cab={cab} />}
+
+      {view === "grid" && ym === nowYm() && (
         <div className="tasks-dash">
           {onShiftToday.length === 0
             ? <span className="tasks-dash-alert">Сьогодні ще ніхто не відмітив зміну</span>
@@ -5270,18 +5343,20 @@ function ShiftScheduleModule({ cab }) {
         </div>
       )}
 
-      {locked && (
+      {view === "grid" && locked && (
         <ShiftLockPanel
           cab={cab} ym={ym} salons={salons} shifts={shifts} employees={employees}
           reqs={reqs} canEditSalon={canEditSalon} onChange={reloadReqs}
         />
       )}
 
-      <ShiftGrid
-        ym={ym} salons={salons} employees={employees} shifts={shifts} storeDays={storeDays}
-        canEditSalon={canEditSalon} onChange={reload} cabKey={cab.key}
-        locked={locked} grantFor={grantFor}
-      />
+      {view === "grid" && (
+        <ShiftGrid
+          ym={ym} salons={salons} employees={employees} shifts={shifts} storeDays={storeDays}
+          canEditSalon={canEditSalon} onChange={reload} cabKey={cab.key}
+          locked={locked} grantFor={grantFor}
+        />
+      )}
     </div>
   );
 }
@@ -5294,7 +5369,6 @@ function ShiftLockPanel({ cab, ym, salons, shifts, employees, reqs, canEditSalon
   const canApprove = cab.type === "tm" || cab.type === "manager";
   const pending = reqs.filter((r) => r.status === "pending" && mySalons.some((s) => s.key === r.salon_key));
 
-  const empName = (id) => employees.find((e) => e.id === id)?.full_name || "";
   const gapsBySalon = (k) => {
     const set = new Date().toISOString().slice(0, 10);
     return shifts.filter((s) => s.salon_key === k && s.work_date < set
@@ -5382,8 +5456,11 @@ function DailyCheckIn({ salon, onDone }) {
   const [busy, setBusy] = useState(false);
   const [closeMode, setCloseMode] = useState(false);
   const [closeReason, setCloseReason] = useState("");
-  const [step, setStep] = useState("shift");   // shift | cash
+  const [step, setStep] = useState("shift");   // shift | ontime | cash
   const [cashInfo, setCashInfo] = useState(null); // { total, days }
+  const [lateMode, setLateMode] = useState(false);
+  const [lateTime, setLateTime] = useState("");
+  const [lateReason, setLateReason] = useState("");
   const today = todayISO();
 
   useEffect(() => {
@@ -5419,7 +5496,13 @@ function DailyCheckIn({ salon, onDone }) {
       await upsertShiftsBatch(rows);
       await setStoreDay({ salon_key: salon.key, work_date: today, opened_at: new Date().toISOString(), opened_by: salon.key, senior_id: senior, closed: false });
       pushToast({ title: "Зміну розпочато", body: `${rows.filter((r) => r.state === "work").length} на зміні` });
-      // питання про готівку: чи забрав Віктор те, що назбиралось до сьогодні
+      setStep("ontime");
+      setBusy(false);
+    } catch (e) { alert(e.message || e); setBusy(false); }
+  };
+  // після кроку «вчасність відкриття» — питання про готівку, потім у програму
+  const proceedToCash = async () => {
+    try {
       const prior = await listCashDays({ salonKey: salon.key, to: cashYesterday() }).catch(() => []);
       const openPrior = prior.filter((r) => !r.collected);
       if (openPrior.length) {
@@ -5429,6 +5512,30 @@ function DailyCheckIn({ salon, onDone }) {
       } else {
         onDone();
       }
+    } catch { onDone(); }
+  };
+  const answerOnTime = async (onTime) => {
+    if (!onTime && !lateMode) { setLateMode(true); return; }
+    if (!onTime && (!lateTime || !lateReason.trim())) return;
+    setBusy(true);
+    try {
+      await setStoreDay({
+        salon_key: salon.key, work_date: today, opened_by: salon.key,
+        open_on_time: onTime,
+        open_actual_time: onTime ? null : lateTime,
+        late_reason: onTime ? "" : lateReason.trim(),
+      });
+      if (!onTime) {
+        const tm = salonTmOn(salon.key);
+        if (tm) await notify({
+          recipient: tm, kind: "shifts",
+          title: `Невчасне відкриття — ${salon.city}, ${shortAddr(salon.addr)}`,
+          body: `Відкрито о ${lateTime}. Причина: ${lateReason.trim()}`,
+          actor: salon.key, link: "shifts",
+        }).catch(() => {});
+        pushToast({ title: "Відмічено невчасне відкриття", body: `ТМ повідомлено` });
+      }
+      await proceedToCash();
     } catch (e) { alert(e.message || e); setBusy(false); }
   };
   const answerCash = async (taken) => {
@@ -5448,6 +5555,43 @@ function DailyCheckIn({ salon, onDone }) {
       onDone();
     } catch (e) { alert(e.message || e); setBusy(false); }
   };
+
+  if (step === "ontime") {
+    return createPortal(
+      <div className="modal-overlay checkin-overlay">
+        <div className="checkin-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="checkin-h">
+            <div className="k">{lateMode ? "Невчасне відкриття" : "Відкриття магазину"}</div>
+            <div className="d">{fmtDeadline(today)} · {salonLabel(salon)}</div>
+          </div>
+          {lateMode ? (
+            <div className="checkin-b">
+              <label className="over-field" style={{ maxWidth: "100%" }}><span>Фактичний час відкриття</span>
+                <input type="time" value={lateTime} onChange={(e) => setLateTime(e.target.value)} autoFocus />
+              </label>
+              <label className="over-field" style={{ maxWidth: "100%" }}><span>Причина невчасного відкриття</span>
+                <textarea rows={3} value={lateReason} onChange={(e) => setLateReason(e.target.value)} placeholder="напр. не приїхав транспорт, форс-мажор" />
+              </label>
+            </div>
+          ) : (
+            <div className="checkin-b ci-cash">
+              <span className="ci-cash-ic"><Clock size={26} /></span>
+              <p>Чи вчасно був відкритий магазин сьогодні?</p>
+              <p className="hint">Якщо ні — вкажемо фактичний час і причину, це піде ТМ.</p>
+            </div>
+          )}
+          <div className="checkin-f">
+            {lateMode
+              ? <><button className="btn-secondary" disabled={busy} onClick={() => setLateMode(false)}>Назад</button>
+                  <button className="btn-primary" disabled={busy || !lateTime || !lateReason.trim()} onClick={() => answerOnTime(false)}>Надіслати ТМ</button></>
+              : <><button className="btn-secondary" disabled={busy} onClick={() => answerOnTime(false)}>Ні, із запізненням</button>
+                  <button className="btn-primary" disabled={busy} onClick={() => answerOnTime(true)}>Так, вчасно</button></>}
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
 
   if (step === "cash") {
     return createPortal(
@@ -6435,6 +6579,9 @@ function AttentionQueue({ cab }) {
           const reqs = await listShiftEditRequests();
           const pend = reqs.filter((r) => r.status === "pending" && mine.includes(r.salon_key));
           if (pend.length) out.push({ tone: "info", n: pend.length, label: "запитів на коригування графіку", sub: [...new Set(pend.map((r) => salonByKey(r.salon_key)?.city))].filter(Boolean).join(", "), go: "shifts" });
+          const sd = await listStoreDays(cur);
+          const lateOpen = sd.filter((d) => d.open_on_time === false && mine.includes(d.salon_key));
+          if (lateOpen.length) out.push({ tone: "warn", n: lateOpen.length, label: "невчасних відкриттів магазинів цього місяця", sub: [...new Set(lateOpen.map((d) => salonByKey(d.salon_key)?.city))].filter(Boolean).join(", "), go: "shifts" });
         } catch { /* ignore */ }
       }
       if (a) setRows(out);
@@ -9607,6 +9754,12 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .shift-lock-row button{padding:5px 12px;font-size:11.5px;}
 .shift-lock-reqs{margin-top:10px;}
 .shift-lock-reqs .sl-sub{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);}
+.open-tally{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.open-tally-chip{background:var(--surface-alt);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:11.5px;}
+table.open-log{width:100%;border-collapse:collapse;font-size:12.5px;}
+table.open-log th{text-align:left;font-weight:600;color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;padding:4px 8px;border-bottom:1px solid var(--line);}
+table.open-log td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negative-bright);font-weight:600;white-space:nowrap;}
 
 /* --- Коди ЗСУ --- */
 .zsu-note{display:flex;gap:7px;align-items:flex-start;background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);padding:9px 12px;font-size:11.5px;color:var(--ink-soft);line-height:1.4;margin-bottom:12px;}
