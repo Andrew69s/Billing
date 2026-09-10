@@ -5097,7 +5097,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
     if (!s) return { txt: "", cls: "" };
     if (s.state === "closed") return { txt: "", cls: "sh-closed" };
     if (s.state === "off") return { txt: "", cls: "sh-off" };
-    if (s.state === "absent") return { txt: (ABSENCE_REASONS[s.absence_reason] || "×").slice(0, 4), cls: "sh-absent" };
+    if (s.state === "absent") return { txt: (ABSENCE_REASONS[s.absence_reason] || "×").slice(0, 4), cls: s.absence_reason === "vacation" ? "sh-absent sh-vac" : "sh-absent" };
     const worked = s.fact_h != null;
     const planned = s.plan_h != null;
     if (!worked && !planned) return { txt: "", cls: "" };
@@ -5173,9 +5173,10 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
         <span><i className="sw sh-fill" />відпрацював</span>
         <span><i className="sw sh-fill-plan" />заплановано</span>
         <span><i className="sw sh-off" />вихідний</span>
+        <span><i className="sw sh-vac" />відпустка</span>
         <span><i className="sw sh-subst">Т</i>заміна на іншому магазині</span>
         <span><i className="sw sh-closed" />зачинено</span>
-        <span><i className="sw sh-absent" />відсутній</span>
+        <span><i className="sw sh-absent" />інша відсутність</span>
       </div>
       {menu && (
         <ShiftCellMenu
@@ -9055,18 +9056,19 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .grid-scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
 table.sched{border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;}
 table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
-table.sched thead th{background:var(--surface-alt);color:var(--muted);font-weight:600;padding:3px 0;min-width:26px;line-height:1.2;position:sticky;top:0;}
+table.sched thead th{background:var(--surface-alt);color:var(--muted);font-weight:600;padding:2px 0;min-width:24px;line-height:1.15;position:sticky;top:0;}
 table.sched thead th.we{background:rgba(63,107,74,.14);color:var(--positive);}
 table.sched .wd{font-size:8px;opacity:.7;}
-table.sched .rh{text-align:left;padding:5px 10px;white-space:nowrap;background:var(--surface);font-family:'Inter',sans-serif;position:sticky;left:0;z-index:1;min-width:150px;}
-table.sched .rh .nm{font-size:12px;font-weight:600;color:var(--ink);}
-table.sched .rh .rl{font-size:10px;color:var(--muted);}
-table.sched .grp td{background:var(--surface-sink);text-align:left;padding:4px 10px;font-size:11px;font-weight:700;color:var(--ink-soft);position:sticky;left:0;}
-td.sh{height:26px;color:var(--ink);}
+table.sched .rh{text-align:left;padding:2px 10px;white-space:nowrap;background:var(--surface);font-family:'Inter',sans-serif;position:sticky;left:0;z-index:1;min-width:150px;line-height:1.25;}
+table.sched .rh .nm{font-size:11px;font-weight:600;color:var(--ink);}
+table.sched .rh .rl{font-size:8.5px;color:var(--muted);}
+table.sched .grp td{background:var(--surface-sink);text-align:left;padding:2px 10px;font-size:10px;font-weight:700;color:var(--ink-soft);position:sticky;left:0;}
+td.sh{height:19px;color:var(--ink);}
 td.sh-edit{cursor:pointer;}
 td.sh-edit:hover{background:rgba(190,138,46,.1);}
 td.sh-plan{color:var(--muted);}
-td.sh-off{background:rgba(160,58,42,.14);}
+td.sh-off{background:rgba(190,138,46,.2);}
+td.sh-vac{background:rgba(160,58,42,.34)!important;color:var(--negative-bright)!important;font-weight:700;}
 td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(--surface-sink) 3px,transparent 3px,transparent 6px);}
 td.sh-subst{background:rgba(78,108,151,.16);color:#4E6C97;font-weight:600;}
 td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);font-size:9px;}
@@ -9081,6 +9083,9 @@ td.sh-sum b{color:var(--ink);}
 .shift-legend .sw{width:16px;height:16px;border-radius:3px;border:1px solid var(--line-strong);background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--pos);font-style:normal;font-family:'IBM Plex Mono',monospace;}
 .shift-legend .sw.sh-plan{color:var(--muted);}
 .shift-legend .sw.sh-subst{color:#4E6C97;background:rgba(78,108,151,.16);}
+.shift-legend .sw.sh-off{background:rgba(190,138,46,.24);}
+.shift-legend .sw.sh-vac{background:rgba(160,58,42,.34);}
+.shift-legend .sw.sh-absent{background:rgba(160,58,42,.12);}
 .shift-menu-work{background:var(--pos-soft,rgba(63,107,74,.2))!important;color:var(--positive)!important;font-weight:600;}
 td.sh{font-size:12px;font-weight:600;}
 td.sh.sh-plan{font-weight:400;}
