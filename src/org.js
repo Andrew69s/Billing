@@ -5,12 +5,12 @@
 import { supabase } from "./lib/supabase.js";
 
 export const MANAGER = { key: "manager", name: "Кавецький Віктор Васильович", role: "Керівник" };
-export const ACCOUNTANT = { key: "accountant", name: "Бухгалтер Юлія", role: "Зведення · виплати" };
+export const ACCOUNTANT = { key: "accountant", name: "Хома Юлія", role: "Зведення · виплати" };
 
 export const OFFICE = [
   ACCOUNTANT,
-  { key: "maryana", name: "Мар'яна", role: "Офіс" },
-  { key: "olha", name: "Ольга", role: "Офіс" },
+  { key: "maryana", name: "Щомак Мар'яна", role: "Офіс" },
+  { key: "olha", name: "Струк Ольга", role: "Офіс" },
 ];
 
 export const TMS = [

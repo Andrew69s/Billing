@@ -1211,6 +1211,22 @@ function SummaryBlock({ id, title, note, total, items, expanded, onToggle }) {
   );
 }
 
+/* Липка шапка розрахунку ЗП: жива сума «на руки», нараховано, грейд, статус */
+function SalaryStickyBar({ grand, accrued, grade, status }) {
+  const map = { draft: ["чернетка", ""], submitted: ["на розгляді", "ok"], approved: ["погоджено", "ok"], corrected: ["корективи", "warn"] };
+  const [lab, cls] = map[status] || map.draft;
+  return (
+    <div className="sal-sticky">
+      <div className="ss-main"><span className="ss-lab">На руки</span><b className="ss-big">{fmt(grand)}</b></div>
+      <div className="ss-sub">
+        <span>нараховано&nbsp;<b>{fmt(accrued)}</b></span>
+        {grade != null && <span>грейд&nbsp;<b>{grade}</b></span>}
+      </div>
+      <span className={`ss-st ${cls}`}>{lab}</span>
+    </div>
+  );
+}
+
 function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuarter, expandedBlock, onToggle, editable, deductEditable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl, calc }) {
   const advance = adj.advance || 0;
   const official = adj.official || 0;
@@ -1516,6 +1532,11 @@ function TmView({ tmKey, tmName, onBack, embedded }) {
         </div>
       ) : loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
         <>
+          <SalaryStickyBar
+            grand={calc.floored + (isLastMonthOfQuarter ? (qbonus.bonus41 + qbonus.bonus42) : 0) + (adj.amount || 0) - (adj.advance || 0) - (adj.official || 0) - (adj.birthdays || 0)}
+            accrued={calc.floored + (isLastMonthOfQuarter ? (qbonus.bonus41 + qbonus.bonus42) : 0) + (adj.amount || 0)}
+            grade={grade} status={data.status}
+          />
           <CriteriaForm data={data} update={update} grade={grade} tmKey={tmKey} ym={ym} showAmounts calc={calc}
             onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} />
           <SalarySummary
@@ -1907,7 +1928,6 @@ function useMonthStats() {
 const shortAddr = (addr) => addr.replace(/^(вул\.|пл\.|просп\.)\s+/, "");
 
 function HierarchyHome({ onPick, remembered, onLogout }) {
-  const stats = useMonthStats();
   return (
     <div className="role-select deck-screen">
       <div className="deck-inner fade-in">
@@ -1931,10 +1951,6 @@ function HierarchyHome({ onPick, remembered, onLogout }) {
               <span className="deck-ic deck-ic-gold"><Users size={22} /></span>
               <span className="deck-name deck-name-lg">{MANAGER.name}</span>
               <span className="deck-role deck-role-gold">Керівник</span>
-            </span>
-            <span className="deck-stat">
-              <span className="deck-stat-cell"><b>{stats ? stats.submitted : "—"}</b><span>{`подало з ${stats ? stats.total : TMS.length + SALONS.length}`}</span></span>
-              <span className="deck-stat-cell"><b>{stats ? stats.toPay : "—"}</b><span>до виплати</span></span>
             </span>
           </button>
 
@@ -2588,6 +2604,11 @@ function SmView({ salon, embedded }) {
         </div>
       ) : loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
         <>
+          <SalaryStickyBar
+            grand={calc.total}
+            accrued={calc.grossTotal != null ? calc.grossTotal : calc.total}
+            status={data.status}
+          />
           <SmCriteriaForm
             data={data} update={update} calc={calc} area={salon.area} showAmounts
             onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} isQuarterEnd={isQuarterEnd}
@@ -4189,8 +4210,6 @@ function TasksModule({ cab }) {
 ========================================================= */
 const invMoney = (n) => (Number(n) || 0).toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " грн";
 const INV_TONE = { issued: "badge-warn", paid: "badge-ok", shipped: "badge-ok", documented: "badge-ok", cancelled: "badge-off" };
-/* ФОП рахунку — з довідника, на дату виставлення (раніші документи не чіпаємо) */
-const invFop = (inv) => fopOn(inv.created_by, inv.created_at);
 /* прострочений = виставлений 5+ днів тому і досі не опрацьований (статус «Виставлено») */
 const INV_OVERDUE_DAYS = 5;
 const invDaysOld = (inv) => Math.floor((Date.now() - new Date(inv.created_at).getTime()) / 864e5);
@@ -4402,10 +4421,7 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged, compact }) {
         )}
       </div>
       {salonByKey(inv.created_by) && (
-        <div className="inv-fop-line">
-          {salonByKey(inv.created_by).city}
-          {invFop(inv) ? ` (${invFop(inv)})` : ""}
-        </div>
+        <div className="inv-fop-line">{salonLabel(salonByKey(inv.created_by))}</div>
       )}
       {open && (
         <div className="inv-detail">
@@ -9146,6 +9162,18 @@ td.sh.sh-plan{font-weight:400;}
 .inv-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:var(--sh-1);overflow:hidden;color:var(--ink);}
 .inv-card.inv-overdue{border-color:rgba(224,145,127,.45);box-shadow:inset 3px 0 0 var(--negative);}
 .inv-badge-over{white-space:nowrap;}
+
+.sal-sticky{position:sticky;top:calc(env(safe-area-inset-top) + 54px);z-index:15;display:flex;align-items:center;gap:8px 18px;flex-wrap:wrap;
+  margin:0 0 16px;padding:12px 16px;background:var(--bg-2);border:1px solid var(--line-dark);border-radius:var(--radius-md);box-shadow:0 12px 26px -16px rgba(0,0,0,.5);}
+.ss-main{display:flex;flex-direction:column;gap:1px;}
+.ss-lab{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--on-dark-3);}
+.ss-big{font-family:'Fraunces',serif;font-size:1.5rem;font-weight:600;color:var(--on-dark);line-height:1;}
+.ss-sub{display:flex;gap:14px;font-size:12px;color:var(--on-dark-3);font-family:'Inter',sans-serif;}
+.ss-sub b{font-family:'IBM Plex Mono',monospace;color:var(--on-dark-2);font-weight:600;}
+.ss-st{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.04em;text-transform:uppercase;font-weight:700;padding:4px 11px;border-radius:999px;background:var(--surface-alt);color:var(--on-dark-3);}
+.ss-st.ok{background:rgba(63,107,74,.2);color:var(--positive-bright);}
+.ss-st.warn{background:rgba(160,58,42,.2);color:var(--negative-bright);}
+@media(max-width:560px){.ss-big{font-size:1.25rem;} .sal-sticky{gap:6px 12px;padding:10px 12px;}}
 
 .inv-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(240px,1fr);gap:12px;overflow-x:auto;padding-bottom:8px;-webkit-overflow-scrolling:touch;}
 .inv-col{background:rgba(var(--sf),.03);border:1px solid var(--line-dark);border-radius:var(--radius-md);padding:10px;min-height:200px;}
