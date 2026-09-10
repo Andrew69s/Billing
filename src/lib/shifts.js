@@ -78,54 +78,29 @@ export function subscribeShifts(onChange) {
   return () => { supabase.removeChannel(ch); };
 }
 
-/* ---- Замок планування ------------------------------------------------------
-   Графік на місяць подається у перші дні цього ж місяця — до 3 числа
-   включно. Після 3 числа план місяця замикається назавжди, вноситься лише
-   факт (і лише за дозволом ТМ). Напр. графік на вересень — до 3 вересня. */
-export function planDeadline(ym) {
-  const [y, m] = ym.split("-").map(Number); // m — 1-based ⇒ (m-1) = цей місяць 0-based
-  return new Date(y, m - 1, 4, 0, 0, 0, 0); // 00:00 4-го = кінець 3-го числа
-}
-export const planLocked = (ym) => Date.now() >= planDeadline(ym).getTime();
-/* факт замикається лише коли місяць завершився (минулі місяці) */
-export function factLocked(ym) {
-  const n = new Date();
-  return ym < `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
-}
-
-export async function listShiftEditRequests(ym) {
-  let q = supabase.from("shift_edit_requests").select("*").order("requested_at", { ascending: false });
-  if (ym) q = q.eq("ym", ym);
-  const { data, error } = await q;
+/* ---- Ручний замок графіка (від адміністратора) ----------------------------
+   Шах у Адмініструванні вмикає/вимикає замок коригувань кожному СМ. */
+export async function listScheduleLocks() {
+  const { data, error } = await supabase.from("schedule_locks").select("*");
   if (error) throw error;
   return data || [];
 }
-export async function requestShiftFactEdit(salonKey, ym, note, by) {
-  const { error } = await supabase.from("shift_edit_requests")
-    .insert({ salon_key: salonKey, ym, note: note || "", requested_by: by || "" });
+export async function setScheduleLock(salonKey, locked, by) {
+  const { error } = await supabase.from("schedule_locks")
+    .upsert({ salon_key: salonKey, locked: !!locked, updated_by: by || "", updated_at: new Date().toISOString() },
+      { onConflict: "salon_key" });
   if (error) throw error;
 }
-export async function resolveShiftFactEdit(id, approve, by) {
-  const { error } = await supabase.from("shift_edit_requests")
-    .update({ status: approve ? "approved" : "declined", resolved_by: by || "", resolved_at: new Date().toISOString() })
-    .eq("id", id);
-  if (error) throw error;
+export function scheduleLockedFor(locks, salonKey) {
+  return (locks || []).some((l) => l.salon_key === salonKey && l.locked);
 }
-/* активний дозвіл: схвалений сьогодні запит для цього салону+місяця */
-export function factGrantActive(reqs, salonKey, ym) {
-  const t = todayISO();
-  return (reqs || []).some((r) => r.salon_key === salonKey && r.ym === ym
-    && r.status === "approved" && String(r.resolved_at || "").slice(0, 10) === t);
-}
-export function pendingFactRequest(reqs, salonKey, ym) {
-  return (reqs || []).find((r) => r.salon_key === salonKey && r.ym === ym && r.status === "pending") || null;
-}
-export function subscribeShiftEditRequests(onChange) {
-  const ch = rtChannel("shift-edit-req")
-    .on("postgres_changes", { event: "*", schema: "public", table: "shift_edit_requests" }, onChange)
+export function subscribeScheduleLocks(onChange) {
+  const ch = rtChannel("schedule-locks")
+    .on("postgres_changes", { event: "*", schema: "public", table: "schedule_locks" }, onChange)
     .subscribe();
   return () => { supabase.removeChannel(ch); };
 }
+
 /* розбіжності план/факт за минулі дні (для «Потребує уваги» ТМ) */
 export function planFactGaps(shifts, salonKeys) {
   const today = todayISO();

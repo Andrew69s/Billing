@@ -49,8 +49,7 @@ import {
   ABSENCE_REASONS, daysInMonth, dayKey, todayISO,
   listShifts, upsertShift, upsertShiftsBatch, deleteShift,
   getStoreDay, setStoreDay, listStoreDays, subscribeShifts, monthTally,
-  planLocked, planDeadline, factLocked, listShiftEditRequests, requestShiftFactEdit, resolveShiftFactEdit,
-  factGrantActive, pendingFactRequest, subscribeShiftEditRequests, planFactGaps,
+  listScheduleLocks, setScheduleLock, scheduleLockedFor, subscribeScheduleLocks, planFactGaps,
 } from "./lib/shifts.js";
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
@@ -3444,6 +3443,80 @@ function AdminNews() {
   );
 }
 
+function AdminShiftLocks() {
+  const [locks, setLocks] = useState(null);
+  const [busy, setBusy] = useState("");
+  const load = () => listScheduleLocks().then(setLocks).catch(() => setLocks([]));
+  useEffect(() => { load(); return subscribeScheduleLocks(load); }, []);
+  if (locks === null) return <div className="loading">Завантаження…</div>;
+
+  const isLocked = (k) => scheduleLockedFor(locks, k);
+  const toggle = async (s, next) => {
+    setBusy(s.key);
+    try {
+      await setScheduleLock(s.key, next, ADMIN_KEY);
+      await notify({
+        recipient: s.key, kind: "shifts",
+        title: next ? "Коригування графіка заблоковано" : "Коригування графіка відкрито",
+        body: next ? "Внести або змінити графік поки не можна." : "Можна вносити й коригувати графік.",
+        actor: ADMIN_KEY, link: "shifts",
+      }).catch(() => {});
+      pushToast({ title: next ? "Заблоковано" : "Розблоковано", body: `${s.city}, ${shortAddr(s.addr)}` });
+      load();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy("");
+  };
+  const bulk = async (next) => {
+    if (!confirm(next ? "Заблокувати коригування графіків усім магазинам?" : "Розблокувати всім?")) return;
+    setBusy("*");
+    try {
+      for (const s of SALONS) if (isLocked(s.key) !== next) {
+        await setScheduleLock(s.key, next, ADMIN_KEY);
+        await notify({ recipient: s.key, kind: "shifts",
+          title: next ? "Коригування графіка заблоковано" : "Коригування графіка відкрито",
+          body: next ? "Внести або змінити графік поки не можна." : "Можна вносити й коригувати графік.",
+          actor: ADMIN_KEY, link: "shifts" }).catch(() => {});
+      }
+      pushToast({ title: next ? "Заблоковано всім" : "Розблоковано всім" });
+      load();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy("");
+  };
+
+  const lockedCount = SALONS.filter((s) => isLocked(s.key)).length;
+  return (
+    <div className="admin-panel">
+      <h3>Замок коригувань графіка</h3>
+      <p className="hint">
+        Поки замок увімкнено, СМ не може вносити чи міняти графік свого магазину (ані план, ані факт).
+        ТМ і керівник редагують графік завжди. Нагадування «Заблокуйте коригування графіків» приходить 5 числа місяця.
+      </p>
+      <div className="admin-sub-h" style={{ margin: "14px 0 8px" }}>
+        Заблоковано: {lockedCount} з {SALONS.length}
+        <span style={{ marginLeft: 12 }}>
+          <button className="btn-secondary small" disabled={busy} onClick={() => bulk(true)}>Заблокувати всім</button>{" "}
+          <button className="btn-secondary small" disabled={busy} onClick={() => bulk(false)}>Розблокувати всім</button>
+        </span>
+      </div>
+      <div className="shlock-list">
+        {SALONS.map((s) => {
+          const lk = isLocked(s.key);
+          return (
+            <div className={`shlock-row ${lk ? "on" : ""}`} key={s.key}>
+              <span className="shlock-nm">{s.city}, {shortAddr(s.addr)}</span>
+              <span className={`shlock-state ${lk ? "bad" : "ok"}`}>{lk ? "🔒 заблоковано" : "відкрито"}</span>
+              <button className={lk ? "btn-secondary small" : "btn-primary small"} disabled={busy === s.key || busy === "*"}
+                onClick={() => toggle(s, !lk)}>
+                {lk ? "Розблокувати" : "Заблокувати"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AdminSupplyArticles() {
   const [all, setAll] = useState(null);   // повний список (builtin + custom)
   const [label, setLabel] = useState("");
@@ -3753,6 +3826,7 @@ function AdminPanel() {
     ["reassign", "Магазини й ТМ"],
     ["fop", "ФОП по СМ"],
     ["modaccess", "Доступ до вкладок"],
+    ["shiftlock", "Замок графіків"],
     ["articles", "Статті списань"],
     ["news", "Новини"],
     ["rights", "Права"],
@@ -3772,6 +3846,7 @@ function AdminPanel() {
       {tab === "reassign" && <AdminReassign />}
       {tab === "fop" && <AdminFop />}
       {tab === "modaccess" && <AdminModuleAccess />}
+      {tab === "shiftlock" && <AdminShiftLocks />}
       {tab === "articles" && <AdminSupplyArticles />}
       {tab === "news" && <AdminNews />}
       {tab === "rights" && <AdminRights />}
@@ -5049,8 +5124,7 @@ function useShiftMonth(ym) {
 
 const shiftErr = (e) => {
   const m = String(e?.message || e || "");
-  if (m.includes("plan_locked")) return "Планування за цей місяць замкнено — після 3 числа наступного місяця його не змінити.";
-  if (m.includes("fact_locked")) return "Факт за цей місяць замкнено. Магазин може подати запит на коригування, ТМ підтверджує.";
+  if (m.includes("schedule_locked")) return "Коригування графіка заблоковано адміністратором. Зверніться до Шаха, щоб розблокував.";
   return m || "Помилка";
 };
 
@@ -5083,18 +5157,12 @@ function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
   );
 }
 
-function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, planLk = false, factLk = false, grantFor }) {
+function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, lockedFor }) {
   const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
-  const [editMode, setEditMode] = useState(planLk ? "fact" : "plan");
-  useEffect(() => { if (planLk) setEditMode("fact"); }, [planLk]);
+  const [editMode, setEditMode] = useState("plan");
   const canEdit = salons.some((s) => canEditSalon(s.key));
-  // чи можна редагувати цей режим для цього салону
-  const modeAllowed = (k, mode) => {
-    if (!canEditSalon(k)) return false;
-    if (mode === "plan") return !planLk;               // план замкнено після 3 числа
-    if (!factLk) return true;                          // факт поточного місяця — вільно
-    return grantFor ? grantFor(k) : false;             // факт завершеного місяця — лише за дозволом ТМ
-  };
+  // чи можна редагувати цей режим для цього салону (замок від адміністратора — лише СМ)
+  const modeAllowed = (k) => canEditSalon(k) && !(lockedFor && lockedFor(k));
   const scrollRef = React.useRef(null);
   const nDays = daysInMonth(ym);
   const today = todayISO();
@@ -5117,7 +5185,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
   }, [storeDays]);
 
   const openMenu = (e, empId, day, homeSalon) => {
-    if (!modeAllowed(homeSalon, editMode)) return;
+    if (!modeAllowed(homeSalon)) return;
     const r = e.currentTarget.getBoundingClientRect();
     setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.min(r.left, window.innerWidth - 210) } });
   };
@@ -5178,7 +5246,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
       {canEdit && (
         <div className="shift-modebar">
           <span>Клік по клітинці редагує:</span>
-          <button className={editMode === "plan" ? "on" : ""} disabled={planLk} title={planLk ? "Планування за цей місяць замкнено (після 3 числа)" : ""} onClick={() => !planLk && setEditMode("plan")}>План{planLk ? " 🔒" : ""}</button>
+          <button className={editMode === "plan" ? "on" : ""} onClick={() => setEditMode("plan")}>План</button>
           <button className={editMode === "fact" ? "on" : ""} onClick={() => setEditMode("fact")}>Факт</button>
           {salons.length > 1 && !salons.every((s) => canEditSalon(s.key)) && <span className="muted" style={{ marginLeft: 6 }}>· редагувати можна лише свої магазини</span>}
         </div>
@@ -5211,7 +5279,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
                         let s = shiftMap[`${e.id}:${wd}`];
                         if (!s && closedDays[`${e.salon_key}:${wd}`]) s = { state: "closed" };
                         const { txt, cls } = cellContent(s, e.salon_key);
-                        const edit = modeAllowed(e.salon_key, editMode);
+                        const edit = modeAllowed(e.salon_key);
                         return (
                           <td key={d}
                             className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
@@ -5313,14 +5381,12 @@ function ShiftScheduleModule({ cab }) {
   const [view, setView] = useState("grid");
   const [employees, setEmployees] = useState(null);
   const [shifts, storeDays, reload] = useShiftMonth(ym);
-  const [reqs, setReqs] = useState([]);
+  const [locks, setLocks] = useState([]);
   const months = useMemo(() => recentMonths(12), []);
-  const planLk = planLocked(ym);
-  const factLk = factLocked(ym);
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
-  const reloadReqs = React.useCallback(() => { listShiftEditRequests(ym).then(setReqs).catch(() => setReqs([])); }, [ym]);
-  useEffect(() => { reloadReqs(); return subscribeShiftEditRequests(reloadReqs); }, [reloadReqs]);
+  const reloadLocks = React.useCallback(() => { listScheduleLocks().then(setLocks).catch(() => setLocks([])); }, []);
+  useEffect(() => { reloadLocks(); return subscribeScheduleLocks(reloadLocks); }, [reloadLocks]);
 
   // графік показуємо по всіх 8 магазинах усім (ТМ, керівник, СМ) — для підмін і координації
   const salons = SALONS;
@@ -5330,7 +5396,9 @@ function ShiftScheduleModule({ cab }) {
     if (cab.type === "tm") { const my = cab.tmKey || cab.key; return (k) => salonTmOn(k) === my; }
     return () => false;
   }, [cab]);
-  const grantFor = React.useCallback((k) => factGrantActive(reqs, k, ym), [reqs, ym]);
+  // замок стосується лише СМ (правки від його імені); ТМ/керівник не блокуються
+  const lockedFor = React.useCallback((k) => cab.type === "sm" && scheduleLockedFor(locks, k), [locks, cab.type]);
+  const myLocked = cab.type === "sm" && scheduleLockedFor(locks, cab.key);
 
   if (employees === null || shifts === null) return <div className="loading">Завантаження…</div>;
 
@@ -5369,111 +5437,19 @@ function ShiftScheduleModule({ cab }) {
         </div>
       )}
 
-      {view === "grid" && (planLk || factLk) && (
-        <ShiftLockPanel
-          cab={cab} ym={ym} planLk={planLk} factLk={factLk} salons={salons} shifts={shifts}
-          reqs={reqs} canEditSalon={canEditSalon} onChange={reloadReqs}
-        />
+      {view === "grid" && myLocked && (
+        <div className="shift-lock">
+          <div className="shift-lock-h">🔒 Коригування графіка заблоковано</div>
+          <p className="hint">Адміністратор закрив внесення й правки графіка для вашого магазину. Щоб внести зміни — зверніться до Шаха, щоб розблокував.</p>
+        </div>
       )}
 
       {view === "grid" && (
         <ShiftGrid
           ym={ym} salons={salons} employees={employees} shifts={shifts} storeDays={storeDays}
           canEditSalon={canEditSalon} onChange={reload} cabKey={cab.key}
-          planLk={planLk} factLk={factLk} grantFor={grantFor}
+          lockedFor={lockedFor}
         />
-      )}
-    </div>
-  );
-}
-
-/* Панель замка: статус місяця + запити на коригування факту завершеного місяця */
-function ShiftLockPanel({ cab, ym, planLk, factLk, salons, shifts, reqs, canEditSalon, onChange }) {
-  const [busy, setBusy] = useState(false);
-  const mySalons = salons.filter((s) => canEditSalon(s.key));
-  const isSm = cab.type === "sm";
-  const canApprove = cab.type === "tm" || cab.type === "manager";
-  const pending = reqs.filter((r) => r.status === "pending" && mySalons.some((s) => s.key === r.salon_key));
-
-  const gapsBySalon = (k) => {
-    const set = new Date().toISOString().slice(0, 10);
-    return shifts.filter((s) => s.salon_key === k && s.work_date < set
-      && !["off", "closed", "absent"].includes(s.state)
-      && ((s.plan_h != null) !== (s.fact_h != null)));
-  };
-
-  const ask = async (k) => {
-    const note = prompt(`Запит на коригування факту за ${monthLabel(ym)} — коротко опишіть причину:`, "") ;
-    if (note === null) return;
-    setBusy(true);
-    try {
-      await requestShiftFactEdit(k, ym, note.trim(), cab.key);
-      const tm = salonTmOn(k);
-      for (const r of new Set([tm, ADMIN_KEY].filter(Boolean))) {
-        await notify({ recipient: r, kind: "shifts", title: "Запит на коригування графіку",
-          body: `${salonByKey(k)?.city || k} · ${monthLabel(ym)}${note.trim() ? ` — ${note.trim()}` : ""}`, actor: cab.key, link: "shifts" }).catch(() => {});
-      }
-      pushToast({ title: "Запит надіслано", body: "Очікуйте підтвердження ТМ" });
-      onChange();
-    } catch (e) { pushToast({ title: "Не вдалося", body: shiftErr(e) }); }
-    setBusy(false);
-  };
-  const resolve = async (r, approve) => {
-    setBusy(true);
-    try {
-      await resolveShiftFactEdit(r.id, approve, cab.key);
-      await notify({ recipient: r.salon_key, kind: "shifts",
-        title: approve ? "Дозволено коригувати факт" : "Запит на коригування відхилено",
-        body: approve ? `${monthLabel(r.ym)} — до кінця сьогоднішнього дня` : monthLabel(r.ym),
-        actor: cab.key, link: "shifts" }).catch(() => {});
-      pushToast({ title: approve ? "Підтверджено" : "Відхилено", body: salonByKey(r.salon_key)?.city || r.salon_key });
-      onChange();
-    } catch (e) { pushToast({ title: "Не вдалося", body: shiftErr(e) }); }
-    setBusy(false);
-  };
-
-  return (
-    <div className="shift-lock">
-      <div className="shift-lock-h">
-        🔒 {factLk ? `Місяць ${monthLabel(ym)} завершено` : `Планування за ${monthLabel(ym)} замкнено`}
-      </div>
-      <p className="hint">
-        {factLk
-          ? "Місяць закрито. Факт коригується лише за дозволом ТМ — на один день."
-          : "Графік подається до 3 числа. Далі план не змінюється — вносьте лише факт."}
-      </p>
-
-      {isSm && factLk && mySalons.map((s) => {
-        const grant = factGrantActive(reqs, s.key, ym);
-        const pend = pendingFactRequest(reqs, s.key, ym);
-        const gaps = gapsBySalon(s.key);
-        return (
-          <div className="shift-lock-row" key={s.key}>
-            <div className="sl-salon">{salonLabel(s)}</div>
-            {grant
-              ? <span className="sl-state ok">✅ ТМ дозволив коригувати факт — до кінця сьогоднішнього дня</span>
-              : pend
-                ? <span className="sl-state wait">⏳ Запит надіслано {fmtDeadline(pend.requested_at.slice(0, 10))} — очікує ТМ</span>
-                : <button className="btn-secondary" disabled={busy} onClick={() => ask(s.key)}>Запросити коригування факту</button>}
-            {gaps.length > 0 && <span className="sl-gaps">розбіжностей план/факт: <b>{gaps.length}</b></span>}
-          </div>
-        );
-      })}
-
-      {canApprove && factLk && (
-        <div className="shift-lock-reqs">
-          <div className="sl-sub">Запити на коригування факту{pending.length ? ` · ${pending.length}` : ""}</div>
-          {pending.length === 0 && <p className="hint">немає відкритих запитів</p>}
-          {pending.map((r) => (
-            <div className="shift-lock-row" key={r.id}>
-              <div className="sl-salon">{salonByKey(r.salon_key)?.city || r.salon_key} · {monthLabel(r.ym)}</div>
-              {r.note && <span className="sl-note">«{r.note}»</span>}
-              <span className="hint">від {fmtDeadline(r.requested_at.slice(0, 10))}</span>
-              <button className="btn-primary" disabled={busy} onClick={() => resolve(r, true)}>Дозволити на сьогодні</button>
-              <button className="btn-secondary" disabled={busy} onClick={() => resolve(r, false)}>Відхилити</button>
-            </div>
-          ))}
-        </div>
       )}
     </div>
   );
@@ -6608,9 +6584,6 @@ function AttentionQueue({ cab }) {
             const bySalon = [...new Set(gaps.map((g) => g.salon_key))].map((k) => salonByKey(k)?.city).filter(Boolean);
             out.push({ tone: "warn", n: gaps.length, label: "розбіжностей план/факт у графіку", sub: bySalon.slice(0, 4).join(", "), go: "shifts" });
           }
-          const reqs = await listShiftEditRequests();
-          const pend = reqs.filter((r) => r.status === "pending" && mine.includes(r.salon_key));
-          if (pend.length) out.push({ tone: "info", n: pend.length, label: "запитів на коригування графіку", sub: [...new Set(pend.map((r) => salonByKey(r.salon_key)?.city))].filter(Boolean).join(", "), go: "shifts" });
           const sd = await listStoreDays(cur);
           const lateOpen = sd.filter((d) => d.open_on_time === false && mine.includes(d.salon_key));
           if (lateOpen.length) out.push({ tone: "warn", n: lateOpen.length, label: "невчасних відкриттів магазинів цього місяця", sub: [...new Set(lateOpen.map((d) => salonByKey(d.salon_key)?.city))].filter(Boolean).join(", "), go: "shifts" });
@@ -9948,6 +9921,14 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .shift-lock-row button{padding:5px 12px;font-size:11.5px;}
 .shift-lock-reqs{margin-top:10px;}
 .shift-lock-reqs .sl-sub{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);}
+.shlock-list{display:flex;flex-direction:column;gap:6px;}
+.shlock-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);}
+.shlock-row.on{border-color:rgba(160,58,42,.4);background:rgba(160,58,42,.06);}
+.shlock-nm{font-weight:600;font-size:12.5px;flex:1;min-width:150px;}
+.shlock-state{font-size:11.5px;}
+.shlock-state.bad{color:var(--negative-bright);}
+.shlock-state.ok{color:var(--muted);}
+.shlock-row button.small{padding:5px 12px;font-size:11.5px;}
 .open-tally{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
 .open-tally-chip{background:var(--surface-alt);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:11.5px;}
 table.open-log{width:100%;border-collapse:collapse;font-size:12.5px;}
