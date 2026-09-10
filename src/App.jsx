@@ -8776,7 +8776,8 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .deck-ic{flex-shrink:0;display:grid;place-items:center;width:38px;height:38px;border-radius:11px;background:linear-gradient(180deg,var(--surface-alt),var(--surface-sink));color:var(--gold-ink);}
 .deck-ic-sm{width:30px;height:30px;border-radius:9px;}
 .deck-ic-gold{width:50px;height:50px;background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);box-shadow:0 8px 22px -8px rgba(190,138,46,.5);}
-.deck-name{font-weight:700;font-size:13.5px;letter-spacing:-.01em;color:var(--on-dark);line-height:1.25;}
+.deck-name{font-weight:700;font-size:13.5px;letter-spacing:-.01em;color:var(--on-dark);line-height:1.25;text-align:left;}
+.deck-grid .deck-name,.deck-grid .deck-role,.deck-grid .deck-orow-body,.deck-grid .deck-hd{text-align:left;}
 .deck-name-lg{font-family:'Fraunces',serif;font-size:21px;font-weight:600;letter-spacing:-.015em;}
 .deck-role{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
 .deck-role-gold{color:var(--gold-bright);}
@@ -8794,11 +8795,12 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 
 .deck-office{grid-column:span 2;gap:9px;justify-content:space-between;}
 .deck-hd{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--on-dark-2);margin-bottom:2px;}
-.deck-orow{display:flex;align-items:center;gap:11px;background:rgba(var(--sf),.03);border:1px solid var(--line-dark);border-radius:11px;padding:13px;transition:transform .16s var(--ease),border-color .16s var(--ease);}
-.deck-orow-body{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.deck-orow{display:flex;align-items:center;gap:11px;background:rgba(var(--sf),.03);border:1px solid var(--line-dark);border-radius:11px;padding:13px;text-align:left;transition:transform .16s var(--ease),border-color .16s var(--ease);}
+.deck-orow-body{display:flex;flex-direction:column;gap:2px;min-width:0;text-align:left;}
+.deck-orow .deck-name,.deck-orow .deck-role{text-align:left;}
 
 .deck-tm{grid-column:span 4;gap:13px;}
-.deck-tm-top{display:flex;align-items:center;gap:12px;background:none;border:1px solid transparent;border-radius:11px;margin:-4px;padding:4px;transition:transform .16s var(--ease);}
+.deck-tm-top{display:flex;align-items:center;gap:12px;background:none;border:1px solid transparent;border-radius:11px;margin:-4px;padding:4px;text-align:left;transition:transform .16s var(--ease);}
 .deck-chips{display:flex;flex-wrap:wrap;gap:8px;}
 .deck-chip{display:inline-flex;align-items:baseline;gap:7px;font-size:12px;color:var(--on-dark);background:rgba(var(--sf),.04);border:1px solid var(--line-dark);border-radius:9px;padding:8px 12px;cursor:pointer;font-family:inherit;transition:border-color .15s var(--ease),background .15s var(--ease);}
 .deck-chip:hover{border-color:var(--gold);background:rgba(190,138,46,.1);}
