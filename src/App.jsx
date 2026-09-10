@@ -6210,9 +6210,57 @@ function SalesTrendChart({ scopeSalons }) {
 }
 
 /* Віктор — головний екран: оборот салонів + теплова сітка готівки */
+/* «Потребує уваги» — черга дій з різних модулів на головному екрані */
+function AttentionQueue({ cab }) {
+  const [rows, setRows] = useState(null);
+  const invKey = cab.type === "sm" || cab.type === "tm" ? "bn" : "inv";
+  useEffect(() => {
+    let a = true;
+    (async () => {
+      const out = [];
+      try {
+        const inv = await listInvoices();
+        const od = inv.filter(isInvOverdue);
+        if (od.length) out.push({ tone: "crit", n: od.length, label: "прострочені рахунки", sub: "виставлені 5+ днів тому", go: invKey });
+      } catch { /* ignore */ }
+      if (cab.type === "tm" || cab.type === "manager" || cab.type === "accountant" || cab.key === "olha") {
+        try {
+          const [its, st] = await Promise.all([listItems(), listStock(CENTRAL)]);
+          const sm = stockMap(st, CENTRAL);
+          const low = its.filter((i) => i.min_central > 0 && (sm[i.id] || 0) < i.min_central);
+          if (low.length) out.push({ tone: "warn", n: low.length, label: "позицій нижче мінімуму на складі", sub: low.slice(0, 3).map((i) => i.name).join(", "), go: "warehouse" });
+        } catch { /* ignore */ }
+      }
+      try {
+        const tasks = await listTasks();
+        const open = tasks.filter((t) => t.assignee === cab.key && t.status === "open");
+        if (open.length) out.push({ tone: "info", n: open.length, label: open.length === 1 ? "відкрита задача" : "відкриті задачі", go: "tasks" });
+      } catch { /* ignore */ }
+      if (a) setRows(out);
+    })();
+    return () => { a = false; };
+  }, [cab.key]);
+  if (rows === null || rows.length === 0) return null;
+  return (
+    <div className="attn">
+      <h4 className="attn-h">Потребує уваги</h4>
+      <div className="attn-rows">
+        {rows.map((r, i) => (
+          <button key={i} className={`attn-row ${r.tone}`} onClick={() => r.go && goToModule(r.go)}>
+            <span className="attn-n">{r.n}</span>
+            <span className="attn-lead"><b>{r.label}</b>{r.sub && <em>{r.sub}</em>}</span>
+            <span className="attn-go">→</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ManagerHome() {
   return (
     <>
+      <AttentionQueue cab={{ key: "manager", type: "manager" }} />
       <TurnoverRings />
       <ManagerCashOverview />
     </>
@@ -7911,6 +7959,25 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
         </nav>
         <div className="cab-content">{mod.render()}</div>
       </div>
+      {(() => {
+        const bkeys = ["kpi", "bn", "inv", "tasks", "cash"].filter((k) => byKey[k]);
+        const bmods = [items[0], ...bkeys.slice(0, 2).map((k) => byKey[k])].filter(Boolean);
+        const a = bmods[0], c = bmods[1], d = bmods[2];
+        const cell = (m) => m && (
+          <button key={m.key} className={`cbn ${active === m.key ? "on" : ""}`} onClick={() => pick(m.key)}>
+            {m.icon}<span>{m.label.split(/[ ·]/)[0]}</span>
+            {badges[m.key] > 0 && active !== m.key && <i className="cbn-dot" />}
+          </button>
+        );
+        return (
+          <nav className="cab-bottom" aria-label="Швидка навігація">
+            {cell(a)}{cell(c)}
+            <button className="cbn cbn-plus" onClick={openPalette} aria-label="Пошук і швидкі дії"><Plus size={19} /></button>
+            {cell(d)}
+            <button className="cbn" onClick={() => setNavOpen(true)}><Menu size={17} /><span>Ще</span></button>
+          </nav>
+        );
+      })()}
     </div>
   );
 }
@@ -8016,6 +8083,7 @@ function TmOverview({ tmKey }) {
       <div className="tm-head">
         <h3 className="ov-h">Огляд · {tm?.name || "ТМ"}</h3>
       </div>
+      <AttentionQueue cab={{ key: tmKey, type: "tm", tmKey }} />
       <TurnoverRings scopeSalons={SALONS} />
       <SalesTrendChart scopeSalons={SALONS} />
     </div>
@@ -8028,6 +8096,7 @@ function SmOverview({ salon }) {
       <div className="tm-head">
         <h3 className="ov-h">Огляд · {salon.city}, {shortAddr(salon.addr)}</h3>
       </div>
+      <AttentionQueue cab={{ key: salon.key, type: "sm", tmKey: salonTmOn(salon.key) }} />
       <TurnoverRings scopeSalons={[salon]} single />
       <SalesTrendChart scopeSalons={[salon]} />
       <AllSalonsRingsToday highlight={salon.key} />
@@ -8693,6 +8762,7 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .office-stub-ic{display:inline-grid;place-items:center;width:56px;height:56px;border-radius:16px;background:linear-gradient(180deg,var(--surface-alt),var(--surface-sink));color:var(--gold);margin-bottom:16px;}
 .office-stub h3{font-family:'Fraunces',serif;font-size:19px;color:var(--ink);margin:0 0 8px;font-weight:600;}
 .office-stub p{color:var(--muted);font-size:13px;max-width:42ch;margin:0 auto;line-height:1.5;}
+.cab-bottom{display:none;}
 @media (max-width:880px){
   .deck-grid{grid-template-columns:repeat(2,1fr);}
   .deck-lead,.deck-office{grid-column:span 2;grid-row:auto;}
@@ -8703,6 +8773,21 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
   .cab-shell .cab-layout{grid-template-columns:1fr;gap:0;}
   .topbar-menu{display:flex;}
   .cab-scrim{display:block;}
+  .cab-content{padding-bottom:72px;}
+  .cab-bottom{
+    display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;
+    background:var(--bg-2);border-top:1px solid var(--line-dark);
+    padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+    box-shadow:0 -8px 24px -14px rgba(0,0,0,.5);
+  }
+  .cbn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:0;
+    color:var(--on-dark-3);font-family:inherit;font-size:9.5px;font-weight:600;cursor:pointer;padding:5px 2px;position:relative;min-width:0;}
+  .cbn span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cbn svg{flex-shrink:0;}
+  .cbn.on{color:var(--gold-bright);}
+  .cbn-dot{position:absolute;top:3px;right:calc(50% - 15px);width:7px;height:7px;border-radius:50%;background:var(--negative-bright);}
+  .cbn-plus{color:var(--gold-ink);}
+  .cbn-plus svg{background:linear-gradient(180deg,var(--gold-bright),var(--gold));border-radius:12px;width:38px;height:38px;padding:9px;margin-top:-16px;box-shadow:0 8px 18px -6px rgba(220,169,74,.55);}
   /* ліва навігація як шухляда (вища специфічність — щоб перекрити базове правило нижче) */
   .cab-shell .cab-side{
     position:fixed;top:0;left:0;bottom:0;z-index:70;
@@ -9389,6 +9474,21 @@ td.sh.sh-plan{font-weight:400;}
 
 /* оборот салонів — кільцевий дашборд (головний екран Віктора / ТМ) */
 .rg-mod{margin-bottom:30px;animation:fadeIn .28s ease both;}
+.attn{margin:6px 0 26px;}
+.attn-h{font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--on-dark-3);margin:0 0 10px;font-weight:500;}
+.attn-rows{display:flex;flex-direction:column;gap:8px;}
+.attn-row{display:flex;align-items:center;gap:13px;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 14px;cursor:pointer;font-family:inherit;transition:border-color .14s var(--ease),transform .12s var(--ease);}
+.attn-row:hover{transform:translateX(2px);}
+.attn-row.crit{border-left:3px solid var(--negative);}
+.attn-row.warn{border-left:3px solid var(--gold);}
+.attn-row.info{border-left:3px solid var(--info,#6FB0D6);}
+.attn-n{font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:1.15rem;color:var(--on-dark);min-width:26px;text-align:center;}
+.attn-row.crit .attn-n{color:var(--negative-bright);}
+.attn-row.warn .attn-n{color:var(--gold-bright);}
+.attn-lead{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.attn-lead b{font-size:13.5px;color:var(--on-dark);font-weight:600;}
+.attn-lead em{font-style:normal;font-size:11.5px;color:var(--on-dark-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.attn-go{color:var(--gold-bright);font-size:15px;flex-shrink:0;}
 .rg-head{display:flex;align-items:center;justify-content:space-between;gap:10px 12px;flex-wrap:wrap;margin-bottom:18px;}
 .rg-head-r{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .ez-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--on-dark-2);cursor:pointer;user-select:none;white-space:nowrap;}
