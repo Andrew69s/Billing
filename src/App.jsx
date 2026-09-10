@@ -4185,6 +4185,10 @@ const invMoney = (n) => (Number(n) || 0).toLocaleString("uk-UA", { minimumFracti
 const INV_TONE = { issued: "badge-warn", paid: "badge-ok", shipped: "badge-ok", documented: "badge-ok", cancelled: "badge-off" };
 /* ФОП рахунку — з довідника, на дату виставлення (раніші документи не чіпаємо) */
 const invFop = (inv) => fopOn(inv.created_by, inv.created_at);
+/* прострочений = виставлений 5+ днів тому і досі не опрацьований (статус «Виставлено») */
+const INV_OVERDUE_DAYS = 5;
+const invDaysOld = (inv) => Math.floor((Date.now() - new Date(inv.created_at).getTime()) / 864e5);
+const isInvOverdue = (inv) => inv.status === "issued" && invDaysOld(inv) >= INV_OVERDUE_DAYS;
 
 function useInvoices() {
   const [rows, setRows] = useState(null);
@@ -4369,8 +4373,9 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
     setBusy(false);
   };
 
+  const overdue = isInvOverdue(inv);
   return (
-    <div className={`inv-card ${inv.status === "cancelled" ? "inv-cancelled" : ""} ${open ? "inv-open" : ""}`}>
+    <div className={`inv-card ${inv.status === "cancelled" ? "inv-cancelled" : ""} ${overdue ? "inv-overdue" : ""} ${open ? "inv-open" : ""}`}>
       <div className="inv-card-main">
         <button className="inv-card-expand" onClick={() => setOpen((v) => !v)}>
           <span className={`inv-dot inv-${inv.status}`} />
@@ -4380,7 +4385,9 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
           </span>
           <span className={`inv-vat ${inv.vat ? "on" : ""}`}>{inv.vat ? "з ПДВ" : "без ПДВ"}</span>
           <span className="inv-amount">{invMoney(inv.amount)}</span>
-          <span className={`badge ${INV_TONE[inv.status]} inv-badge`}>{INVOICE_STATUS[inv.status]}</span>
+          {overdue
+            ? <span className="badge badge-off inv-badge inv-badge-over">прострочено {invDaysOld(inv)} дн.</span>
+            : <span className={`badge ${INV_TONE[inv.status]} inv-badge`}>{INVOICE_STATUS[inv.status]}</span>}
         </button>
         {inv.screenshot && (
           <button className="inv-shot-btn" title="Відкрити скрін рахунку" onClick={() => onPreview(inv.screenshot)}>
@@ -4582,9 +4589,11 @@ function InvoicesModule({ cab }) {
   const salonKeys = [...new Set(rows.map((r) => r.created_by))].sort();
   const counts = INVOICE_FLOW.reduce((a, s) => ({ ...a, [s]: rows.filter((r) => r.status === s).length }), {});
   const archived = (r) => r.status === "documented" || r.status === "cancelled";
+  const overdueCount = rows.filter(isInvOverdue).length;
 
   let shown = rows.filter((r) => {
     if (salonF !== "all" && r.created_by !== salonF) return false;
+    if (filter === "overdue") return isInvOverdue(r);
     if (filter === "open") return !archived(r);
     if (filter === "archive") return archived(r);
     if (filter === "all") return true;
@@ -4621,6 +4630,7 @@ function InvoicesModule({ cab }) {
             <span><b>{counts.issued || 0}</b> виставлено</span>
             <span><b>{counts.paid || 0}</b> оплачено</span>
             <span><b>{counts.shipped || 0}</b> відвантажено</span>
+            {overdueCount > 0 && <span className="inv-dash-over"><b>{overdueCount}</b> прострочено</span>}
           </div>
 
           <div className="inv-toolbar">
@@ -4640,10 +4650,19 @@ function InvoicesModule({ cab }) {
           </div>
 
           <div className="inv-filters">
+            <button className={`inv-fchip inv-fchip-over ${filter === "overdue" ? "on" : ""} ${overdueCount > 0 && filter !== "overdue" ? "glow" : ""}`} onClick={() => setFilter("overdue")}>
+              Прострочені{overdueCount > 0 ? ` · ${overdueCount}` : ""}
+            </button>
             {[["open", "Активні"], ["all", "Усі"], ...INVOICE_FLOW.map((s) => [s, INVOICE_STATUS[s]]), ["archive", "Архів"]].map(([k, l]) => (
               <button key={k} className={`inv-fchip ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>{l}</button>
             ))}
           </div>
+          {filter === "overdue" && (
+            <p className="hint" style={{ margin: "-4px 0 12px" }}>
+              Виставлені 5+ днів тому й досі не опрацьовані (статус «Виставлено»).
+              {cab.type === "sm" ? " Лише ваші рахунки." : " По всій території."}
+            </p>
+          )}
 
           {shown.length === 0 ? (
             <div className="admin-empty">Рахунків немає.</div>
@@ -7657,12 +7676,25 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
     notifBus?.addEventListener("c", reload);
     return () => { unsub(); notifBus?.removeEventListener("c", reload); };
   }, [cabKey]);
+  // --- прострочені безнальні рахунки (бейдж на вкладці «Безнальні рахунки») ---
+  const [invOverdue, setInvOverdue] = useState(0);
+  useEffect(() => {
+    if (!allModules.some((m) => m.key === "bn" || m.key === "inv")) return undefined;
+    const reload = () => listInvoices()
+      .then((rs) => setInvOverdue(rs.filter(isInvOverdue).length))
+      .catch(() => {});
+    reload();
+    return subscribeInvoices(reload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cabKey]);
+
   const badges = {};
   for (const n of notifs) {
     if (n.read) continue;
     const k = moduleKeyForNotif(items, n);
     if (k) badges[k] = (badges[k] || 0) + 1;
   }
+  if (invOverdue) for (const m of items) if (m.key === "bn" || m.key === "inv") badges[m.key] = (badges[m.key] || 0) + invOverdue;
   // відкрили вкладку → прочитати її сповіщення (бейдж зникає)
   useEffect(() => {
     const mine = notifs.filter((n) => !n.read && moduleKeyForNotif(items, n) === active);
@@ -8863,7 +8895,15 @@ td.sh.sh-plan{font-weight:400;}
 .inv-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;}
 .inv-fchip{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:5px 12px;font-size:11.5px;font-family:inherit;cursor:pointer;transition:all .13s var(--ease);}
 .inv-fchip.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.inv-fchip-over{font-weight:700;}
+.inv-fchip-over.on{background:rgba(160,58,42,.18);color:var(--negative-bright);border-color:rgba(224,145,127,.45);}
+.inv-fchip-over.glow{color:var(--negative-bright);border-color:rgba(224,145,127,.5);background:rgba(160,58,42,.12);animation:glowpulse-red 1.7s ease-in-out infinite;}
+@keyframes glowpulse-red{0%,100%{box-shadow:0 0 0 0 rgba(224,145,127,.5);}50%{box-shadow:0 0 0 6px rgba(224,145,127,0);}}
+.inv-dash-over{color:var(--negative-bright);}
+.inv-dash-over b{color:var(--negative-bright);}
 .inv-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:var(--sh-1);overflow:hidden;color:var(--ink);}
+.inv-card.inv-overdue{border-color:rgba(224,145,127,.45);box-shadow:inset 3px 0 0 var(--negative);}
+.inv-badge-over{white-space:nowrap;}
 .inv-card.inv-cancelled{opacity:.55;}
 .inv-card-main{display:flex;align-items:stretch;}
 .inv-card-expand{flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:10px 12px 10px 14px;background:none;border:none;font-family:inherit;text-align:left;cursor:pointer;}
