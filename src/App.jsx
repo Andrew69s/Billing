@@ -4355,7 +4355,7 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
   );
 }
 
-function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
+function InvoiceCard({ inv, cab, canManage, onPreview, onChanged, compact }) {
   const [open, setOpen] = useState(false);
   const [cmt, setCmt] = useState("");
   const [busy, setBusy] = useState(false);
@@ -4381,7 +4381,7 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged }) {
 
   const overdue = isInvOverdue(inv);
   return (
-    <div className={`inv-card ${inv.status === "cancelled" ? "inv-cancelled" : ""} ${overdue ? "inv-overdue" : ""} ${open ? "inv-open" : ""}`}>
+    <div className={`inv-card ${compact ? "inv-card-compact" : ""} ${inv.status === "cancelled" ? "inv-cancelled" : ""} ${overdue ? "inv-overdue" : ""} ${open ? "inv-open" : ""}`}>
       <div className="inv-card-main">
         <button className="inv-card-expand" onClick={() => setOpen((v) => !v)}>
           <span className={`inv-dot inv-${inv.status}`} />
@@ -4625,11 +4625,42 @@ function InvoicesModule({ cab }) {
 
       <div className="inv-viewtabs">
         <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}>Список</button>
+        <button className={view === "board" ? "on" : ""} onClick={() => setView("board")}>Дошка</button>
         <button className={view === "analytics" ? "on" : ""} onClick={() => setView("analytics")}><BarChart3 size={13} /> Аналітика</button>
       </div>
 
       {view === "analytics" ? (
         <InvoiceAnalytics rows={rows} cab={cab} />
+      ) : view === "board" ? (
+        <>
+          {multiSalon && (
+            <div className="inv-toolbar">
+              <select value={salonF} onChange={(e) => setSalonF(e.target.value)}>
+                <option value="all">Усі салони</option>
+                {salonKeys.map((k) => <option key={k} value={k}>{cabName(k)}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="inv-board">
+            {INVOICE_FLOW.map((st) => {
+              const col = rows.filter((r) => r.status === st && (salonF === "all" || r.created_by === salonF));
+              const ordered = st === "issued"
+                ? [...col].sort((a, b) => (isInvOverdue(b) ? 1 : 0) - (isInvOverdue(a) ? 1 : 0) || (a.created_at < b.created_at ? 1 : -1))
+                : [...col].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+              const sum = col.reduce((s, r) => s + Number(r.amount || 0), 0);
+              return (
+                <div className="inv-col" key={st}>
+                  <div className="inv-col-h"><span>{INVOICE_STATUS[st]}</span><span className="mono">{col.length} · {invMoney(sum)}</span></div>
+                  <div className="inv-col-body">
+                    {ordered.length === 0
+                      ? <p className="inv-col-empty">—</p>
+                      : ordered.map((inv) => <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} onPreview={setPreview} onChanged={reload} compact />)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       ) : (
         <>
           <div className="tasks-dash">
@@ -9115,6 +9146,18 @@ td.sh.sh-plan{font-weight:400;}
 .inv-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:var(--sh-1);overflow:hidden;color:var(--ink);}
 .inv-card.inv-overdue{border-color:rgba(224,145,127,.45);box-shadow:inset 3px 0 0 var(--negative);}
 .inv-badge-over{white-space:nowrap;}
+
+.inv-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(240px,1fr);gap:12px;overflow-x:auto;padding-bottom:8px;-webkit-overflow-scrolling:touch;}
+.inv-col{background:rgba(var(--sf),.03);border:1px solid var(--line-dark);border-radius:var(--radius-md);padding:10px;min-height:200px;}
+.inv-col-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:2px 4px 10px;font-size:12px;font-weight:700;color:var(--on-dark);}
+.inv-col-h .mono{font-size:10px;color:var(--on-dark-3);font-weight:500;}
+.inv-col-body{display:flex;flex-direction:column;gap:8px;}
+.inv-col-empty{text-align:center;color:var(--faint);font-size:12px;padding:10px 0;margin:0;}
+.inv-card-compact .inv-card-expand{flex-wrap:wrap;gap:5px 8px;padding:9px 10px;}
+.inv-card-compact .inv-cp-wrap{flex-basis:100%;}
+.inv-card-compact .inv-amount{margin-left:0;}
+.inv-card-compact .inv-badge{margin-left:auto;}
+.inv-card-compact .inv-fop-line{padding:0 10px 7px 10px;}
 .inv-card.inv-cancelled{opacity:.55;}
 .inv-card-main{display:flex;align-items:stretch;}
 .inv-card-expand{flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:10px 12px 10px 14px;background:none;border:none;font-family:inherit;text-align:left;cursor:pointer;}
