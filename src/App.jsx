@@ -8258,17 +8258,31 @@ function TrainingModule({ cab }) {
         {activeTrainings.length === 0 && <p className="hint">активних тестувань немає</p>}
         {activeTrainings.map((t) => {
           const dleft = daysToDeadline(t.deadline);
+          const srows = scopeSalons.map((s) => {
+            const emps = activeEmps.filter((e) => e.salon_key === s.key);
+            const passed = emps.filter((e) => resKey(t.id, e.id)?.passed);
+            const miss = emps.filter((e) => !resKey(t.id, e.id)?.passed);
+            return { s, emps, passed, miss };
+          }).filter((r) => r.emps.length);
+          const totT = srows.reduce((a, r) => a + r.emps.length, 0);
+          const passT = srows.reduce((a, r) => a + r.passed.length, 0);
+          const pctT = totT ? Math.round((passT / totT) * 100) : 0;
           return (
-            <div className={`trn-card ${dleft != null && dleft <= 3 ? "urgent" : ""}`} key={t.id}>
+            <div className={`trn-card ${dleft != null && dleft < 0 ? "overdue" : dleft != null && dleft <= 3 ? "urgent" : ""}`} key={t.id}>
               <div className="trn-card-h">
                 <b>{t.title}</b>
-                <span className="trn-card-meta">
-                  {t.assigned_on ? `призначено ${fmtDeadline(t.assigned_on)} · ` : ""}
-                  {t.deadline ? `дедлайн ${fmtDeadline(t.deadline)}` : "без дедлайну"}
-                  {dleft != null ? ` · ${dleft < 0 ? "прострочено" : `${dleft} дн.`}` : ""}
-                </span>
-                {manage && <button className="trn-del" title="Видалити" onClick={() => { if (confirm("Видалити тестування?")) deleteTraining(t.id).then(reload); }}><Trash2 size={12} /></button>}
+                {manage && <button className="trn-del" title="Видалити" onClick={() => { if (confirm("Видалити тестування?")) deleteTraining(t.id).then(reload); }}><Trash2 size={13} /></button>}
               </div>
+              <div className="trn-card-meta">
+                {t.assigned_on && <span className="trn-pill">призначено {fmtDeadline(t.assigned_on)}</span>}
+                <span className="trn-pill">{t.deadline ? `дедлайн ${fmtDeadline(t.deadline)}` : "без дедлайну"}</span>
+                {dleft != null && (
+                  <span className={`trn-pill ${dleft < 0 ? "bad" : dleft <= 3 ? "warn" : "ok"}`}>
+                    {dleft < 0 ? `прострочено ${-dleft} дн.` : dleft === 0 ? "дедлайн сьогодні" : `${dleft} дн. лишилось`}
+                  </span>
+                )}
+              </div>
+
               {isSm ? (
                 <table className="trn-emp-tbl"><tbody>
                   {activeEmps.length === 0 && <tr><td className="hint">немає активних співробітників</td></tr>}
@@ -8288,21 +8302,31 @@ function TrainingModule({ cab }) {
                   })}
                 </tbody></table>
               ) : (
-                <div className="trn-salon-grid">
-                  {scopeSalons.map((s) => {
-                    const emps = activeEmps.filter((e) => e.salon_key === s.key);
-                    if (!emps.length) return null;
-                    const pass = emps.filter((e) => resKey(t.id, e.id)?.passed).length;
-                    const miss = emps.filter((e) => !resKey(t.id, e.id)?.passed);
-                    return (
-                      <div className={`trn-salon-row ${pass === emps.length ? "ok" : ""}`} key={s.key}>
-                        <span className="trn-salon-nm">{s.city}, {shortAddr(s.addr)}</span>
-                        <span className="trn-salon-p">{pass}/{emps.length}</span>
-                        {miss.length > 0 && <span className="trn-salon-miss">не пройшли: {miss.map((e) => e.full_name).join(", ")}</span>}
-                      </div>
-                    );
-                  })}
-                </div>
+                <>
+                  <div className="trn-terr">
+                    <span className="trn-terr-lab">Пройшло по території</span>
+                    <b className="trn-terr-num">{passT}/{totT}</b>
+                    <div className="trn-terr-bar"><i className={pctT === 100 ? "full" : ""} style={{ width: `${pctT}%` }} /></div>
+                    <span className="trn-terr-pct">{pctT}%</span>
+                  </div>
+                  <div className="trn-slist">
+                    {srows.map(({ s, emps, passed, miss }) => {
+                      const state = passed.length === emps.length ? "ok" : passed.length === 0 ? "none" : "part";
+                      return (
+                        <div className={`trn-srow ${state}`} key={s.key}>
+                          <span className="trn-srow-nm">{s.city}, {shortAddr(s.addr)}</span>
+                          <span className="trn-dots">
+                            {emps.slice(0, 12).map((e, i) => <i key={i} className={`trn-dot ${resKey(t.id, e.id)?.passed ? "on" : ""}`} />)}
+                          </span>
+                          <span className="trn-srow-n">{passed.length}/{emps.length}</span>
+                          {miss.length === 0
+                            ? <span className="trn-srow-miss ok">усі пройшли</span>
+                            : <span className="trn-srow-miss">{miss.map((e) => e.full_name).join(", ")}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
               )}
             </div>
           );
@@ -9846,13 +9870,39 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .trn-tabs{display:inline-flex;gap:4px;}
 .trn-tabs button{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:4px 12px;font-size:11px;font-family:inherit;cursor:pointer;}
 .trn-tabs button.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
-.trn-card{border:1px solid var(--line);border-radius:var(--radius-md);padding:11px 13px;margin-bottom:10px;background:var(--surface);}
-.trn-card.urgent{border-left:3px solid var(--negative-bright);}
-.trn-card-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
-.trn-card-h b{font-size:13px;}
-.trn-card-meta{font-size:11px;color:var(--muted);}
-.trn-del{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;}
+.trn-card{border:1px solid var(--line);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:10px;background:var(--surface);}
+.trn-card.urgent{border-left:3px solid var(--gold);}
+.trn-card.overdue{border-left:3px solid var(--negative-bright);}
+.trn-card-h{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;}
+.trn-card-h b{font-family:'Fraunces',serif;font-size:15px;font-weight:600;line-height:1.28;letter-spacing:-.01em;flex:1;}
+.trn-del{background:none;border:none;color:var(--faint);cursor:pointer;padding:2px;flex:none;}
 .trn-del:hover{color:var(--negative-bright);}
+.trn-card-meta{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+.trn-pill{font-size:10.5px;padding:2px 9px;border-radius:999px;background:var(--surface-alt);color:var(--muted);border:1px solid var(--line);white-space:nowrap;}
+.trn-pill.ok{color:var(--positive);border-color:rgba(63,107,74,.4);}
+.trn-pill.warn{color:var(--gold-bright);border-color:rgba(220,169,74,.45);background:rgba(220,169,74,.1);}
+.trn-pill.bad{color:var(--negative-bright);border-color:rgba(160,58,42,.45);background:rgba(160,58,42,.1);}
+.trn-terr{display:flex;align-items:center;gap:10px;padding:8px 11px;background:var(--surface-alt);border-radius:8px;margin-bottom:8px;}
+.trn-terr-lab{font-size:11px;color:var(--muted);white-space:nowrap;}
+.trn-terr-num{font-size:13px;font-variant-numeric:tabular-nums;}
+.trn-terr-bar{flex:1;height:6px;border-radius:999px;background:rgba(0,0,0,.1);overflow:hidden;min-width:60px;}
+.trn-terr-bar i{display:block;height:100%;border-radius:999px;background:var(--gold);transition:width .3s ease;}
+.trn-terr-bar i.full{background:var(--positive);}
+.trn-terr-pct{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:32px;text-align:right;}
+.trn-slist{display:flex;flex-direction:column;}
+.trn-srow{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 0;border-top:1px solid var(--line);font-size:12px;}
+.trn-srow:first-child{border-top:none;}
+.trn-srow-nm{font-weight:600;min-width:150px;padding-left:13px;position:relative;}
+.trn-srow-nm::before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:6px;height:6px;border-radius:50%;background:var(--faint);}
+.trn-srow.ok .trn-srow-nm::before{background:var(--positive);}
+.trn-srow.part .trn-srow-nm::before{background:var(--gold);}
+.trn-srow.none .trn-srow-nm::before{background:var(--negative-bright);}
+.trn-dots{display:inline-flex;gap:3px;}
+.trn-dot{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--faint);box-sizing:border-box;}
+.trn-dot.on{background:var(--positive);border-color:var(--positive);}
+.trn-srow-n{font-variant-numeric:tabular-nums;color:var(--muted);}
+.trn-srow-miss{flex:1 1 100%;font-size:11px;color:var(--negative-bright);padding-left:13px;}
+.trn-srow-miss.ok{color:var(--positive);}
 .trn-emp-tbl{width:100%;border-collapse:collapse;font-size:12.5px;}
 .trn-emp-tbl td{padding:5px 6px;border-top:1px solid var(--line);}
 .trn-emp-tbl tr.done td{opacity:.72;}
