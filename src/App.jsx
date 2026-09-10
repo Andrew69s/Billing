@@ -12,7 +12,7 @@ import {
   Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
   Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
   Wrench, MessageSquare, Send, Banknote, Menu,
-  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine,
+  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -78,6 +78,14 @@ import {
   markOrderedFromSupplier, extractNakladna,
   subscribeSupply,
 } from "./lib/supply.js";
+import {
+  listTrainings, createTraining, updateTraining, deleteTraining,
+  listTrainingResults, upsertTrainingResult, extractTrainingScreenshot,
+  subscribeTrainings, daysToDeadline, salonMonthAvg,
+} from "./lib/training.js";
+import {
+  listZsuCodes, parseCodes, uploadZsuCodes, markZsuUsed, undoZsuUsed, deleteZsuCode, subscribeZsuCodes,
+} from "./lib/zsu.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
@@ -848,11 +856,13 @@ const pokeNotifs = () => notifBus?.dispatchEvent(new Event("c"));
 const NOTIF_LINK_MODULE = {
   tasks: "tasks", salary: "salary", warehouse: "warehouse", supply: "warehouse",
   invoices: "invoices", invoice: "invoices", feedback: "feedback", shifts: "shifts", bonus: "bonus",
+  training: "training", zsu: "zsu",
 };
 /* канонічна ціль → можливі ключі модуля в різних кабінетах */
 const NOTIF_MODULE_KEYS = {
   invoices: ["bn", "inv"], warehouse: ["warehouse"], tasks: ["tasks"], salary: ["salary"],
   feedback: ["feedback"], shifts: ["shifts"], bonus: ["bonus"], kpi: ["kpi"],
+  training: ["training"], zsu: ["zsu"],
 };
 const notifTargetOf = (n) => NOTIF_LINK_MODULE[n?.link] || NOTIF_LINK_MODULE[n?.kind] || n?.link || "";
 function moduleKeyForNotif(items, n) {
@@ -871,6 +881,7 @@ const notifIcon = (kind) => {
   if (kind === "feedback") return <MessageSquare size={15} />;
   if (kind === "supply") return <Warehouse size={15} />;
   if (kind === "news") return <Sparkles size={15} />;
+  if (kind === "training") return <GraduationCap size={15} />;
   return <Bell size={15} />;
 };
 
@@ -7769,6 +7780,384 @@ const NAV_PINNED_GROUP = "Головне";
 const NAV_DEFAULT_GROUP = "Інше";
 const ORG_GROUP = "Орг-структура";
 
+/* =========================================================
+   МОДУЛЬ «КОДИ ЗСУ −15%»
+========================================================= */
+function ZsuUsedModal({ code, onClose, onSave }) {
+  const [rc, setRc] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!rc.trim() || !date) return;
+    setBusy(true);
+    try { await onSave(rc.trim(), date); } finally { setBusy(false); }
+  };
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="zsu-modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Код використано</h3>
+        <p className="hint">Код <b>{code.code}</b> · {salonByKey(code.salon_key)?.city}</p>
+        <label className="over-field" style={{ maxWidth: "100%" }}><span>Номер чека</span>
+          <input value={rc} onChange={(e) => setRc(e.target.value)} autoFocus placeholder="напр. 7703020742" />
+        </label>
+        <label className="over-field" style={{ maxWidth: "100%" }}><span>Дата</span>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+        <div className="zsu-modal-f">
+          <button className="btn-secondary" onClick={onClose}>Скасувати</button>
+          <button className="btn-primary" disabled={busy || !rc.trim() || !date} onClick={save}>{busy ? "…" : "Відмітити"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function ZsuCodesModule({ cab }) {
+  const isSm = cab.type === "sm";
+  const manage = cab.type === "tm" || cab.type === "manager"; // andriy = tm
+  const mySalons = useMemo(() => {
+    if (isSm) return SALONS.filter((s) => s.key === cab.key);
+    if (cab.type === "tm") { const my = cab.tmKey || cab.key; return SALONS.filter((s) => salonTmOn(s.key) === my); }
+    return SALONS;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cab.key, cab.type, cab.tmKey]);
+  const [codes, setCodes] = useState(null);
+  const [salonKey, setSalonKey] = useState(mySalons[0]?.key || "");
+  const [raw, setRaw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [usedT, setUsedT] = useState(null);
+  const [expand, setExpand] = useState({});
+
+  const reload = React.useCallback(() => {
+    listZsuCodes(isSm ? { salonKey: cab.key } : {}).then(setCodes).catch(() => setCodes([]));
+  }, [cab.key, isSm]);
+  useEffect(() => { reload(); return subscribeZsuCodes(reload); }, [reload]);
+
+  const upload = async () => {
+    const list = parseCodes(raw);
+    if (!list.length || !salonKey) { pushToast({ title: "Немає кодів", body: "Вставте коди (по одному в рядку)" }); return; }
+    if (!confirm(`Вигрузити ${list.length} промокод(ів) у ${salonByKey(salonKey)?.city}?`)) return;
+    setBusy(true);
+    try {
+      const { added, dup } = await uploadZsuCodes(salonKey, list, cab.key);
+      if (added) await notify({ recipient: salonKey, kind: "zsu", title: `Вам вигружено ${added} промокод(ів) ЗСУ −15%`, body: "Вкладка «Коди ЗСУ»", actor: cab.key, link: "zsu" }).catch(() => {});
+      pushToast({ title: added ? `Вигружено ${added}` : "Нових немає", body: dup ? `${dup} вже були` : "" });
+      setRaw("");
+      reload();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy(false);
+  };
+  const setUsed = async (rc, date) => {
+    try {
+      await markZsuUsed(usedT.id, rc, date, cab.key);
+      pushToast({ title: "Код відмічено", body: `чек ${rc}` });
+      setUsedT(null); reload();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+  };
+  const undo = async (c) => { if (confirm(`Повернути код ${c.code} у невикористані?`)) { await undoZsuUsed(c.id).catch((e) => alert(e.message || e)); reload(); } };
+  const remove = async (c) => { if (confirm(`Видалити код ${c.code}?`)) { await deleteZsuCode(c.id).catch((e) => alert(e.message || e)); reload(); } };
+
+  if (codes === null) return <div className="loading">Завантаження…</div>;
+
+  const byS = {};
+  codes.forEach((c) => { (byS[c.salon_key] ||= []).push(c); });
+  const listSalons = isSm ? mySalons : mySalons.filter((s) => byS[s.key]?.length);
+
+  return (
+    <div className="tasks-mod zsu-mod">
+      <div className="tasks-head"><h3 className="ov-h">Коди ЗСУ −15%</h3></div>
+      <div className="zsu-note">
+        <ShieldCheck size={14} /> Обов'язкова умова використання — наявність у клієнта посвідчення УБД та надання його до ознайомлення.
+        Промокод не діє на товар, який у роздріб неакційний, але діє паралельно з іншими акціями (набори, разом дешевше тощо).
+      </div>
+
+      {manage && (
+        <div className="zsu-assign">
+          <div className="zsu-assign-h">Призначити коди</div>
+          <select value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
+            {mySalons.map((s) => <option key={s.key} value={s.key}>{salonLabel(s)}</option>)}
+          </select>
+          <textarea rows={5} value={raw} onChange={(e) => setRaw(e.target.value)} placeholder="Вставте коди — по одному в рядку або через кому" />
+          <div className="zsu-assign-f">
+            <span className="hint">{parseCodes(raw).length} код(ів) розпізнано</span>
+            <button className="btn-primary" disabled={busy || !parseCodes(raw).length} onClick={upload}>Вигрузити промокоди</button>
+          </div>
+        </div>
+      )}
+
+      {listSalons.map((s) => {
+        const list = (byS[s.key] || []).slice().sort((a, b) => Number(a.used) - Number(b.used) || a.code.localeCompare(b.code));
+        const used = list.filter((c) => c.used).length;
+        const open = isSm || expand[s.key];
+        return (
+          <div className="zsu-salon" key={s.key}>
+            <button className="zsu-salon-h" onClick={() => !isSm && setExpand((x) => ({ ...x, [s.key]: !x[s.key] }))}>
+              <span>{salonLabel(s)}</span>
+              <span className="zsu-salon-c">{list.length - used} вільних · {used} використано</span>
+            </button>
+            {open && list.length === 0 && <p className="hint" style={{ padding: "4px 10px" }}>кодів немає</p>}
+            {open && list.length > 0 && (
+              <div className="zsu-codes">
+                {list.map((c) => (
+                  <div className={`zsu-code ${c.used ? "used" : ""}`} key={c.id}>
+                    <span className="zsu-code-v">{c.code}</span>
+                    {c.used ? (
+                      <>
+                        <span className="zsu-code-rc">чек {c.receipt_no || "—"}{c.used_on ? ` · ${fmtDeadline(c.used_on)}` : ""}</span>
+                        {(isSm ? c.salon_key === cab.key : manage) && <button className="zsu-undo" title="Повернути в невикористані" onClick={() => undo(c)}><RefreshCw size={12} /></button>}
+                      </>
+                    ) : (
+                      <>
+                        {isSm && c.salon_key === cab.key && <button className="btn-secondary zsu-use" onClick={() => setUsedT(c)}>Використано</button>}
+                        {manage && <button className="zsu-undo" title="Видалити код" onClick={() => remove(c)}><Trash2 size={12} /></button>}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {usedT && <ZsuUsedModal code={usedT} onClose={() => setUsedT(null)} onSave={setUsed} />}
+    </div>
+  );
+}
+
+/* =========================================================
+   МОДУЛЬ «ПРОХОДЖЕННЯ ТЕСТУВАНЬ»
+========================================================= */
+function TrainingCreateModal({ cabKey, onClose, onDone }) {
+  const [title, setTitle] = useState("");
+  const [assigned, setAssigned] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [shot, setShot] = useState("");
+  const [ocr, setOcr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = React.useRef(null);
+
+  const onFile = async (file) => {
+    if (!file) return;
+    setOcr("Розпізнаю скріншот…");
+    try {
+      const url = await resizeImage(file);
+      setShot(url);
+      const r = await extractTrainingScreenshot(url);
+      if (r.title) setTitle(r.title);
+      if (r.assigned_on) setAssigned(r.assigned_on);
+      if (r.deadline) setDeadline(r.deadline);
+      setOcr(r.title || r.deadline ? "Розпізнано — перевірте поля нижче" : "Не вдалося розпізнати, заповніть вручну");
+    } catch (e) { setOcr(String(e.message || e)); }
+  };
+  const save = async () => {
+    if (!title.trim()) return;
+    if (assigned && deadline && deadline < assigned) { alert("Дедлайн раніше за дату призначення"); return; }
+    setBusy(true);
+    try {
+      await createTraining({ title: title.trim(), assigned_on: assigned || null, deadline: deadline || null, screenshot: shot || null, created_by: cabKey });
+      pushToast({ title: "Тестування додано", body: title.trim() });
+      onDone();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); setBusy(false); }
+  };
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="trn-modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Нове тестування</h3>
+        <button className="btn-secondary trn-upl" onClick={() => fileRef.current?.click()}><Camera size={14} /> Завантажити скріншот</button>
+        <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+        {ocr && <div className="trn-ocr">{ocr}</div>}
+        {shot && <img src={shot} alt="" className="trn-shot" />}
+        <label className="over-field" style={{ maxWidth: "100%" }}><span>Назва тестування</span>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="напр. Стандарти сервісу" />
+        </label>
+        <div className="trn-dates">
+          <label className="over-field"><span>Призначено</span><input type="date" value={assigned} onChange={(e) => setAssigned(e.target.value)} /></label>
+          <label className="over-field"><span>Дедлайн</span><input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} /></label>
+        </div>
+        <div className="trn-modal-f">
+          <button className="btn-secondary" onClick={onClose}>Скасувати</button>
+          <button className="btn-primary" disabled={busy || !title.trim()} onClick={save}>Додати</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function TrainingModule({ cab }) {
+  const isSm = cab.type === "sm";
+  const manage = cab.type === "tm" || cab.type === "manager";
+  const my = cab.tmKey || cab.key;
+  const scopeSalons = useMemo(() => {
+    if (isSm) return SALONS.filter((s) => s.key === cab.key);
+    if (cab.type === "tm") return SALONS.filter((s) => salonTmOn(s.key) === my);
+    return SALONS;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cab.key, cab.type, my]);
+  const [trainings, setTrainings] = useState(null);
+  const [results, setResults] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [tab, setTab] = useState("active");
+  const [ym, setYm] = useState(nowYm());
+  const [add, setAdd] = useState(false);
+  const months = useMemo(() => recentMonths(12), []);
+
+  const reload = React.useCallback(async () => {
+    const [t, e] = await Promise.all([listTrainings({ includeArchived: true }).catch(() => []), listEmployees().catch(() => [])]);
+    setTrainings(t); setEmployees(e);
+    const r = await listTrainingResults(t.map((x) => x.id)).catch(() => []);
+    setResults(r);
+  }, []);
+  useEffect(() => { reload(); return subscribeTrainings(reload); }, [reload]);
+
+  if (trainings === null) return <div className="loading">Завантаження…</div>;
+
+  const activeEmps = employees.filter((e) => e.status === "active" && scopeSalons.some((s) => s.key === e.salon_key));
+  const resKey = (tid, eid) => results.find((r) => r.training_id === tid && r.employee_id === eid);
+  const activeTrainings = trainings.filter((t) => !t.archived);
+
+  const setResult = async (t, emp, patch) => {
+    const cur = resKey(t.id, emp.id) || {};
+    const row = {
+      training_id: t.id, employee_id: emp.id, salon_key: emp.salon_key,
+      passed: cur.passed || false, score: cur.score ?? null, passed_on: cur.passed_on || null,
+      updated_by: cab.key, ...patch,
+    };
+    if (patch.passed === true && !row.passed_on) row.passed_on = todayISO();
+    if (patch.passed === false) row.passed_on = null;
+    try { await upsertTrainingResult(row); reload(); }
+    catch (e) { alert(e.message || e); }
+  };
+
+  const addBtn = manage ? <button className="btn-primary" onClick={() => setAdd(true)}><Plus size={14} /> Тестування</button> : null;
+  const tabs = manage ? (
+    <div className="trn-tabs">
+      <button className={tab === "active" ? "on" : ""} onClick={() => setTab("active")}>Активні</button>
+      <button className={tab === "history" ? "on" : ""} onClick={() => setTab("history")}>Історія</button>
+    </div>
+  ) : null;
+
+  // ---- активні / режим редагування ----
+  if (isSm || tab === "active") {
+    return (
+      <div className="tasks-mod trn-mod">
+        <div className="tasks-head">
+          <h3 className="ov-h">Проходження тестувань</h3>
+          {tabs}{addBtn}
+        </div>
+        {activeTrainings.length === 0 && <p className="hint">активних тестувань немає</p>}
+        {activeTrainings.map((t) => {
+          const dleft = daysToDeadline(t.deadline);
+          return (
+            <div className={`trn-card ${dleft != null && dleft <= 3 ? "urgent" : ""}`} key={t.id}>
+              <div className="trn-card-h">
+                <b>{t.title}</b>
+                <span className="trn-card-meta">
+                  {t.assigned_on ? `призначено ${fmtDeadline(t.assigned_on)} · ` : ""}
+                  {t.deadline ? `дедлайн ${fmtDeadline(t.deadline)}` : "без дедлайну"}
+                  {dleft != null ? ` · ${dleft < 0 ? "прострочено" : `${dleft} дн.`}` : ""}
+                </span>
+                {manage && <button className="trn-del" title="Видалити" onClick={() => { if (confirm("Видалити тестування?")) deleteTraining(t.id).then(reload); }}><Trash2 size={12} /></button>}
+              </div>
+              {isSm ? (
+                <table className="trn-emp-tbl"><tbody>
+                  {activeEmps.length === 0 && <tr><td className="hint">немає активних співробітників</td></tr>}
+                  {activeEmps.map((e) => {
+                    const r = resKey(t.id, e.id) || {};
+                    return (
+                      <tr key={e.id} className={r.passed ? "done" : ""}>
+                        <td>{e.full_name}<span className="trn-role">{empRoleShort[e.role]}</span></td>
+                        <td className="trn-chk"><button className={`chk ${r.passed ? "on" : ""}`} onClick={() => setResult(t, e, { passed: !r.passed })} /></td>
+                        <td className="trn-score">
+                          <NumInput value={r.score ?? ""} allowEmpty placeholder="бал" className="trn-score-in"
+                            onChange={(v) => setResult(t, e, { score: v === "" || v == null ? null : Number(v) })} />
+                        </td>
+                        <td className="trn-when">{r.passed && r.passed_on ? fmtDeadline(r.passed_on) : ""}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody></table>
+              ) : (
+                <div className="trn-salon-grid">
+                  {scopeSalons.map((s) => {
+                    const emps = activeEmps.filter((e) => e.salon_key === s.key);
+                    if (!emps.length) return null;
+                    const pass = emps.filter((e) => resKey(t.id, e.id)?.passed).length;
+                    const miss = emps.filter((e) => !resKey(t.id, e.id)?.passed);
+                    return (
+                      <div className={`trn-salon-row ${pass === emps.length ? "ok" : ""}`} key={s.key}>
+                        <span className="trn-salon-nm">{s.city}, {shortAddr(s.addr)}</span>
+                        <span className="trn-salon-p">{pass}/{emps.length}</span>
+                        {miss.length > 0 && <span className="trn-salon-miss">не пройшли: {miss.map((e) => e.full_name).join(", ")}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {add && <TrainingCreateModal cabKey={cab.key} onClose={() => setAdd(false)} onDone={() => { setAdd(false); reload(); }} />}
+      </div>
+    );
+  }
+
+  // ---- історія (ТМ/керівник) ----
+  const monthTrainings = trainings.filter((t) => String(t.deadline || t.assigned_on || "").slice(0, 7) === ym);
+  return (
+    <div className="tasks-mod trn-mod">
+      <div className="tasks-head">
+        <h3 className="ov-h">Проходження тестувань</h3>
+        {tabs}
+        <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+      </div>
+
+      <div className="trn-avg">
+        <div className="trn-avg-h">Середній бал по СМ · {monthLabel(ym)}</div>
+        {scopeSalons.map((s) => {
+          const avg = salonMonthAvg(results, s.key, ym);
+          return (
+            <div className="trn-avg-row" key={s.key}>
+              <span>{s.city}, {shortAddr(s.addr)}</span>
+              <b>{avg == null ? "—" : avg.toFixed(1)}</b>
+            </div>
+          );
+        })}
+      </div>
+
+      {monthTrainings.length === 0 && <p className="hint">за {monthLabel(ym)} тестувань немає</p>}
+      {monthTrainings.map((t) => (
+        <div className="trn-card" key={t.id}>
+          <div className="trn-card-h">
+            <b>{t.title}</b>
+            <span className="trn-card-meta">дедлайн {t.deadline ? fmtDeadline(t.deadline) : "—"}</span>
+          </div>
+          <div className="trn-salon-grid">
+            {scopeSalons.map((s) => {
+              const rs = results.filter((r) => r.training_id === t.id && r.salon_key === s.key);
+              const pass = rs.filter((r) => r.passed).length;
+              const scored = rs.filter((r) => r.passed && r.score != null).map((r) => Number(r.score));
+              const avg = scored.length ? scored.reduce((a, b) => a + b, 0) / scored.length : null;
+              const tot = Math.max(employees.filter((e) => e.salon_key === s.key && e.status === "active").length, rs.length);
+              return (
+                <div className="trn-salon-row" key={s.key}>
+                  <span className="trn-salon-nm">{s.city}, {shortAddr(s.addr)}</span>
+                  <span className="trn-salon-p">{pass}/{tot} пройшли{avg != null ? ` · бал ${avg.toFixed(1)}` : ""}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      {add && <TrainingCreateModal cabKey={cab.key} onClose={() => setAdd(false)} onDone={() => { setAdd(false); reload(); }} />}
+    </div>
+  );
+}
+
 /* Реєстр вкладок, які адмін може ДОДАТИ будь-якому кабінету поверх рідних
    (вкладка «Доступ до вкладок» → «Додати вкладку»). Портативні модулі —
    рендеряться від контексту { key, type, tmKey }. «ЗП ТМ»/«ЗП» та інші
@@ -7783,6 +8172,8 @@ const ADDABLE_MODULES = [
   { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: (c) => <InvoicesModule cab={c} /> },
   { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: (c) => <DirectoryModule cab={c} /> },
   { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: (c) => <EmployeesModule cab={c} /> },
+  { key: "training", label: "Тестування", group: ORG_GROUP, icon: <GraduationCap size={16} />, render: (c) => <TrainingModule cab={c} /> },
+  { key: "zsu", label: "Коди ЗСУ", group: ORG_GROUP, icon: <BadgePercent size={16} />, render: (c) => <ZsuCodesModule cab={c} /> },
   { key: "archive", label: "Архів", group: ORG_GROUP, icon: <ArchiveIcon size={16} />, render: (c) => <EmployeesModule cab={c} archive /> },
   { key: "regionsheet", label: "Офіційні виплати", group: "Ще", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
   { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: (c) => <PlannerModule tmKey={c.tmKey || "andriy"} /> },
@@ -8311,6 +8702,8 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "archive", label: "Архів", group: ORG_GROUP, icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
     { key: "tasks", label: "Задачі", group: ORG_GROUP, icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "shifts", label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "training", label: "Тестування", group: ORG_GROUP, icon: <GraduationCap size={16} />, render: () => <TrainingModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "zsu", label: "Коди ЗСУ", group: ORG_GROUP, icon: <BadgePercent size={16} />, render: () => <ZsuCodesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "regionsheet", label: "Офіційні виплати", group: "Ще", icon: <Table size={16} />, render: () => <RegionSheetModule /> },
     { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={tmKey} /> },
@@ -8340,6 +8733,8 @@ function ManagerCabinet({ onExit, onLogout }) {
     { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
     { key: "tasks", label: "Задачі", group: ORG_GROUP, icon: <CheckSquare size={16} />, render: () => <TasksModule cab={cab} /> },
     { key: "shifts", label: "Графік", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={cab} /> },
+    { key: "training", label: "Тестування", group: ORG_GROUP, icon: <GraduationCap size={16} />, render: () => <TrainingModule cab={cab} /> },
+    { key: "zsu", label: "Коди ЗСУ", group: ORG_GROUP, icon: <BadgePercent size={16} />, render: () => <ZsuCodesModule cab={cab} /> },
     { key: "inv", label: "Рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
     { key: "sheet", label: "Офіційні виплати", group: ORG_GROUP, icon: <Table size={16} />, render: () => <RegionSheetModule /> },
   ];
@@ -8401,6 +8796,8 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "tasks", label: "Задачі й чек-листи", group: ORG_GROUP, icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "shifts", label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "training", label: "Тестування", group: ORG_GROUP, icon: <GraduationCap size={16} />, render: () => <TrainingModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "zsu", label: "Коди ЗСУ", group: ORG_GROUP, icon: <BadgePercent size={16} />, render: () => <ZsuCodesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "standards", label: "Стандарти й навчання", group: "Ще", icon: <GraduationCap size={16} />, render: () => <ModuleStub name="Стандарти й навчання" /> },
     { key: "planner", label: "Планер", group: "Ще", icon: <CalendarRange size={16} />, render: () => <PlannerModule tmKey={salonTmOn(salonKey)} /> },
@@ -9210,6 +9607,65 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .shift-lock-row button{padding:5px 12px;font-size:11.5px;}
 .shift-lock-reqs{margin-top:10px;}
 .shift-lock-reqs .sl-sub{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);}
+
+/* --- Коди ЗСУ --- */
+.zsu-note{display:flex;gap:7px;align-items:flex-start;background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--radius-md);padding:9px 12px;font-size:11.5px;color:var(--ink-soft);line-height:1.4;margin-bottom:12px;}
+.zsu-note svg{flex:none;margin-top:1px;color:var(--gold-bright);}
+.zsu-assign{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:14px;display:flex;flex-direction:column;gap:8px;}
+.zsu-assign-h{font-weight:700;font-size:12px;}
+.zsu-assign select,.zsu-assign textarea{width:100%;background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:12.5px;color:var(--ink);}
+.zsu-assign textarea{resize:vertical;font-family:var(--mono,monospace);}
+.zsu-assign-f{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.zsu-salon{border:1px solid var(--line);border-radius:var(--radius-md);margin-bottom:8px;overflow:hidden;background:var(--surface);}
+.zsu-salon-h{width:100%;display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--surface-alt);border:none;padding:9px 12px;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;text-align:left;}
+.zsu-salon-c{font-weight:500;font-size:11px;color:var(--muted);}
+.zsu-codes{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;}
+.zsu-code{display:flex;align-items:center;gap:8px;background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:12px;}
+.zsu-code-v{font-family:var(--mono,monospace);font-weight:600;letter-spacing:.02em;}
+.zsu-code.used .zsu-code-v{text-decoration:line-through;opacity:.55;}
+.zsu-code-rc{font-size:10.5px;color:var(--muted);}
+.zsu-use{padding:3px 10px!important;font-size:10.5px!important;}
+.zsu-undo{background:none;border:none;color:var(--muted);cursor:pointer;display:flex;padding:2px;}
+.zsu-undo:hover{color:var(--negative-bright);}
+
+/* --- Тестування --- */
+.trn-tabs{display:inline-flex;gap:4px;}
+.trn-tabs button{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:4px 12px;font-size:11px;font-family:inherit;cursor:pointer;}
+.trn-tabs button.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.trn-card{border:1px solid var(--line);border-radius:var(--radius-md);padding:11px 13px;margin-bottom:10px;background:var(--surface);}
+.trn-card.urgent{border-left:3px solid var(--negative-bright);}
+.trn-card-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
+.trn-card-h b{font-size:13px;}
+.trn-card-meta{font-size:11px;color:var(--muted);}
+.trn-del{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;}
+.trn-del:hover{color:var(--negative-bright);}
+.trn-emp-tbl{width:100%;border-collapse:collapse;font-size:12.5px;}
+.trn-emp-tbl td{padding:5px 6px;border-top:1px solid var(--line);}
+.trn-emp-tbl tr.done td{opacity:.72;}
+.trn-role{color:var(--muted);font-size:10.5px;margin-left:6px;}
+.trn-chk{width:34px;text-align:center;}
+.trn-emp-tbl .chk{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line-strong,var(--line));background:none;cursor:pointer;}
+.trn-emp-tbl .chk.on{background:var(--positive);border-color:var(--positive);}
+.trn-score-in{width:56px;background:var(--surface-alt);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-family:inherit;font-size:12px;text-align:center;}
+.trn-when{font-size:10.5px;color:var(--muted);white-space:nowrap;}
+.trn-salon-grid{display:flex;flex-direction:column;gap:4px;}
+.trn-salon-row{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;padding:3px 0;}
+.trn-salon-row.ok .trn-salon-p{color:var(--positive);}
+.trn-salon-nm{font-weight:600;min-width:150px;}
+.trn-salon-p{font-variant-numeric:tabular-nums;}
+.trn-salon-miss{font-size:11px;color:var(--negative-bright);}
+.trn-avg{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px 13px;margin-bottom:12px;}
+.trn-avg-h{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:6px;}
+.trn-avg-row{display:flex;justify-content:space-between;font-size:12.5px;padding:2px 0;}
+.trn-modal,.zsu-modal{background:var(--surface);color:var(--ink);border-radius:var(--radius-md);padding:18px 20px;width:min(440px,92vw);max-height:88vh;overflow:auto;display:flex;flex-direction:column;gap:10px;}
+.trn-modal h3,.zsu-modal h3{margin:0;font-size:15px;}
+.trn-upl{align-self:flex-start;}
+.trn-ocr{font-size:11.5px;color:var(--muted);background:var(--surface-alt);border-radius:6px;padding:6px 9px;}
+.trn-shot{width:100%;border-radius:8px;border:1px solid var(--line);max-height:180px;object-fit:contain;background:var(--surface-alt);}
+.trn-dates{display:flex;gap:10px;}
+.trn-dates .over-field{flex:1;}
+.trn-modal-f,.zsu-modal-f{display:flex;justify-content:flex-end;gap:8px;margin-top:4px;}
+.trn-modal input[type=date],.zsu-modal input[type=date],.zsu-modal input[type=text],.zsu-modal input:not([type]){background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:12.5px;color:var(--ink);width:100%;}
 .grid-scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
 table.sched{border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;}
 table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
