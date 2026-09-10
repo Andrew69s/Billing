@@ -87,6 +87,11 @@ export function planDeadline(ym) {
   return new Date(y, m - 1, 4, 0, 0, 0, 0); // 00:00 4-го = кінець 3-го числа
 }
 export const planLocked = (ym) => Date.now() >= planDeadline(ym).getTime();
+/* факт замикається лише коли місяць завершився (минулі місяці) */
+export function factLocked(ym) {
+  const n = new Date();
+  return ym < `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+}
 
 export async function listShiftEditRequests(ym) {
   let q = supabase.from("shift_edit_requests").select("*").order("requested_at", { ascending: false });

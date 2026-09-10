@@ -1,10 +1,10 @@
 -- =========================================================
 --  Графік змін v3 — замок планування + запити на коригування факту
 --  Правило: графік на місяць подається у перші дні цього ж місяця — до
---  3 числа включно (напр. графік на вересень — до 3 вересня). Далі план
---  замикається назавжди, вноситься лише факт. Магазин може подати запит;
---  ТМ/адмін підтверджує; після підтвердження магазин коригує факт до
---  кінця того дня, потім знову замок.
+--  3 числа включно (напр. графік на вересень — до 3 вересня). Далі ПЛАН
+--  замикається назавжди. ФАКТ поточного місяця вноситься вільно; факт
+--  завершеного місяця замикається — магазин подає запит, ТМ/адмін
+--  підтверджує, і магазин коригує факт до кінця того дня.
 -- =========================================================
 
 create table if not exists public.shift_edit_requests (
@@ -51,32 +51,39 @@ create policy ser_update on public.shift_edit_requests for update
 create or replace function public.shifts_guard() returns trigger
 language plpgsql security definer set search_path to 'public' as $$
 declare
-  wd       date        := coalesce(NEW.work_date, OLD.work_date);
-  m_ym     text        := to_char(wd, 'YYYY-MM');
-  deadline timestamptz := date_trunc('month', wd::timestamp) + interval '3 days';
-  locked   boolean     := now() > deadline;
+  wd        date        := coalesce(NEW.work_date, OLD.work_date);
+  m_ym      text        := to_char(wd, 'YYYY-MM');
+  plan_deadline timestamptz := date_trunc('month', wd::timestamp) + interval '3 days';
+  cur_month date        := date_trunc('month', (now() at time zone 'Europe/Kyiv'))::date;
+  plan_lock boolean     := now() > plan_deadline;             -- план місяця замикається після 3 числа
+  fact_lock boolean     := wd < cur_month;                    -- факт замикається лише коли місяць завершився
   has_grant boolean;
 begin
   if public.is_manager_or_admin() then return coalesce(NEW, OLD); end if;
-  if not locked then return coalesce(NEW, OLD); end if;
 
-  -- у замкненому місяці план не змінюється взагалі
-  if TG_OP = 'INSERT' then
-    if NEW.plan_h is not null then raise exception 'plan_locked'; end if;
-  elsif TG_OP = 'UPDATE' then
-    if coalesce(NEW.plan_h::text, '') is distinct from coalesce(OLD.plan_h::text, '') then
-      raise exception 'plan_locked';
+  -- у замкненому місяці план не змінюється взагалі (факт поточного місяця — вільно)
+  if plan_lock then
+    if TG_OP = 'INSERT' then
+      if NEW.plan_h is not null then raise exception 'plan_locked'; end if;
+    elsif TG_OP = 'UPDATE' then
+      if coalesce(NEW.plan_h::text, '') is distinct from coalesce(OLD.plan_h::text, '') then
+        raise exception 'plan_locked';
+      end if;
+    elsif TG_OP = 'DELETE' then
+      if OLD.plan_h is not null and not fact_lock then raise exception 'plan_locked'; end if;
     end if;
   end if;
 
-  -- зміна факту у замкненому місяці — лише за активним дозволом на сьогодні
-  select exists (
-    select 1 from public.shift_edit_requests r
-    where r.salon_key = coalesce(NEW.salon_key, OLD.salon_key)
-      and r.ym = m_ym and r.status = 'approved'
-      and (r.resolved_at at time zone 'Europe/Kyiv')::date = (now() at time zone 'Europe/Kyiv')::date
-  ) into has_grant;
-  if not has_grant then raise exception 'fact_locked'; end if;
+  -- факт завершеного місяця — лише за активним дозволом ТМ на сьогодні
+  if fact_lock then
+    select exists (
+      select 1 from public.shift_edit_requests r
+      where r.salon_key = coalesce(NEW.salon_key, OLD.salon_key)
+        and r.ym = m_ym and r.status = 'approved'
+        and (r.resolved_at at time zone 'Europe/Kyiv')::date = (now() at time zone 'Europe/Kyiv')::date
+    ) into has_grant;
+    if not has_grant then raise exception 'fact_locked'; end if;
+  end if;
 
   return coalesce(NEW, OLD);
 end $$;

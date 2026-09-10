@@ -49,7 +49,7 @@ import {
   ABSENCE_REASONS, daysInMonth, dayKey, todayISO,
   listShifts, upsertShift, upsertShiftsBatch, deleteShift,
   getStoreDay, setStoreDay, listStoreDays, subscribeShifts, monthTally,
-  planLocked, planDeadline, listShiftEditRequests, requestShiftFactEdit, resolveShiftFactEdit,
+  planLocked, planDeadline, factLocked, listShiftEditRequests, requestShiftFactEdit, resolveShiftFactEdit,
   factGrantActive, pendingFactRequest, subscribeShiftEditRequests, planFactGaps,
 } from "./lib/shifts.js";
 import {
@@ -5058,17 +5058,17 @@ function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
   );
 }
 
-function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, locked = false, grantFor }) {
+function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, planLk = false, factLk = false, grantFor }) {
   const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
-  const [editMode, setEditMode] = useState(locked ? "fact" : "plan");
-  useEffect(() => { if (locked) setEditMode("fact"); }, [locked]);
+  const [editMode, setEditMode] = useState(planLk ? "fact" : "plan");
+  useEffect(() => { if (planLk) setEditMode("fact"); }, [planLk]);
   const canEdit = salons.some((s) => canEditSalon(s.key));
-  // чи можна редагувати цей режим для цього салону з урахуванням замка планування
+  // чи можна редагувати цей режим для цього салону
   const modeAllowed = (k, mode) => {
     if (!canEditSalon(k)) return false;
-    if (!locked) return true;
-    if (mode === "plan") return false;                 // план замкнено назавжди
-    return grantFor ? grantFor(k) : false;             // факт — лише за дозволом ТМ
+    if (mode === "plan") return !planLk;               // план замкнено після 3 числа
+    if (!factLk) return true;                          // факт поточного місяця — вільно
+    return grantFor ? grantFor(k) : false;             // факт завершеного місяця — лише за дозволом ТМ
   };
   const scrollRef = React.useRef(null);
   const nDays = daysInMonth(ym);
@@ -5153,7 +5153,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
       {canEdit && (
         <div className="shift-modebar">
           <span>Клік по клітинці редагує:</span>
-          <button className={editMode === "plan" ? "on" : ""} disabled={locked} title={locked ? "Планування за цей місяць замкнено" : ""} onClick={() => !locked && setEditMode("plan")}>План{locked ? " 🔒" : ""}</button>
+          <button className={editMode === "plan" ? "on" : ""} disabled={planLk} title={planLk ? "Планування за цей місяць замкнено (після 3 числа)" : ""} onClick={() => !planLk && setEditMode("plan")}>План{planLk ? " 🔒" : ""}</button>
           <button className={editMode === "fact" ? "on" : ""} onClick={() => setEditMode("fact")}>Факт</button>
           {salons.length > 1 && !salons.every((s) => canEditSalon(s.key)) && <span className="muted" style={{ marginLeft: 6 }}>· редагувати можна лише свої магазини</span>}
         </div>
@@ -5290,7 +5290,8 @@ function ShiftScheduleModule({ cab }) {
   const [shifts, storeDays, reload] = useShiftMonth(ym);
   const [reqs, setReqs] = useState([]);
   const months = useMemo(() => recentMonths(12), []);
-  const locked = planLocked(ym);
+  const planLk = planLocked(ym);
+  const factLk = factLocked(ym);
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
   const reloadReqs = React.useCallback(() => { listShiftEditRequests(ym).then(setReqs).catch(() => setReqs([])); }, [ym]);
@@ -5343,9 +5344,9 @@ function ShiftScheduleModule({ cab }) {
         </div>
       )}
 
-      {view === "grid" && locked && (
+      {view === "grid" && (planLk || factLk) && (
         <ShiftLockPanel
-          cab={cab} ym={ym} salons={salons} shifts={shifts} employees={employees}
+          cab={cab} ym={ym} planLk={planLk} factLk={factLk} salons={salons} shifts={shifts}
           reqs={reqs} canEditSalon={canEditSalon} onChange={reloadReqs}
         />
       )}
@@ -5354,15 +5355,15 @@ function ShiftScheduleModule({ cab }) {
         <ShiftGrid
           ym={ym} salons={salons} employees={employees} shifts={shifts} storeDays={storeDays}
           canEditSalon={canEditSalon} onChange={reload} cabKey={cab.key}
-          locked={locked} grantFor={grantFor}
+          planLk={planLk} factLk={factLk} grantFor={grantFor}
         />
       )}
     </div>
   );
 }
 
-/* Панель замка планування: статус місяця + запити на коригування факту */
-function ShiftLockPanel({ cab, ym, salons, shifts, employees, reqs, canEditSalon, onChange }) {
+/* Панель замка: статус місяця + запити на коригування факту завершеного місяця */
+function ShiftLockPanel({ cab, ym, planLk, factLk, salons, shifts, reqs, canEditSalon, onChange }) {
   const [busy, setBusy] = useState(false);
   const mySalons = salons.filter((s) => canEditSalon(s.key));
   const isSm = cab.type === "sm";
@@ -5408,10 +5409,16 @@ function ShiftLockPanel({ cab, ym, salons, shifts, employees, reqs, canEditSalon
 
   return (
     <div className="shift-lock">
-      <div className="shift-lock-h">🔒 Планування за {monthLabel(ym)} замкнено</div>
-      <p className="hint">Після 3 числа наступного місяця план не змінюється. Вносити можна лише факт.</p>
+      <div className="shift-lock-h">
+        🔒 {factLk ? `Місяць ${monthLabel(ym)} завершено` : `Планування за ${monthLabel(ym)} замкнено`}
+      </div>
+      <p className="hint">
+        {factLk
+          ? "Місяць закрито. Факт коригується лише за дозволом ТМ — на один день."
+          : "Графік подається до 3 числа. Далі план не змінюється — вносьте лише факт."}
+      </p>
 
-      {isSm && mySalons.map((s) => {
+      {isSm && factLk && mySalons.map((s) => {
         const grant = factGrantActive(reqs, s.key, ym);
         const pend = pendingFactRequest(reqs, s.key, ym);
         const gaps = gapsBySalon(s.key);
@@ -5428,7 +5435,7 @@ function ShiftLockPanel({ cab, ym, salons, shifts, employees, reqs, canEditSalon
         );
       })}
 
-      {canApprove && (
+      {canApprove && factLk && (
         <div className="shift-lock-reqs">
           <div className="sl-sub">Запити на коригування факту{pending.length ? ` · ${pending.length}` : ""}</div>
           {pending.length === 0 && <p className="hint">немає відкритих запитів</p>}
