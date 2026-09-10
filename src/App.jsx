@@ -311,6 +311,30 @@ function resizeImage(file) {
   });
 }
 
+/* Дістати зображення з системного буфера обміну (кнопка «Вставити зі скріншота»).
+   Повертає File або null. */
+async function readClipboardImage() {
+  try {
+    if (!navigator.clipboard?.read) return null;
+    const items = await navigator.clipboard.read();
+    for (const it of items) {
+      const type = it.types.find((t) => t.startsWith("image/"));
+      if (type) {
+        const blob = await it.getType(type);
+        return new File([blob], "clipboard.png", { type });
+      }
+    }
+  } catch { /* немає доступу / порожньо */ }
+  return null;
+}
+/* image File із події paste (Ctrl+V у вікні) */
+function pasteEventImage(e) {
+  for (const it of e.clipboardData?.items || []) {
+    if (it.type.startsWith("image/")) return it.getAsFile();
+  }
+  return null;
+}
+
 /* =========================================================
    SMALL COMPONENTS
 ========================================================= */
@@ -6892,6 +6916,19 @@ function SupplyReceipt({ items, warehouse, cabKey, prefill, onClose, onDone }) {
         : `Розпізнано ${rows.length} позицій — перевірте кількість і ціну`);
     } catch (e) { setOcr("fail"); setOcrNote(String(e.message || e)); }
   };
+  // Ctrl+V у вікні приходу — вставити скріншот накладної з буфера
+  useEffect(() => {
+    if (!isCentral) return undefined;
+    const h = (e) => { const f = pasteEventImage(e); if (f) { e.preventDefault(); onNakladna(f); } };
+    window.addEventListener("paste", h);
+    return () => window.removeEventListener("paste", h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCentral, items]);
+  const pasteFromClipboard = async () => {
+    const f = await readClipboardImage();
+    if (f) onNakladna(f);
+    else { setOcr("fail"); setOcrNote("У буфері немає зображення — скопіюйте скріншот і спробуйте ще"); }
+  };
   const total = lines.reduce((s, l) => {
     const c = l.unit_cost !== "" ? Number(l.unit_cost) : (byId[l.item_id]?.unit_cost || 0);
     return s + (Number(l.qty) || 0) * c;
@@ -6927,8 +6964,12 @@ function SupplyReceipt({ items, warehouse, cabKey, prefill, onClose, onDone }) {
               <button type="button" className="btn-secondary small" disabled={ocr === "run"} onClick={() => fileRef.current?.click()}>
                 <ScanLine size={14} /> {ocr === "run" ? "Розпізнаю накладну…" : "Сфотографувати накладну"}
               </button>
+              <button type="button" className="btn-secondary small" disabled={ocr === "run"} onClick={pasteFromClipboard}>
+                <ImageIcon size={14} /> Вставити скрін з буфера
+              </button>
               <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
                 onChange={(e) => { onNakladna(e.target.files?.[0]); e.target.value = ""; }} />
+              <span className="wh-ocr-hint">або Ctrl+V у цьому вікні</span>
               {ocrNote && <span className={`wh-ocr-note ${ocr}`}>{ocrNote}</span>}
             </div>
           )}
@@ -8105,6 +8146,16 @@ function TrainingCreateModal({ cabKey, onClose, onDone }) {
       setOcr(r.title || r.deadline ? "Розпізнано — перевірте поля нижче" : "Не вдалося розпізнати, заповніть вручну");
     } catch (e) { setOcr(String(e.message || e)); }
   };
+  useEffect(() => {
+    const h = (e) => { const f = pasteEventImage(e); if (f) { e.preventDefault(); onFile(f); } };
+    window.addEventListener("paste", h);
+    return () => window.removeEventListener("paste", h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const pasteShot = async () => {
+    const f = await readClipboardImage();
+    if (f) onFile(f); else setOcr("У буфері немає зображення — скопіюйте скріншот і спробуйте ще");
+  };
   const save = async () => {
     if (!title.trim()) return;
     if (assigned && deadline && deadline < assigned) { alert("Дедлайн раніше за дату призначення"); return; }
@@ -8119,7 +8170,10 @@ function TrainingCreateModal({ cabKey, onClose, onDone }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="trn-modal" onClick={(e) => e.stopPropagation()}>
         <h3>Нове тестування</h3>
-        <button className="btn-secondary trn-upl" onClick={() => fileRef.current?.click()}><Camera size={14} /> Завантажити скріншот</button>
+        <div className="trn-upl-row">
+          <button className="btn-secondary trn-upl" onClick={() => fileRef.current?.click()}><Camera size={14} /> Завантажити скріншот</button>
+          <button className="btn-secondary trn-upl" onClick={pasteShot}><ImageIcon size={14} /> Вставити з буфера</button>
+        </div>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
         {ocr && <div className="trn-ocr">{ocr}</div>}
         {shot && <img src={shot} alt="" className="trn-shot" />}
@@ -10582,6 +10636,8 @@ td.sh.sh-plan{font-weight:400;}
 .btn-glow:disabled{opacity:.6;animation:none;cursor:default;}
 @keyframes glowpulse{0%,100%{box-shadow:0 0 0 0 rgba(220,169,74,.5);}50%{box-shadow:0 0 0 6px rgba(220,169,74,0);}}
 .wh-ocr{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:2px 0 10px;}
+.wh-ocr-hint{font-size:10.5px;color:var(--muted);}
+.trn-upl-row{display:flex;flex-wrap:wrap;gap:8px;}
 .wh-ocr-note{font-size:11.5px;color:var(--muted);}
 .wh-ocr-note.ok{color:var(--positive-bright);}
 .wh-ocr-note.fail{color:var(--negative-bright);}
