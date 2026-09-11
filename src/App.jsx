@@ -6772,13 +6772,14 @@ function PlannerDayModal({ salon, onClose }) {
             <div className="pday-tbl-wrap">
               <table className="pday-tbl">
                 <thead>
-                  <tr><th>Час</th><th>ТО осн.асорт.</th><th>за період</th><th>ТО ЕЗ</th><th>Чеків</th><th>Дзвінків</th></tr>
+                  <tr><th>Час</th><th>ТО осн.асорт.</th><th>за період</th><th>ТО ЕЗ</th><th>Чеків</th><th>Серед. чек</th><th>Дзвінків</th></tr>
                 </thead>
                 <tbody>
                   {data.checkpoints.map((c, i) => {
                     const prev = data.checkpoints[i - 1];
                     const delta = c.assort - (prev?.assort || 0);
                     const empty = !c.assort && !c.ez && !c.cheky && !c.dzvinky;
+                    const avgCheck = c.cheky > 0 ? c.assort / c.cheky : 0;
                     return (
                       <tr key={c.cp} className={empty ? "muted" : ""}>
                         <td>{c.cp}:00</td>
@@ -6786,6 +6787,7 @@ function PlannerDayModal({ salon, onClose }) {
                         <td className="num">{empty ? "—" : delta ? fmt(delta) : "—"}</td>
                         <td className="num">{empty ? "—" : fmt(c.ez)}</td>
                         <td className="num">{empty ? "—" : c.cheky}</td>
+                        <td className="num">{empty || !avgCheck ? "—" : fmt(avgCheck)}</td>
                         <td className="num">{empty ? "—" : c.dzvinky}</td>
                       </tr>
                     );
