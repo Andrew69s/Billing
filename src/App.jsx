@@ -888,7 +888,10 @@ const NOTIF_MODULE_KEYS = {
   feedback: ["feedback"], shifts: ["shifts"], bonus: ["bonus"], kpi: ["kpi"],
   training: ["training"], zsu: ["zsu"],
 };
-const notifTargetOf = (n) => NOTIF_LINK_MODULE[n?.link] || NOTIF_LINK_MODULE[n?.kind] || n?.link || "";
+const notifTargetOf = (n) => {
+  const linkKey = String(n?.link || "").split(":")[0];
+  return NOTIF_LINK_MODULE[linkKey] || NOTIF_LINK_MODULE[n?.kind] || linkKey || "";
+};
 function moduleKeyForNotif(items, n) {
   const t = notifTargetOf(n);
   if (!t) return null;
@@ -1014,11 +1017,13 @@ function NotificationCenter({ cabKey }) {
               <div className="notif-list">
                 {items.length === 0 && <div className="notif-empty">Поки що порожньо</div>}
                 {items.map((n) => {
-                  const target = NOTIF_LINK_MODULE[n.link] || NOTIF_LINK_MODULE[n.kind];
+                  const linkId = String(n.link || "").split(":")[1];
+                  const target = notifTargetOf(n) || null;
                   const onClick = async () => {
                     setItems((p) => p.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
                     await markRead(n.id).catch(() => {});
                     pokeNotifs();
+                    if (target === "tasks" && linkId) _focusTaskId = linkId;
                     if (target) { goToModule(target); setOpen(false); }
                   };
                   return (
@@ -3965,10 +3970,10 @@ const dotTitle = {
   "dot-open": "Очікує",
 };
 
-function TaskCard({ t, cabKey, onStatus, onDelete }) {
+function TaskCard({ t, cabKey, onStatus, onDelete, autoOpen, cardRef }) {
   const mine = t.assignee === cabKey;
   const owner = t.created_by === cabKey;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!autoOpen);
   const [doneMode, setDoneMode] = useState(false);
   const [comment, setComment] = useState("");
   const ds = dotState(t);
@@ -3979,7 +3984,7 @@ function TaskCard({ t, cabKey, onStatus, onDelete }) {
   };
 
   return (
-    <div className={`task-card ${isOverdue(t) ? "task-overdue" : ""} ${t.status === "done" ? "task-card-done" : ""} ${open ? "task-card-open" : ""}`}>
+    <div ref={cardRef} className={`task-card ${isOverdue(t) ? "task-overdue" : ""} ${t.status === "done" ? "task-card-done" : ""} ${open ? "task-card-open" : ""} ${autoOpen ? "task-card-focus" : ""}`}>
       <button className="task-card-main" onClick={() => setOpen((v) => !v)}>
         {t.priority && <Star size={13} className="task-star" fill="currentColor" />}
         <span className="task-title">{t.title}</span>
@@ -4247,10 +4252,15 @@ function TasksModule({ cab }) {
   const [showModal, setShowModal] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [onlyPriority, setOnlyPriority] = useState(false);
+  const [focusId] = useState(() => takeFocusTaskId()); // перехід зі сповіщення на конкретну задачу
+  const focusRef = useRef(null);
 
   useEffect(() => {
     if (tasks && tasks.length) markSeen(tasks, cab.key).catch(() => {});
   }, [tasks, cab.key]);
+  useEffect(() => {
+    if (focusId && focusRef.current) focusRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusId, tasks]);
 
   const onStatus = async (id, s, comment) => {
     const t = tasks?.find((x) => x.id === id);
@@ -4296,7 +4306,7 @@ function TasksModule({ cab }) {
         <div className="admin-empty">{onlyPriority ? "Пріоритетних задач немає." : "Активних задач немає."}</div>
       ) : (
         <div className="task-list">
-          {active.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} />)}
+          {active.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} autoOpen={t.id === focusId} cardRef={t.id === focusId ? focusRef : undefined} />)}
         </div>
       )}
 
@@ -4307,7 +4317,7 @@ function TasksModule({ cab }) {
           </button>
           {showDone && (
             <div className="task-list">
-              {done.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} />)}
+              {done.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} autoOpen={t.id === focusId} cardRef={t.id === focusId ? focusRef : undefined} />)}
             </div>
           )}
         </>
@@ -6168,6 +6178,10 @@ const planTurnover = (p, withEz) => (Number(p?.assort) || 0) + (withEz ? (Number
 /* клік по салону з дашборду → сторінка «Показники» саме цього салону */
 let _focusSalon = null;
 function openSalonAnalytics(salonKey) { _focusSalon = salonKey; goToModule("kpi"); }
+
+/* перехід зі сповіщення прямо на конкретну задачу (не лише на вкладку) */
+let _focusTaskId = null;
+function takeFocusTaskId() { const id = _focusTaskId; _focusTaskId = null; return id; }
 
 function EzToggle() {
   const [withEz, setWithEz] = useWithEz();
@@ -9868,6 +9882,8 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 /* компактні картки */
 .task-list{display:flex;flex-direction:column;gap:7px;}
 .task-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:var(--sh-1);overflow:hidden;color:var(--ink);}
+.task-card.task-card-focus{animation:taskFocusPulse 1.6s ease-out 2;border-color:var(--gold);}
+@keyframes taskFocusPulse{0%{box-shadow:0 0 0 0 rgba(220,169,74,.5);}100%{box-shadow:0 0 0 10px rgba(220,169,74,0);}}
 .task-card.task-overdue{border-color:rgba(160,58,42,.5);}
 .task-card.task-card-done{opacity:.6;}
 .task-card-main{width:100%;display:flex;align-items:center;gap:10px;padding:11px 14px;background:none;border:none;font-family:inherit;text-align:left;cursor:pointer;}
