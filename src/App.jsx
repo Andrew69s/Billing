@@ -86,6 +86,9 @@ import {
 import {
   listZsuCodes, parseCodes, uploadZsuCodes, markZsuUsed, undoZsuUsed, deleteZsuCode, subscribeZsuCodes,
 } from "./lib/zsu.js";
+import {
+  listMedokCompanies, addMedokCompany, deleteMedokCompany, isMedokCompany, subscribeMedok,
+} from "./lib/medok.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
@@ -4530,7 +4533,7 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
   );
 }
 
-function InvoiceCard({ inv, cab, canManage, onPreview, onChanged, compact }) {
+function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact }) {
   const [open, setOpen] = useState(false);
   const [cmt, setCmt] = useState("");
   const [busy, setBusy] = useState(false);
@@ -4542,7 +4545,21 @@ function InvoiceCard({ inv, cab, canManage, onPreview, onChanged, compact }) {
 
   const move = async (st, note) => {
     setBusy(true);
-    try { await setInvoiceStatus(inv, st, cab.key, note); onChanged(); }
+    try {
+      await setInvoiceStatus(inv, st, cab.key, note);
+      if (st === "shipped" && isMedokCompany(medok, inv.counterparty)) {
+        pushToast({ title: "Договір Medok", body: `«${inv.counterparty}» — документи пропечатувати не потрібно` });
+        if (inv.created_by) {
+          notify({
+            recipient: inv.created_by, kind: "invoice",
+            title: "Пропечатувати не потрібно",
+            body: `«${inv.counterparty}»${inv.invoice_no ? ` · рахунок №${inv.invoice_no}` : ""} — договір Medok, документи не друкуємо.`,
+            actor: cab.key, link: "invoices",
+          }).catch(() => {});
+        }
+      }
+      onChanged();
+    }
     catch (e) { alert("Не вдалося: " + (e.message || e)); }
     setBusy(false); setCmt("");
   };
@@ -4749,11 +4766,59 @@ function InvoiceAnalytics({ rows, cab }) {
   );
 }
 
+/* Юля: список компаній з договором Medok — при «Відвантажено» пропечатувати не треба. */
+function MedokPanel({ medok, cabKey }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    try { await addMedokCompany(name, cabKey); pushToast({ title: "Додано", body: name.trim() }); setName(""); }
+    catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy(false);
+  };
+  const remove = async (c) => {
+    if (!confirm(`Прибрати «${c.name}» зі списку Medok?`)) return;
+    await deleteMedokCompany(c.id).catch((e) => pushToast({ title: "Не вдалося", body: String(e.message || e) }));
+  };
+  return (
+    <div className="medok-panel">
+      <button className="medok-toggle" onClick={() => setOpen((v) => !v)}>
+        <span>Договори Medok{medok.length ? ` · ${medok.length}` : ""}</span>
+        <ChevronRight size={14} className={open ? "rot" : ""} />
+      </button>
+      {open && (
+        <div className="medok-body">
+          <p className="hint">Компанії з договором Medok — коли рахунок такої компанії переходить у «Відвантажено», паперові документи друкувати не потрібно.</p>
+          <div className="medok-add">
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Назва компанії (як у полі «Кому виставлено»)" onKeyDown={(e) => e.key === "Enter" && add()} />
+            <button className="btn-primary small" disabled={busy || !name.trim()} onClick={add}>Додати</button>
+          </div>
+          <div className="medok-list">
+            {medok.length === 0 && <p className="hint">список порожній</p>}
+            {medok.map((c) => (
+              <span className="medok-chip" key={c.id}>{c.name}<button onClick={() => remove(c)}><X size={12} /></button></span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InvoicesModule({ cab }) {
   const [rows, reload] = useInvoices();
   const [showModal, setShowModal] = useState(false);
   const [view, setView] = useState("list");     // list | analytics
   const [filter, setFilter] = useState("open"); // open | archive | all | <status>
+  const [medok, setMedok] = useState([]);
+  const isYulia = cab.key === "accountant";
+  useEffect(() => {
+    const load = () => listMedokCompanies().then(setMedok).catch(() => setMedok([]));
+    load();
+    return subscribeMedok(load);
+  }, []);
   const [sort, setSort] = useState("date_desc");
   const [salonF, setSalonF] = useState("all");
   const [preview, setPreview] = useState(null);
@@ -4801,6 +4866,8 @@ function InvoicesModule({ cab }) {
         <button className={view === "analytics" ? "on" : ""} onClick={() => setView("analytics")}><BarChart3 size={13} /> Аналітика</button>
       </div>
 
+      {isYulia && <MedokPanel medok={medok} cabKey={cab.key} />}
+
       {view === "analytics" ? (
         <InvoiceAnalytics rows={rows} cab={cab} />
       ) : view === "board" ? (
@@ -4826,7 +4893,7 @@ function InvoicesModule({ cab }) {
                   <div className="inv-col-body">
                     {ordered.length === 0
                       ? <p className="inv-col-empty">—</p>
-                      : ordered.map((inv) => <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} onPreview={setPreview} onChanged={reload} compact />)}
+                      : ordered.map((inv) => <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} medok={medok} onPreview={setPreview} onChanged={reload} compact />)}
                   </div>
                 </div>
               );
@@ -4878,7 +4945,7 @@ function InvoicesModule({ cab }) {
           ) : (
             <div className="task-list">
               {shown.map((inv) => (
-                <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} onPreview={setPreview} onChanged={reload} />
+                <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} medok={medok} onPreview={setPreview} onChanged={reload} />
               ))}
             </div>
           )}
@@ -10162,6 +10229,17 @@ td.sh.sh-plan{font-weight:400;}
 .detail-sub{font-family:'Inter',sans-serif;font-size:12px;font-weight:400;color:var(--muted);}
 
 .inv-viewtabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--line-dark);}
+.medok-panel{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);margin-bottom:14px;overflow:hidden;}
+.medok-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;padding:9px 13px;background:none;border:none;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;}
+.medok-toggle svg{transition:transform .15s var(--ease);}
+.medok-toggle svg.rot{transform:rotate(90deg);}
+.medok-body{padding:0 13px 13px;display:flex;flex-direction:column;gap:8px;}
+.medok-add{display:flex;gap:8px;}
+.medok-add input{flex:1;background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:12.5px;color:var(--ink);}
+.medok-list{display:flex;flex-wrap:wrap;gap:6px;}
+.medok-chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface-alt);border:1px solid var(--line);border-radius:999px;padding:4px 6px 4px 11px;font-size:12px;}
+.medok-chip button{background:none;border:none;color:var(--muted);cursor:pointer;display:flex;padding:2px;}
+.medok-chip button:hover{color:var(--negative-bright);}
 .inv-viewtabs button{background:none;border:none;border-bottom:2px solid transparent;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--on-dark-2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;margin-bottom:-1px;}
 .inv-viewtabs button:hover{color:var(--on-dark);}
 .inv-viewtabs button.on{color:var(--gold-bright);border-bottom-color:var(--gold);}
