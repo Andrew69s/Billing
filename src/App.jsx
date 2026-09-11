@@ -6822,7 +6822,7 @@ function ManagerHome() {
   const [dayDetail, setDayDetail] = useState(null);
   return (
     <>
-      <AttentionQueue cab={{ key: "manager", type: "manager" }} />
+      {/* «Потребує уваги» тимчасово прибрано з кабінету керівника (2026-09-11) */}
       <TurnoverRings onDayDrill={setDayDetail} />
       <ManagerCashOverview />
       {dayDetail && <PlannerDayModal salon={dayDetail} onClose={() => setDayDetail(null)} />}
