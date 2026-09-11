@@ -89,6 +89,7 @@ import {
 import {
   listMedokCompanies, addMedokCompany, deleteMedokCompany, isMedokCompany, subscribeMedok,
 } from "./lib/medok.js";
+import { fetchPlannerDay } from "./lib/plannerDay.js";
 
 /* =========================================================
    CONSTANTS & HELPERS
@@ -6315,7 +6316,7 @@ function Ring({ pct, band, size = 82, sw = 7, children }) {
   );
 }
 
-function TurnoverRings({ scopeSalons, single: singleProp }) {
+function TurnoverRings({ scopeSalons, single: singleProp, onDayDrill }) {
   const salons = scopeSalons && scopeSalons.length ? scopeSalons : SALONS;
   const single = !!singleProp || salons.length === 1;
   const ym = nowYm();
@@ -6489,7 +6490,7 @@ function TurnoverRings({ scopeSalons, single: singleProp }) {
       {!single && (
         <div className="rg-grid">
           {cells.map(({ s, v, pct, bandPct }) => (
-            <button key={s.key} className="rg-cell" onClick={() => openSalonAnalytics(s.key)} title={`${salonLabel(s)} — відкрити аналітику`}>
+            <button key={s.key} className="rg-cell" onClick={() => (onDayDrill ? onDayDrill(s) : openSalonAnalytics(s.key))} title={`${salonLabel(s)} — ${onDayDrill ? "звіт за день" : "відкрити аналітику"}`}>
               <Ring pct={pct} band={bandPct}>
                 <b>{uahK(v)}</b>
               </Ring>
@@ -6503,7 +6504,7 @@ function TurnoverRings({ scopeSalons, single: singleProp }) {
         {mode === "month"
           ? `Число — % виконання місячного плану СМ. Колір — темп (чи встигає за нормою на сьогодні).`
           : `Кільце — оборот проти денної норми (план${withEz ? " з ЕЗ" : ""} ÷ ${dim}).`}
-        {single ? "" : " Клік по салону — його аналітика."}
+        {single ? "" : onDayDrill ? " Клік по салону — звіт за день (планер)." : " Клік по салону — його аналітика."}
       </p>
     </div>
   );
@@ -6724,12 +6725,105 @@ function AttentionQueue({ cab }) {
   );
 }
 
+/* Денний звіт СМ — те саме, що бачить СМ у зовнішньому планері
+   («Введення для СМ по контрольних точках дня»): чек-пойнти 12/15/18/20
+   з накопиченими показниками. Дані читаються напряму з планера. */
+function PlannerDayModal({ salon, onClose }) {
+  const [date, setDate] = useState(todayISO());
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setErr(""); setData(null);
+    fetchPlannerDay(salon.key, date)
+      .then((d) => { if (active) { setData(d); setLoading(false); } })
+      .catch((e) => { if (active) { setErr(String(e.message || e)); setLoading(false); } });
+    return () => { active = false; };
+  }, [salon.key, date]);
+
+  const shiftDay = (delta) => {
+    const d = new Date(`${date}T00:00:00`);
+    d.setDate(d.getDate() + delta);
+    setDate(d.toISOString().slice(0, 10));
+  };
+  const isToday = date === todayISO();
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="pday-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="pday-h">
+          <span>{salonLabel(salon)} · звіт за день</span>
+          <button className="modal-close" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="pday-nav">
+          <button className="btn-secondary small" onClick={() => shiftDay(-1)}>‹ день</button>
+          <input type="date" value={date} max={todayISO()} onChange={(e) => e.target.value && setDate(e.target.value)} />
+          <button className="btn-secondary small" onClick={() => shiftDay(1)} disabled={isToday}>день ›</button>
+          <button className="btn-secondary small" disabled={isToday} onClick={() => setDate(todayISO())}>Сьогодні</button>
+        </div>
+
+        {loading && <div className="loading">Завантаження…</div>}
+        {!loading && err && <p className="hint" style={{ color: "var(--negative-bright)" }}>{err}</p>}
+        {!loading && !err && !data && <p className="hint">За {fmtDeadline(date)} даних у планері немає.</p>}
+        {!loading && !err && data && (
+          <>
+            <div className="pday-tbl-wrap">
+              <table className="pday-tbl">
+                <thead>
+                  <tr><th>Час</th><th>ТО осн.асорт.</th><th>за період</th><th>ТО ЕЗ</th><th>Чеків</th><th>Дзвінків</th></tr>
+                </thead>
+                <tbody>
+                  {data.checkpoints.map((c, i) => {
+                    const prev = data.checkpoints[i - 1];
+                    const delta = c.assort - (prev?.assort || 0);
+                    const empty = !c.assort && !c.ez && !c.cheky && !c.dzvinky;
+                    return (
+                      <tr key={c.cp} className={empty ? "muted" : ""}>
+                        <td>{c.cp}:00</td>
+                        <td className="num">{empty ? "—" : fmt(c.assort)}</td>
+                        <td className="num">{empty ? "—" : delta ? fmt(delta) : "—"}</td>
+                        <td className="num">{empty ? "—" : fmt(c.ez)}</td>
+                        <td className="num">{empty ? "—" : c.cheky}</td>
+                        <td className="num">{empty ? "—" : c.dzvinky}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="pday-extra">
+              <span>БН: {fmt(data.bn)}</span>
+              <span>LiqPay: {fmt(data.liqpay)}</span>
+              <span>Розстрочка: {fmt(data.installment)}</span>
+              {data.retOS > 0 && <span>Повернення ОС: {fmt(data.retOS)}</span>}
+              {data.retEZ > 0 && <span>Повернення ЕЗ: {fmt(data.retEZ)}</span>}
+            </div>
+            {(data.note || data.reason || data.smComment || data.focusFactList.length > 0) && (
+              <div className="pday-notes">
+                {data.reason && <p><b>Причина:</b> {data.reason}</p>}
+                {data.note && <p><b>Нотатка:</b> {data.note}</p>}
+                {data.smComment && <p><b>Коментар СМ:</b> {data.smComment}</p>}
+                {data.focusFactList.map((f, i) => <p key={i}><b>Фокус:</b> {f.text}</p>)}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ManagerHome() {
+  const [dayDetail, setDayDetail] = useState(null);
   return (
     <>
       <AttentionQueue cab={{ key: "manager", type: "manager" }} />
-      <TurnoverRings />
+      <TurnoverRings onDayDrill={setDayDetail} />
       <ManagerCashOverview />
+      {dayDetail && <PlannerDayModal salon={dayDetail} onClose={() => setDayDetail(null)} />}
     </>
   );
 }
@@ -10870,6 +10964,21 @@ td.sh.sh-plan{font-weight:400;}
 .wh-kpi.attn b{color:var(--gold);}
 
 .wh-modal{position:relative;background:var(--surface);border-radius:var(--radius);max-width:560px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:var(--sh-3);overflow:hidden;animation:fadeIn .2s ease both;}
+.pday-modal{position:relative;background:var(--surface);color:var(--ink);border-radius:var(--radius);max-width:640px;width:100%;max-height:88vh;overflow:auto;box-shadow:var(--sh-3);animation:fadeIn .2s ease both;padding:18px 20px;display:flex;flex-direction:column;gap:12px;}
+.pday-h{display:flex;align-items:center;justify-content:space-between;font-family:'Fraunces',serif;font-size:15px;font-weight:600;}
+.pday-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.pday-nav input[type=date]{background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-family:inherit;font-size:12.5px;color:var(--ink);}
+.pday-tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-md);}
+.pday-tbl{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums;}
+.pday-tbl th{background:var(--surface-alt);color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:7px 10px;text-align:right;border-bottom:1px solid var(--line-strong);}
+.pday-tbl th:first-child{text-align:left;}
+.pday-tbl td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);}
+.pday-tbl td:first-child{text-align:left;font-weight:600;}
+.pday-tbl tr.muted td{color:var(--faint);}
+.pday-tbl tr:last-child td{border-bottom:none;}
+.pday-extra{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12px;color:var(--ink-soft);background:var(--surface-alt);border-radius:8px;padding:8px 12px;}
+.pday-notes{font-size:12px;color:var(--ink-soft);display:flex;flex-direction:column;gap:4px;}
+.pday-notes p{margin:0;}
 .wh-modal-h{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line);font-family:'Fraunces',serif;font-size:16px;color:var(--ink);font-weight:600;}
 .wh-modal-h .modal-close{position:static;width:28px;height:28px;top:auto;right:auto;}
 .wh-modal-b{padding:16px 18px 18px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
