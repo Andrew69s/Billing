@@ -229,11 +229,13 @@ function tierBonus(value: number, thresholds: number[], bonuses: number[]) {
 }
 function calcBonusBlock(b: any, dailyRate: number, teamSize = 1) {
   const team = Math.max(1, teamSize || 1);
-  let callsPct = 0;
-  if (b.callsCountDone && b.callsRevenueDone) callsPct = 5;
-  else if (b.callsCountDone) callsPct = 3;
+  // 3.1 Обіг з дзвінків — план по дзвінках = 10% від плану ТО на місяць.
+  // Закрив ≥10% плану ТО дзвінками → 5% від обороту з дзвінків на команду,
+  // менше → 3%. Командний бонус ділиться порівну на активний склад салону.
   const callsPlanRevenue = (b.monthlyToPlan || 0) * 0.1;
-  const calls = Math.round((b.callsRevenue || 0) * (callsPct / 100));
+  const callsPct = callsPlanRevenue > 0 && (b.callsRevenue || 0) >= callsPlanRevenue ? 5 : 3;
+  const callsTeam = Math.round((b.callsRevenue || 0) * (callsPct / 100));
+  const calls = Math.round(callsTeam / team);
   const replacement = Math.round((b.replacementDays || 0) * 0.2 * (dailyRate || 0));
   const avgCheck = tierBonus(b.avgCheckFact, [b.scN1, b.scN2, b.scN3], [700, 1500, 2000]);
   const checkLen = tierBonus(b.checkLenFact, [b.clN1, b.clN2, b.clN3], [700, 1500, 2000]);
@@ -244,7 +246,7 @@ function calcBonusBlock(b: any, dailyRate: number, teamSize = 1) {
   const siteNp = Math.round(siteNpTeam / team);
   const bn = Math.round(bnTeam / team);
   return {
-    callsPct, callsPlanRevenue, calls, replacement, avgCheck, checkLen, courses,
+    callsPct, callsPlanRevenue, calls, callsTeam, replacement, avgCheck, checkLen, courses,
     siteNp, bn, siteNpTeam, bnTeam, team,
     subtotal: calls + replacement + avgCheck + checkLen + courses + siteNp + bn,
   };
@@ -269,7 +271,22 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1) {
   const avg3 = data.base.avg3To || 0;
   const autoCategory = categoryOf(avg3);
   const category = data.base.categoryOverride || autoCategory;
-  const bracket = planBracket(data.base.planPercent);
+  // % виконання плану ТО — як у ТМ (план/факт), а не ручне поле:
+  // план ТО на місяць — те саме число, що СМ вносить для бонусу за дзвінки (3.1);
+  // факт коригується: чеки Віктора (фіктивні) мінусуються повністю,
+  // низькорентабельні чеки рахуються в оборот лише на 50%.
+  const monthPlan = data.bonus?.monthlyToPlan || 0;
+  const monthFact = data.base.monthFact || 0;
+  const viktorChecks = data.base.viktorChecks || 0;
+  const lowMarginChecks = data.base.lowMarginChecks || 0;
+  const factAdjusted = Math.max(0, monthFact - viktorChecks - lowMarginChecks * 0.5);
+  // старі місяці (до переходу на план/факт) мали ручне поле base.planPercent —
+  // лишаємо його чинним, поки СМ не почав заповнювати нові поля цього місяця
+  const usesNewFields = monthFact > 0 || viktorChecks > 0 || lowMarginChecks > 0;
+  const planPercent = usesNewFields || !data.base.planPercent
+    ? (monthPlan > 0 ? (factAdjusted / monthPlan) * 100 : 0)
+    : data.base.planPercent;
+  const bracket = planBracket(planPercent);
   const baseRaw = SM_BASE_TABLE[category][bracket];
   const factor = shiftFactor({ daysInMonth, daysOff: data.base.daysOff, area });
   const baseAdjusted = Math.round(baseRaw * factor);
@@ -288,7 +305,11 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1) {
   const grossTotal = baseAdjusted + mgr.subtotal + bonus.subtotal + ppi.bonus + record.bonus + quarterly + adj;
   const deducted = advance + official + birthdays + inventory + ownUse;
   const total = grossTotal - deducted;
-  return { daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate, mgr, bonus, ppi, record, quarterly, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total };
+  return {
+    daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate,
+    monthPlan, monthFact, viktorChecks, lowMarginChecks, factAdjusted, planPercent,
+    mgr, bonus, ppi, record, quarterly, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total,
+  };
 }
 
 // ---------- тексти «Умови» (заповнюються з src/conditions.js) ----------

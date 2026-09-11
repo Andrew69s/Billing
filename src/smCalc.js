@@ -9,7 +9,9 @@ export function emptySmData() {
     base: {
       avg3To: 0,
       categoryOverride: "", // "" → авто за avg3To
-      planPercent: 0,
+      monthFact: 0,         // факт ТО за місяць (сирий, до коригувань)
+      viktorChecks: 0,      // чеки Віктора (фіктивні) — мінусуються повністю
+      lowMarginChecks: 0,   // низькорентабельні чеки — у оборот рахуються на 50%
       daysOff: 0,
     },
     manager: {
@@ -21,8 +23,6 @@ export function emptySmData() {
     },
     bonus: {
       monthlyToPlan: 0,
-      callsCountDone: false,
-      callsRevenueDone: false,
       callsRevenue: 0,
       replacementDays: 0,
       avgCheckFact: 0, scN1: 0, scN2: 0, scN3: 0,
@@ -55,7 +55,9 @@ export function emptySmData() {
 export const SM_FIELD_LABELS = {
   "base.avg3To": "Середній ТО за 3 міс",
   "base.categoryOverride": "Категорія (ручна)",
-  "base.planPercent": "% виконання плану ТО",
+  "base.monthFact": "Факт ТО за місяць",
+  "base.viktorChecks": "Чеки Віктора (фіктивні)",
+  "base.lowMarginChecks": "Низькорентабельні чеки",
   "base.daysOff": "Вихідних за місяць",
   "manager.attestationAll": "Атестація всіма ≥ 98%",
   "manager.noRemarks": "Без зауважень по стандартах",
@@ -63,8 +65,6 @@ export const SM_FIELD_LABELS = {
   "manager.remarksUnfixed": "Невиправлені зауваження",
   "manager.coef": "Коефіцієнт керуючого",
   "bonus.monthlyToPlan": "Загальний план ТО на місяць",
-  "bonus.callsCountDone": "Виконано кількість дзвінків",
-  "bonus.callsRevenueDone": "Виконано оборот з дзвінків",
   "bonus.callsRevenue": "Факт. оборот з дзвінків",
   "bonus.replacementDays": "Днів заміни на іншому магазині",
   "bonus.avgCheckFact": "Факт. середній чек",

@@ -1097,6 +1097,32 @@ function SalonPctRows({ salons, values, onSet, readOnly, suffix = "%" }) {
   );
 }
 
+/* Підказка ТМ: сума обороту з дзвінків, яку вже внесли СМ по території
+   за цей місяць (форма ЗП СМ, 3.1) — одним кліком підставляється в 2.1. */
+function CallsRevenueHint({ tmKey, ym, readOnly, onUse }) {
+  const [sum, setSum] = useState(null);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const salons = salonsOfTm(tmKey, ym);
+        const employees = await listEmployees().catch(() => []);
+        const rows = await Promise.all(salons.map((s) => salonSalaryRows(s.key, ym, employees)));
+        const total = rows.flat().reduce((a, r) => a + (Number(r.data?.bonus?.callsRevenue) || 0), 0);
+        if (active) setSum(total);
+      } catch { if (active) setSum(null); }
+    })();
+    return () => { active = false; };
+  }, [tmKey, ym]);
+  if (sum == null) return null;
+  return (
+    <div className="calls-hint">
+      <span>Обіг з дзвінків по території за {monthLabel(ym).toLowerCase()} (з форм СМ, 3.1): <b>{fmt(sum)}</b></span>
+      {!readOnly && <button type="button" className="calls-hint-use" onClick={() => onUse(sum)}>Підставити</button>}
+    </div>
+  );
+}
+
 function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, tmKey, ym, managerMode, onFlag, calc }) {
   const salons = salonsOfTm(tmKey, ym);
   const setMap = (block, field, key, val) => update([block, field, key], val);
@@ -1143,6 +1169,7 @@ function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveSho
       <BlockHeader n="2" title="Фокусні задачі" />
 
       <TmItem num="2.1" title="Дзвінки" amount={A(calc.b2.calls)} screenshotKey="calls" flag={flg("2.1")} {...shot}>
+        <CallsRevenueHint tmKey={tmKey} ym={ym} readOnly={readOnly} onUse={(v) => update(["block2", "callsRevenue"], v)} />
         <CheckField readOnly={readOnly} label="План по дзвінках виконано" checked={data.block2.callsPlanMet} onChange={(v) => update(["block2", "callsPlanMet"], v)} />
         <Field readOnly={readOnly} label="Оборот з дзвінків" suffix="грн" value={data.block2.callsRevenue} onChange={(v) => update(["block2", "callsRevenue"], v)} />
         <Field readOnly={readOnly} label="Кількість додзвонів" value={data.block2.callsFact} onChange={(v) => update(["block2", "callsFact"], v)} />
@@ -2190,10 +2217,15 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
       <SmItem num="1.1" title="Категорія та база" amount={showAmounts ? calc.baseAdjusted : undefined} screenshotKey="base" {...shot}>
         <Field readOnly={readOnly} label="Середній ТО за 3 міс" suffix="грн" value={data.base.avg3To} onChange={(v) => update(["base", "avg3To"], v)} />
         <SelectField readOnly={readOnly} label="Категорія салону" value={data.base.categoryOverride} onChange={(v) => update(["base", "categoryOverride"], v)} options={catOptions} />
-        <Field readOnly={readOnly} label="% виконання плану ТО" suffix="%" value={data.base.planPercent} onChange={(v) => update(["base", "planPercent"], v)} />
+        <Field readOnly={readOnly} label="План ТО на місяць" suffix="грн" value={data.bonus.monthlyToPlan} onChange={(v) => update(["bonus", "monthlyToPlan"], v)} />
+        <Field readOnly={readOnly} label="Факт ТО за місяць" suffix="грн" value={data.base.monthFact} onChange={(v) => update(["base", "monthFact"], v)} />
+        <Field readOnly={readOnly} label="Чеки Віктора (фіктивні)" suffix="грн" value={data.base.viktorChecks} onChange={(v) => update(["base", "viktorChecks"], v)} />
+        <Field readOnly={readOnly} label="Низькорентабельні чеки" suffix="грн" value={data.base.lowMarginChecks} onChange={(v) => update(["base", "lowMarginChecks"], v)} />
         <Field readOnly={readOnly} label="Вихідних за місяць (факт)" value={data.base.daysOff} onChange={(v) => update(["base", "daysOff"], v)} />
         {showAmounts && (
           <div className="ez-sub">
+            <span>Факт скоригований: {fmt(calc.factAdjusted)} (мінус Віктор, мінус 50% низькорентабельних)</span>
+            <span>% виконання плану ТО: {calc.planPercent.toFixed(1)}%</span>
             <span>Категорія: {calc.category}</span>
             <span>Брекет: {planBracketLabel(calc.bracket)}</span>
             <span>База: {fmt(calc.baseRaw)}</span>
@@ -2220,13 +2252,11 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
       <BlockHeader n="3" title="Бонусна частина" />
       <SmItem num="3.1" title="Обіг з дзвінків" amount={showAmounts ? calc.bonus.calls : undefined} screenshotKey="calls" {...shot}>
         <Field readOnly={readOnly} label="Загальний план ТО на місяць" suffix="грн" value={data.bonus.monthlyToPlan} onChange={(v) => update(["bonus", "monthlyToPlan"], v)} />
-        <CheckField readOnly={readOnly} label="Виконано кількість дзвінків" checked={data.bonus.callsCountDone} onChange={(v) => update(["bonus", "callsCountDone"], v)} />
-        <CheckField readOnly={readOnly} label="Виконано оборот з дзвінків" checked={data.bonus.callsRevenueDone} onChange={(v) => update(["bonus", "callsRevenueDone"], v)} />
         <Field readOnly={readOnly} label="Факт. оборот з дзвінків" suffix="грн" value={data.bonus.callsRevenue} onChange={(v) => update(["bonus", "callsRevenue"], v)} />
         {showAmounts && (
           <div className="ez-sub">
-            <span>План обороту з дзвінків (10% від плану ТО): {fmt(calc.bonus.callsPlanRevenue)}</span>
-            <span>Ставка бонусу: {calc.bonus.callsPct}%</span>
+            <span>План по дзвінках (10% від плану ТО): {fmt(calc.bonus.callsPlanRevenue)} → ставка {calc.bonus.callsPct}%</span>
+            <span>{fmt(calc.bonus.callsTeam)} ÷ {calc.bonus.team} = {fmt(calc.bonus.calls)} кожному</span>
           </div>
         )}
       </SmItem>
@@ -2855,16 +2885,19 @@ function SalonReviewPanel({ tmKey, reviewer }) {
 
       {!openSalon ? (
         <div className="salon-list">
+          <div className="salon-cat-legend">Категорія по сер. ТО за 3 міс.: <span className="cat-badge cat-Ap">A+</span> <span className="cat-badge cat-A">A</span> <span className="cat-badge cat-B">B</span> <span className="cat-badge cat-C">C</span></div>
           {salons.map((s) => {
             const rows = bySalon[s.key] || [];
             const total = rows.reduce((a, r) => a + r.total, 0);
             const done = rows.filter((r) => r.data.status === "submitted" || r.data.status === "corrected").length;
+            const cat = (rows.find((r) => r.calc?.category)?.calc || {}).category;
             return (
               <button className="salon-row" key={s.key} onClick={() => setOpenSalon(s.key)}>
                 <span className="salon-row-main">
                   <span className="salon-row-name">{salonLabel(s)}</span>
                   <span className="salon-row-sub">{rows.length} співр. · подали {done}/{rows.length}</span>
                 </span>
+                {cat && <span className={`cat-badge cat-${cat.replace("+", "p")}`}>{cat}</span>}
                 <b className="salon-row-total">{fmt(total)}</b>
               </button>
             );
@@ -9429,6 +9462,8 @@ const CSS = `
 .flag-list-comment{font-size:12.5px;color:var(--ink-soft);line-height:1.4;}
 
 .ez-sub{display:flex;flex-wrap:wrap;gap:8px 18px;width:100%;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);border-top:1px dashed var(--line-strong);padding-top:10px;margin-top:6px;}
+.calls-hint{display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%;background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:7px 11px;font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;}
+.calls-hint-use{background:none;border:1px solid var(--gold);color:var(--gold-ink,var(--ink));border-radius:999px;padding:3px 11px;font-size:11px;font-family:inherit;cursor:pointer;}
 
 /* ---------- buttons ---------- */
 .save-bar{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:24px;flex-wrap:wrap;}
@@ -10896,6 +10931,12 @@ td.sh.sh-plan{font-weight:400;}
 .salon-row-name{font-size:13.5px;font-weight:600;color:var(--ink);}
 .salon-row-sub{font-size:10.5px;color:var(--muted);}
 .salon-row-total{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);white-space:nowrap;}
+.salon-cat-legend{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 2px 2px;}
+.cat-badge{display:inline-flex;align-items:center;justify-content:center;min-width:26px;padding:2px 7px;border-radius:999px;font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace;}
+.cat-badge.cat-Ap{background:rgba(63,107,74,.18);color:var(--positive);}
+.cat-badge.cat-A{background:rgba(63,107,74,.12);color:var(--positive);}
+.cat-badge.cat-B{background:rgba(220,169,74,.16);color:var(--gold-bright,var(--gold));}
+.cat-badge.cat-C{background:rgba(160,58,42,.14);color:var(--negative-bright,var(--negative));}
 
 /* ---------- зведення ---------- */
 .consol-table{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:8px 16px 14px;box-shadow:var(--sh-2);}
