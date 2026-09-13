@@ -74,6 +74,15 @@ export async function getInvoice(id) {
   return data;
 }
 
+/* усі унікальні контрагенти («Кому виставлено») по рахунках за весь час — для автопідказок */
+export async function listCounterparties() {
+  const { data, error } = await supabase.from("invoices").select("counterparty");
+  if (error) throw error;
+  const set = new Set();
+  (data || []).forEach((r) => { const v = (r.counterparty || "").trim(); if (v) set.add(v); });
+  return [...set].sort((a, b) => a.localeCompare(b, "uk"));
+}
+
 export async function updateInvoice(id, patch) {
   const { error } = await supabase.from("invoices").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
   if (error) throw error;

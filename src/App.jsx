@@ -39,6 +39,7 @@ import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, markSee
 import {
   INVOICE_STATUS, INVOICE_FLOW, nextStatus, deriveVat,
   listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice, getInvoice,
+  listCounterparties,
 } from "./lib/invoices.js";
 import {
   EMP_ROLES, EMP_ROLE_ORDER,
@@ -4794,10 +4795,22 @@ function MedokPanel({ medok, cabKey }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const add = async () => {
-    if (!name.trim()) return;
+  const [counterparties, setCounterparties] = useState([]);
+  const [showSug, setShowSug] = useState(false);
+
+  useEffect(() => { listCounterparties().then(setCounterparties).catch(() => setCounterparties([])); }, []);
+
+  const suggestions = useMemo(() => {
+    const q = name.trim().toLowerCase();
+    if (!q) return [];
+    return counterparties.filter((c) => c.toLowerCase().includes(q) && !isMedokCompany(medok, c)).slice(0, 8);
+  }, [name, counterparties, medok]);
+
+  const add = async (val) => {
+    const v = (val ?? name).trim();
+    if (!v) return;
     setBusy(true);
-    try { await addMedokCompany(name, cabKey); pushToast({ title: "Додано", body: name.trim() }); setName(""); }
+    try { await addMedokCompany(v, cabKey); pushToast({ title: "Додано", body: v }); setName(""); setShowSug(false); }
     catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
     setBusy(false);
   };
@@ -4813,10 +4826,24 @@ function MedokPanel({ medok, cabKey }) {
       </button>
       {open && (
         <div className="medok-body">
-          <p className="hint">Компанії з договором Medok — коли рахунок такої компанії переходить у «Відвантажено» чи «Пропечатано», паперові документи друкувати не потрібно. Можна вписати коротку назву (напр. «Дар материнства») — звіряємо частковий збіг із полем «Кому виставлено».</p>
-          <div className="medok-add">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Назва компанії (як у полі «Кому виставлено»)" onKeyDown={(e) => e.key === "Enter" && add()} />
-            <button className="btn-primary small" disabled={busy || !name.trim()} onClick={add}>Додати</button>
+          <p className="hint">Компанії з договором Medok — коли рахунок такої компанії переходить у «Відвантажено» чи «Пропечатано», паперові документи друкувати не потрібно. Почніть вводити назву — підкажемо контрагентів з усіх рахунків, з якими вже була взаємодія.</p>
+          <div className="medok-add" style={{ position: "relative" }}>
+            <input
+              value={name}
+              onChange={(e) => { setName(e.target.value); setShowSug(true); }}
+              onFocus={() => setShowSug(true)}
+              onBlur={() => setTimeout(() => setShowSug(false), 150)}
+              placeholder="Пошук контрагента з рахунків…"
+              onKeyDown={(e) => e.key === "Enter" && add()}
+            />
+            <button className="btn-primary small" disabled={busy || !name.trim()} onClick={() => add()}>Додати</button>
+            {showSug && suggestions.length > 0 && (
+              <div className="medok-suggest">
+                {suggestions.map((c) => (
+                  <button key={c} className="medok-suggest-item" onMouseDown={() => add(c)}>{c}</button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="medok-list">
             {medok.length === 0 && <p className="hint">список порожній</p>}
@@ -10354,6 +10381,10 @@ td.sh.sh-plan{font-weight:400;}
 .medok-toggle svg.rot{transform:rotate(90deg);}
 .medok-body{padding:0 13px 13px;display:flex;flex-direction:column;gap:8px;}
 .medok-add{display:flex;gap:8px;}
+.medok-suggest{position:absolute;top:calc(100% + 4px);left:0;right:78px;z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:var(--sh-2);max-height:220px;overflow-y:auto;}
+.medok-suggest-item{display:block;width:100%;text-align:left;background:none;border:none;padding:8px 11px;font-family:inherit;font-size:12px;color:var(--ink);cursor:pointer;border-bottom:1px solid var(--line);}
+.medok-suggest-item:last-child{border-bottom:none;}
+.medok-suggest-item:hover{background:var(--surface-alt);}
 .medok-add input{flex:1;background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:12.5px;color:var(--ink);}
 .medok-list{display:flex;flex-wrap:wrap;gap:6px;}
 .medok-chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface-alt);border:1px solid var(--line);border-radius:999px;padding:4px 6px 4px 11px;font-size:12px;}
