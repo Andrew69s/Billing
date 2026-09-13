@@ -4543,6 +4543,10 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact
   const prevIdx = INVOICE_FLOW.indexOf(inv.status) - 1;
   const prev = prevIdx >= 0 ? INVOICE_FLOW[prevIdx] : null;
   const active = inv.status !== "cancelled" && inv.status !== "documented";
+  // «Відвантажено» — фізична дія самого магазину, тож СМ рухає цей крок сам
+  // (решту статусів веде бухгалтер/ТМ/керівник)
+  const canShip = owner && inv.status === "paid";
+  const canUnship = owner && inv.status === "shipped";
 
   const move = async (st, note) => {
     setBusy(true);
@@ -4550,7 +4554,7 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact
       await setInvoiceStatus(inv, st, cab.key, note);
       if (st === "shipped" && isMedokCompany(medok, inv.counterparty)) {
         pushToast({ title: "Договір Medok", body: `«${inv.counterparty}» — документи пропечатувати не потрібно` });
-        if (inv.created_by) {
+        if (inv.created_by && inv.created_by !== cab.key) {
           notify({
             recipient: inv.created_by, kind: "invoice",
             title: "Пропечатувати не потрібно",
@@ -4640,12 +4644,12 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact
           )}
 
           <div className="inv-actions">
-            {canManage && nx && (
+            {(canManage || canShip) && nx && (
               <button className="btn-primary small" disabled={busy} onClick={() => move(nx)}>
                 Позначити: {INVOICE_STATUS[nx]}
               </button>
             )}
-            {canManage && prev && active && (
+            {(canManage || canUnship) && prev && active && (
               <button className="btn-secondary small" disabled={busy} onClick={() => move(prev)}>↩ {INVOICE_STATUS[prev]}</button>
             )}
             {(canManage || (owner && inv.status === "issued")) && inv.status !== "cancelled" && (
