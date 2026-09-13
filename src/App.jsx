@@ -4815,8 +4815,9 @@ function MedokPanel({ medok, cabKey }) {
     setBusy(false);
   };
   const remove = async (c) => {
-    if (!confirm(`Прибрати «${c.name}» зі списку Medok?`)) return;
-    await deleteMedokCompany(c.id).catch((e) => pushToast({ title: "Не вдалося", body: String(e.message || e) }));
+    // window.confirm ненадійний у мобільному PWA — просто видаляємо і показуємо toast
+    try { await deleteMedokCompany(c.id); pushToast({ title: "Прибрано зі списку Medok", body: c.name }); }
+    catch (e) { pushToast({ title: "Не вдалося прибрати", body: String(e.message || e) }); }
   };
   return (
     <div className="medok-panel">
@@ -8392,8 +8393,15 @@ function ZsuCodesModule({ cab }) {
       setUsedT(null); reload();
     } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
   };
-  const undo = async (c) => { if (confirm(`Повернути код ${c.code} у невикористані?`)) { await undoZsuUsed(c.id).catch((e) => alert(e.message || e)); reload(); } };
-  const remove = async (c) => { if (confirm(`Видалити код ${c.code}?`)) { await deleteZsuCode(c.id).catch((e) => alert(e.message || e)); reload(); } };
+  // window.confirm ненадійний у мобільному PWA — діємо одразу й показуємо toast
+  const undo = async (c) => {
+    try { await undoZsuUsed(c.id); pushToast({ title: "Повернуто у невикористані", body: c.code }); reload(); }
+    catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+  };
+  const remove = async (c) => {
+    try { await deleteZsuCode(c.id); pushToast({ title: "Код видалено", body: c.code }); reload(); }
+    catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+  };
 
   if (codes === null) return <div className="loading">Завантаження…</div>;
 
