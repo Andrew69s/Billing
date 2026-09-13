@@ -6844,9 +6844,10 @@ function ManagerCashOverview() {
   }, []);
   if (out === null) return <div className="loading">Завантаження…</div>;
 
-  const tmTitle = { ivan: "Львів", andriy: "Область" };
+  // назва території ТМ — ім'я ТМ, а не хардкод геолокації (територія міняється при перепризначенні салонів)
+  const tmTitle = Object.fromEntries(TMS.map((t) => [t.key, t.name]));
   const grand = Object.values(out).reduce((a, m) => a + m.total, 0);
-  const subtotals = { ivan: 0, andriy: 0 };
+  const subtotals = Object.fromEntries(TMS.map((t) => [t.key, 0]));
   SALONS.forEach((s) => { const t = salonTmOn(s.key); if (subtotals[t] != null) subtotals[t] += out[s.key]?.total || 0; });
   const waiting = SALONS.filter((s) => (out[s.key]?.total || 0) > 0).length;
 
@@ -6876,10 +6877,10 @@ function ManagerCashOverview() {
           )}
         </div>
         <div className="cash-hero-terrs">
-          {["ivan", "andriy"].map((t) => (
-            <div key={t}>
-              <div className="n">{uah(subtotals[t])}</div>
-              <div className="l">{tmTitle[t]}</div>
+          {TMS.map((t) => (
+            <div key={t.key}>
+              <div className="n">{uah(subtotals[t.key])}</div>
+              <div className="l">{tmTitle[t.key]}</div>
             </div>
           ))}
         </div>
