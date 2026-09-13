@@ -14,10 +14,16 @@ export async function deleteMedokCompany(id) {
   const { error } = await supabase.from("medok_companies").delete().eq("id", id);
   if (error) throw error;
 }
+/* Юля зазвичай вписує коротку/впізнавану назву («Дар материнства»), а в
+   рахунку контрагент повний («БЛАГОДІЙНИЙ ФОНД "ДАР МАТЕРИНСТВА"») —
+   тож звірка не лише на точний збіг, а й на входження в обидва боки. */
 export function isMedokCompany(list, name) {
   const n = (name || "").trim().toLowerCase();
   if (!n) return false;
-  return (list || []).some((c) => c.name.trim().toLowerCase() === n);
+  return (list || []).some((c) => {
+    const cn = (c.name || "").trim().toLowerCase();
+    return cn.length > 2 && (cn === n || n.includes(cn) || cn.includes(n));
+  });
 }
 export function subscribeMedok(onChange) {
   const ch = rtChannel("medok-companies")

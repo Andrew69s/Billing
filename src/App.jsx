@@ -4553,7 +4553,10 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact
     setBusy(true);
     try {
       await setInvoiceStatus(inv, st, cab.key, note);
-      if (st === "shipped" && isMedokCompany(medok, inv.counterparty)) {
+      // Юля могла додати компанію до списку Medok уже ПІСЛЯ того, як магазин
+      // відвантажив — тож перевіряємо на обох кроках (Відвантажено й Пропечатано),
+      // щоб попередження точно наздогнало магазин.
+      if ((st === "shipped" || st === "documented") && isMedokCompany(medok, inv.counterparty)) {
         pushToast({ title: "Договір Medok", body: `«${inv.counterparty}» — документи пропечатувати не потрібно` });
         if (inv.created_by && inv.created_by !== cab.key) {
           notify({
@@ -4810,7 +4813,7 @@ function MedokPanel({ medok, cabKey }) {
       </button>
       {open && (
         <div className="medok-body">
-          <p className="hint">Компанії з договором Medok — коли рахунок такої компанії переходить у «Відвантажено», паперові документи друкувати не потрібно.</p>
+          <p className="hint">Компанії з договором Medok — коли рахунок такої компанії переходить у «Відвантажено» чи «Пропечатано», паперові документи друкувати не потрібно. Можна вписати коротку назву (напр. «Дар материнства») — звіряємо частковий збіг із полем «Кому виставлено».</p>
           <div className="medok-add">
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Назва компанії (як у полі «Кому виставлено»)" onKeyDown={(e) => e.key === "Enter" && add()} />
             <button className="btn-primary small" disabled={busy || !name.trim()} onClick={add}>Додати</button>
