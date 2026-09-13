@@ -38,7 +38,7 @@ import {
 import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, markSeen, markTaskAck, subscribeTasks } from "./lib/tasks.js";
 import {
   INVOICE_STATUS, INVOICE_FLOW, nextStatus, deriveVat,
-  listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice,
+  listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice, getInvoice,
 } from "./lib/invoices.js";
 import {
   EMP_ROLES, EMP_ROLE_ORDER,
@@ -4543,10 +4543,11 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact
   const prevIdx = INVOICE_FLOW.indexOf(inv.status) - 1;
   const prev = prevIdx >= 0 ? INVOICE_FLOW[prevIdx] : null;
   const active = inv.status !== "cancelled" && inv.status !== "documented";
-  // «Відвантажено» — фізична дія самого магазину, тож СМ рухає цей крок сам
-  // (решту статусів веде бухгалтер/ТМ/керівник)
-  const canShip = owner && inv.status === "paid";
-  const canUnship = owner && inv.status === "shipped";
+  // «Оплачено» ставлять лише ТМ Шах і Юля; «Відвантажено»/«Пропечатано» —
+  // фізичні дії самого магазину, лише його власник рахунку. Більше ніхто.
+  const isPayer = cab.key === "andriy" || cab.type === "accountant";
+  const canAdvance = nx === "paid" ? isPayer : owner;
+  const canRevert = inv.status === "paid" ? isPayer : (inv.status === "shipped" || inv.status === "documented") ? owner : false;
 
   const move = async (st, note) => {
     setBusy(true);
@@ -4564,8 +4565,22 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact
         }
       }
       onChanged();
+    } catch (e) {
+      if (e.code === "stale_status") {
+        // хтось (напр. ТМ і Юля одночасно) уже змінив статус — не тремо його історію
+        try {
+          const fresh = await getInvoice(inv.id);
+          const last = (fresh.history || [])[fresh.history.length - 1];
+          pushToast({
+            title: "Статус уже змінено",
+            body: last ? `${cabName(last.by)} щойно поставив «${INVOICE_STATUS[fresh.status] || fresh.status}»` : "Хтось уже оновив цей рахунок",
+          });
+        } catch { pushToast({ title: "Статус уже змінено", body: "Хтось уже оновив цей рахунок" }); }
+        onChanged();
+      } else {
+        alert("Не вдалося: " + (e.message || e));
+      }
     }
-    catch (e) { alert("Не вдалося: " + (e.message || e)); }
     setBusy(false); setCmt("");
   };
   const addComment = async () => {
@@ -4644,12 +4659,12 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact
           )}
 
           <div className="inv-actions">
-            {(canManage || canShip) && nx && (
+            {canAdvance && nx && (
               <button className="btn-primary small" disabled={busy} onClick={() => move(nx)}>
                 Позначити: {INVOICE_STATUS[nx]}
               </button>
             )}
-            {(canManage || canUnship) && prev && active && (
+            {canRevert && prev && active && (
               <button className="btn-secondary small" disabled={busy} onClick={() => move(prev)}>↩ {INVOICE_STATUS[prev]}</button>
             )}
             {(canManage || (owner && inv.status === "issued")) && inv.status !== "cancelled" && (

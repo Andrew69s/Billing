@@ -50,12 +50,28 @@ export function deriveVat(issuer, aiVat) {
   return !!aiVat;
 }
 
+/* Оптимістичний лок: пишемо, лише якщо статус із часу завантаження не
+   змінився — інакше хтось (напр. ТМ і бухгалтер одночасно) уже поставив
+   свою відмітку, і ми не хочемо затерти її історію. */
 export async function setInvoiceStatus(inv, status, by, note) {
   const history = [...(inv.history || []), { status, at: new Date().toISOString(), by, ...(note ? { note } : {}) }];
   const patch = { status, history, updated_at: new Date().toISOString() };
   if (note !== undefined) patch.comment = note;
-  const { error } = await supabase.from("invoices").update(patch).eq("id", inv.id);
+  const { data, error } = await supabase.from("invoices").update(patch)
+    .eq("id", inv.id).eq("status", inv.status)
+    .select("id");
   if (error) throw error;
+  if (!data || data.length === 0) {
+    const e = new Error("stale_status");
+    e.code = "stale_status";
+    throw e;
+  }
+}
+
+export async function getInvoice(id) {
+  const { data, error } = await supabase.from("invoices").select("*").eq("id", id).single();
+  if (error) throw error;
+  return data;
 }
 
 export async function updateInvoice(id, patch) {
