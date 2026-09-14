@@ -5360,7 +5360,10 @@ const shiftErr = (e) => {
   return m || "Помилка";
 };
 
-function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
+function ShiftCellMenu({ pos, salonOptions, editMode, current, onClose, onSet }) {
+  const curHours = current ? current[editMode === "plan" ? "plan_h" : "fact_h"] : null;
+  const [hrs, setHrs] = useState(curHours != null && Number(curHours) !== 1 ? String(curHours) : "");
+  const submitHours = () => { if (hrs !== "" && !Number.isNaN(Number(hrs))) onSet({ type: "worked", hours: Number(hrs) }); };
   return createPortal(
     <>
       <div className="dtf-backdrop" onClick={onClose} />
@@ -5369,6 +5372,14 @@ function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
           <button className="shift-menu-work" onClick={() => onSet({ type: "worked" })}>✓ На зміні</button>
           <button onClick={() => onSet({ type: "off" })}>Вихідний</button>
         </div>
+        <div className="shift-menu-row shift-menu-hours">
+          <input
+            type="number" min="0" max="24" step="0.5" placeholder="год." value={hrs}
+            onChange={(e) => setHrs(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submitHours(); }}
+          />
+          <button disabled={hrs === ""} onClick={submitHours}>Вказати години</button>
+        </div>
         <div className="shift-menu-row">
           <button onClick={() => onSet({ type: "absent" })}>Відсутній</button>
           <button onClick={() => onSet({ type: "clear" })}>Прибрати</button>
@@ -5376,7 +5387,7 @@ function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
         {salonOptions.length > 0 && (
           <div className="shift-menu-row shift-menu-subst">
             <span>Заміна:</span>
-            <select defaultValue="" onChange={(e) => { if (e.target.value) onSet({ type: "subst", salon: e.target.value }); }}>
+            <select defaultValue="" onChange={(e) => { if (e.target.value) onSet({ type: "subst", salon: e.target.value, hours: hrs !== "" ? Number(hrs) : undefined }); }}>
               <option value="" disabled>магазин</option>
               {salonOptions.map((s) => <option key={s.key} value={s.key}>{salonShortName(s)}</option>)}
             </select>
@@ -5439,7 +5450,8 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
       await deleteShift(empId, wd).catch(() => {}); onChange(); return;
     }
     if (action.type === "worked") {
-      if (editMode === "plan") row.plan_h = 1; else row.fact_h = 1;
+      const h = action.hours != null && !Number.isNaN(action.hours) ? action.hours : 1;
+      if (editMode === "plan") row.plan_h = h; else row.fact_h = h;
       row.state = "work"; row.absence_reason = "";
     } else if (action.type === "off") {
       row.state = "off"; row.fact_h = null; if (!factOnly) row.plan_h = null;
@@ -5449,7 +5461,8 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
       row.state = "absent"; row.absence_reason = key; row.fact_h = null;
     } else if (action.type === "subst") {
       row.salon_key = action.salon;
-      if (editMode === "plan") row.plan_h = 1; else row.fact_h = 1;
+      const h = action.hours != null && !Number.isNaN(action.hours) ? action.hours : 1;
+      if (editMode === "plan") row.plan_h = h; else row.fact_h = h;
       row.state = "work";
     }
     await upsertShift(row).catch((e) => alert(shiftErr(e)));
@@ -5464,10 +5477,13 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
     const worked = s.fact_h != null;
     const planned = s.plan_h != null;
     if (!worked && !planned) return { txt: "", cls: "" };
+    // «1» — старе умовне позначення «була зміна», без конкретних годин — не показуємо як число
+    const hVal = worked ? s.fact_h : s.plan_h;
+    const hTxt = hVal != null && Number(hVal) !== 1 ? String(hVal).replace(/\.0$/, "") : "";
     const subst = s.salon_key !== homeSalon;
-    if (subst) return { txt: salonByKey(s.salon_key)?.city?.slice(0, 3) || "?", cls: "sh-subst" };
+    if (subst) return { txt: hTxt || salonByKey(s.salon_key)?.city?.slice(0, 3) || "?", cls: "sh-subst" };
     // відпрацював → повна заливка; заплановано → напівпрозора
-    return { txt: "", cls: worked ? "sh-fill" : "sh-fill-plan" };
+    return { txt: hTxt, cls: worked ? "sh-fill" : "sh-fill-plan" };
   };
 
   const groups = salons.map((s) => ({
@@ -5544,6 +5560,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
       {menu && (
         <ShiftCellMenu
           pos={menu.pos} editMode={editMode} onClose={() => setMenu(null)} onSet={applySet}
+          current={shiftMap[`${menu.empId}:${dayKey(ym, menu.day)}`]}
           salonOptions={SALONS.filter((s) => s.key !== menu.homeSalon)}
         />
       )}
@@ -10507,6 +10524,8 @@ td.sh.sh-plan{font-weight:400;}
 .shift-menu-row button:hover{background:rgba(190,138,46,.14);}
 .shift-menu-subst{font-size:11px;color:var(--muted);}
 .shift-menu-subst select{flex:1;padding:5px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-size:11px;}
+.shift-menu-hours input{width:52px;flex:none;padding:6px 5px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:11.5px;color:var(--ink);background:var(--surface-alt);text-align:center;}
+.shift-menu-hours button{flex:1;}
 .shift-menu-hint{font-size:10px;color:var(--muted);text-align:center;font-family:'IBM Plex Mono',monospace;}
 
 /* щоденний вхід */
