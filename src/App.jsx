@@ -2309,7 +2309,7 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
         {showAmounts && <div className="hint">{calc.ppi.pct}% від обороту PPI ({data.ppi.planClosed ? "план закрито" : "план не закрито"}) · {fmt(calc.ppi.teamBonus)} ÷ {calc.ppi.team} = {fmt(calc.ppi.bonus)} кожному</div>}
       </SmItem>
 
-      <BlockHeader n="5" title="Рекорд та квартальна премія" />
+      <BlockHeader n="5" title="Рекорд, квартальна премія та бонуси" />
       <SmItem num="5.1" title="Бонус за рекордні показники" amount={showAmounts ? calc.record.bonus : undefined} screenshotKey="record" {...shot}>
         <Field readOnly={readOnly} label="Оборот ТО за місяць (команда)" suffix="грн" value={data.record.monthlyTo} onChange={(v) => update(["record", "monthlyTo"], v)} />
         <Field readOnly={readOnly} label="Попередній рекорд ТО" suffix="грн" value={data.record.prevRecord} onChange={(v) => update(["record", "prevRecord"], v)} />
@@ -2327,6 +2327,13 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
           <div className="hint">Премія — 10% від суми трьох останніх заробітних плат.</div>
         </SmItem>
       )}
+      <SmItem num="5.3" title="Бонус" amount={showAmounts ? (calc.bonusExtra || 0) : undefined} screenshotKey="bonusExtra" {...shot}>
+        <Field readOnly={readOnly} label="Сума" suffix="грн" value={data.bonusExtra?.amount || 0} onChange={(v) => update(["bonusExtra", "amount"], v)} />
+        <label className="over-field" style={{ maxWidth: "100%" }}><span>За що (необовʼязково)</span>
+          <input readOnly={readOnly} value={data.bonusExtra?.comment || ""} onChange={(e) => update(["bonusExtra", "comment"], e.target.value)} placeholder="напр. прибирання, додатковий обов'язок" />
+        </label>
+        <div className="hint">Будь-який додатковий бонус, який не входить в інші пункти — вносите самі, ТМ бачить і звіряє при перевірці.</div>
+      </SmItem>
     </div>
   );
 }
@@ -2373,6 +2380,9 @@ function SmSummary({ data, calc, expandedBlock, onToggle, editable, deductEditab
       <div className="summary-row"><span>5 · Рекордний показник{calc.record.beaten ? " ✔" : ""}</span><b>{fmt(calc.record.bonus)}</b></div>
       {calc.quarterly !== 0 && (
         <div className="summary-row"><span>5 · Квартальна премія</span><b>{fmt(calc.quarterly)}</b></div>
+      )}
+      {(calc.bonusExtra || 0) !== 0 && (
+        <div className="summary-row"><span>5 · Бонус{data.bonusExtra?.comment ? ` (${data.bonusExtra.comment})` : ""}</span><b>{fmt(calc.bonusExtra)}</b></div>
       )}
 
       {editable ? (

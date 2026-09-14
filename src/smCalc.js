@@ -34,6 +34,7 @@ export function emptySmData() {
     ppi: { ppiRevenue: 0, planClosed: false },
     record: { monthlyTo: 0, prevRecord: 0 },
     quarterly: { threeOfThree: false, last3SalarySum: 0 },
+    bonusExtra: { amount: 0, comment: "" }, // додатковий бонус СМ (напр. прибирання) — сам вносить, ТМ бачить/звіряє
     adj: { amount: 0, comment: "", advance: 0, official: 0, birthdays: 0, inventory: 0, ownUse: 0 },
 
     screenshots: {},
@@ -78,4 +79,6 @@ export const SM_FIELD_LABELS = {
   "record.prevRecord": "Попередній рекорд ТО",
   "quarterly.threeOfThree": "3/3 місяці план закрито",
   "quarterly.last3SalarySum": "Сума 3 останніх ЗП",
+  "bonusExtra.amount": "Бонус (напр. прибирання)",
+  "bonusExtra.comment": "Коментар до бонусу",
 };
