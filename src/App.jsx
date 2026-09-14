@@ -2001,10 +2001,12 @@ function useMonthStats() {
 
 const shortAddr = (addr) => addr.replace(/^(вул\.|пл\.|просп\.)\s+/, "");
 
+// Паньків Іван — повністю прибраний з деки (2026-09-14, за проханням користувача).
+// Кабінет і дані в базі не видалені — щоб повернути тайл на головну,
+// приберіть цей фільтр (HIDDEN_TM_KEYS.includes(...)) нижче в TMS.filter(...).
+const HIDDEN_TM_KEYS = ["ivan"];
+
 function HierarchyHome({ onPick, remembered, onLogout }) {
-  // Паньків Іван приховано з деки (2026-09-14, тимчасово) — кабінет і дані
-  // не видаляються, лишається доступним через оцю розкривну секцію.
-  const [hiddenOpen, setHiddenOpen] = useState(false);
   return (
     <div className="role-select deck-screen">
       <div className="deck-inner fade-in">
@@ -2047,7 +2049,7 @@ function HierarchyHome({ onPick, remembered, onLogout }) {
             ))}
           </div>
 
-          {TMS.filter((tm) => tm.key !== "ivan" || hiddenOpen).map((tm) => {
+          {TMS.filter((tm) => !HIDDEN_TM_KEYS.includes(tm.key)).map((tm) => {
             const salons = salonsOfTm(tm.key);
             return (
               <div className="deck-tile deck-tm" key={tm.key}>
@@ -2069,10 +2071,6 @@ function HierarchyHome({ onPick, remembered, onLogout }) {
             );
           })}
         </div>
-
-        {!hiddenOpen && (
-          <button className="deck-hidden-toggle" onClick={() => setHiddenOpen(true)}>Ще кабінети…</button>
-        )}
       </div>
     </div>
   );
@@ -10080,8 +10078,6 @@ const CSS = `
 .deck-inner>p{color:var(--on-dark-2);margin:0 0 clamp(22px,4vw,34px);font-size:13.5px;}
 
 .deck-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;}
-.deck-hidden-toggle{background:none;border:none;color:var(--on-dark-2);opacity:.55;font-size:11.5px;font-family:inherit;cursor:pointer;margin-top:14px;padding:4px 0;}
-.deck-hidden-toggle:hover{opacity:.9;text-decoration:underline;}
 .deck-tile{background:rgba(var(--sf),.035);border:1px solid var(--line-dark);border-radius:16px;padding:17px;display:flex;flex-direction:column;text-align:left;color:var(--on-dark);transition:transform .18s var(--ease),border-color .18s var(--ease),box-shadow .18s var(--ease);}
 button.deck-tile,.deck-tile button{cursor:pointer;font-family:inherit;}
 button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(-2px);border-color:var(--line-strong);}
