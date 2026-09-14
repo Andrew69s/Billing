@@ -4429,15 +4429,16 @@ function InvoicePasteZone({ onImage, busy, compact }) {
   );
 }
 
-function InvoiceCreateModal({ cab, onClose, onCreated }) {
-  const [shot, setShot] = useState("");
-  const [counterparty, setCounterparty] = useState(""); // Покупець (клієнт)
-  const [issuer, setIssuer] = useState("");             // Постачальник (Будвік / ФОП)
-  const [vat, setVat] = useState(false);
-  const [items, setItems] = useState([]);
-  const [amount, setAmount] = useState(0);
-  const [invNo, setInvNo] = useState("");
-  const [comment, setComment] = useState("");
+function InvoiceCreateModal({ cab, inv, onClose, onCreated }) {
+  const editing = !!inv;
+  const [shot, setShot] = useState(inv?.screenshot || "");
+  const [counterparty, setCounterparty] = useState(inv?.counterparty || ""); // Покупець (клієнт)
+  const [issuer, setIssuer] = useState(inv?.issuer || "");             // Постачальник (Будвік / ФОП)
+  const [vat, setVat] = useState(inv?.vat || false);
+  const [items, setItems] = useState(inv?.items || []);
+  const [amount, setAmount] = useState(inv?.amount || 0);
+  const [invNo, setInvNo] = useState(inv?.invoice_no || "");
+  const [comment, setComment] = useState(inv?.comment || "");
   const [ai, setAi] = useState("");        // "" | "run" | "ok" | "fail"
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -4460,8 +4461,16 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
     if (!shot || (!amount && !counterparty.trim())) return;
     setBusy(true); setErr("");
     try {
-      await createInvoice({ counterparty, issuer, vat, items, amount, invoice_no: invNo, screenshot: shot, comment, created_by: cab.key });
-      pushToast({ title: "Рахунок виставлено", body: `${counterparty || "рахунок"} · ${invMoney(amount)}` });
+      if (editing) {
+        await updateInvoice(inv.id, {
+          counterparty, issuer, vat, items, amount, invoice_no: invNo, screenshot: shot, comment,
+          history: [...(inv.history || []), { status: inv.status, at: new Date().toISOString(), by: cab.key, note: "рахунок відредаговано" }],
+        });
+        pushToast({ title: "Зміни збережено", body: `${counterparty || "рахунок"} · ${invMoney(amount)}` });
+      } else {
+        await createInvoice({ counterparty, issuer, vat, items, amount, invoice_no: invNo, screenshot: shot, comment, created_by: cab.key });
+        pushToast({ title: "Рахунок виставлено", body: `${counterparty || "рахунок"} · ${invMoney(amount)}` });
+      }
       onCreated(); onClose();
     } catch (e) { setErr(e.message || "Не вдалося зберегти"); setBusy(false); }
   };
@@ -4470,7 +4479,7 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>Новий безнальний рахунок</h3>
+          <h3>{editing ? "Редагувати рахунок" : "Новий безнальний рахунок"}</h3>
           <button className="modal-x" onClick={onClose}><X size={18} /></button>
         </div>
         <div className="modal-body">
@@ -4533,7 +4542,7 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
         <div className="modal-foot">
           <span className="task-modal-count">{shot ? "Скрін додано" : "Додайте скрін рахунку"}</span>
           <button className="btn-primary" onClick={submit} disabled={busy || !shot || (!amount && !counterparty.trim())}>
-            {busy ? "…" : "Виставити рахунок"}
+            {busy ? "…" : editing ? "Зберегти зміни" : "Виставити рахунок"}
           </button>
         </div>
       </div>
@@ -4542,10 +4551,11 @@ function InvoiceCreateModal({ cab, onClose, onCreated }) {
   );
 }
 
-function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact }) {
+function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, onEdit, compact }) {
   const [open, setOpen] = useState(false);
   const [cmt, setCmt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
   const owner = inv.created_by === cab.key;
   const nx = nextStatus(inv.status);
   const prevIdx = INVOICE_FLOW.indexOf(inv.status) - 1;
@@ -4682,8 +4692,26 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, compact
               <button className="btn-secondary small" disabled={busy} onClick={() => move("cancelled")}>Скасувати</button>
             )}
             {owner && inv.status === "issued" && (
-              <button className="btn-danger small" disabled={busy} onClick={() => { if (confirm("Видалити рахунок?")) deleteInvoice(inv.id).then(onChanged); }}>
-                <Trash2 size={13} /> Видалити
+              <button className="btn-secondary small" disabled={busy} onClick={() => onEdit(inv)}>
+                <Pencil size={13} /> Редагувати
+              </button>
+            )}
+            {owner && inv.status === "issued" && (
+              // без window.confirm (ненадійний у мобільному PWA) — озброюємо кнопку на 4с
+              <button
+                className="btn-danger small" disabled={busy}
+                onClick={() => {
+                  if (!confirmDel) {
+                    setConfirmDel(true);
+                    setTimeout(() => setConfirmDel(false), 4000);
+                    return;
+                  }
+                  setConfirmDel(false);
+                  deleteInvoice(inv.id).then(() => { pushToast({ title: "Рахунок видалено", body: inv.counterparty || "" }); onChanged(); })
+                    .catch((e) => pushToast({ title: "Не вдалося", body: String(e.message || e) }));
+                }}
+              >
+                <Trash2 size={13} /> {confirmDel ? "Точно видалити?" : "Видалити"}
               </button>
             )}
           </div>
@@ -4880,6 +4908,7 @@ function InvoicesModule({ cab }) {
   const [sort, setSort] = useState("date_desc");
   const [salonF, setSalonF] = useState("all");
   const [preview, setPreview] = useState(null);
+  const [editInv, setEditInv] = useState(null);
 
   const canCreate = cab.type === "sm";
   const canManage = cab.type === "accountant" || cab.type === "manager" || cab.type === "tm";
@@ -4951,7 +4980,7 @@ function InvoicesModule({ cab }) {
                   <div className="inv-col-body">
                     {ordered.length === 0
                       ? <p className="inv-col-empty">—</p>
-                      : ordered.map((inv) => <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} medok={medok} onPreview={setPreview} onChanged={reload} compact />)}
+                      : ordered.map((inv) => <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} medok={medok} onPreview={setPreview} onChanged={reload} onEdit={setEditInv} compact />)}
                   </div>
                 </div>
               );
@@ -5003,7 +5032,7 @@ function InvoicesModule({ cab }) {
           ) : (
             <div className="task-list">
               {shown.map((inv) => (
-                <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} medok={medok} onPreview={setPreview} onChanged={reload} />
+                <InvoiceCard key={inv.id} inv={inv} cab={cab} canManage={canManage} medok={medok} onPreview={setPreview} onChanged={reload} onEdit={setEditInv} />
               ))}
             </div>
           )}
@@ -5011,6 +5040,7 @@ function InvoicesModule({ cab }) {
       )}
 
       {showModal && <InvoiceCreateModal cab={cab} onClose={() => setShowModal(false)} onCreated={reload} />}
+      {editInv && <InvoiceCreateModal cab={cab} inv={editInv} onClose={() => setEditInv(null)} onCreated={reload} />}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
     </div>
   );
