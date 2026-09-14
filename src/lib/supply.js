@@ -158,7 +158,8 @@ export async function doAct(payload) {
   const { data, error } = await supabase.rpc("supply_act", { payload });
   if (error) {
     let msg = error.message || "помилка";
-    if (/forbidden/i.test(msg)) msg = "Немає прав на цю дію";
+    if (/stocktake_locked/.test(msg)) msg = "Стартові залишки цього складу вже внесено — коригувати можна лише через прихід/списання (або зверніться до адміністратора).";
+    else if (/forbidden/i.test(msg)) msg = "Немає прав на цю дію";
     else if (/negative_adjust/.test(msg)) msg = "Кількість при інвентаризації не може бути відʼємною";
     else {
       const m = msg.match(/not_enough:(.+?):([\d.]+):([\d.]+)/);
@@ -175,6 +176,20 @@ export const writeoff = (warehouse, article, note, lines) =>
   doAct({ kind: "writeoff", warehouse, article, reason: note, lines });
 export const adjust = (warehouse, reason, lines) =>
   doAct({ kind: "adjust", warehouse, reason, lines });
+
+/* одноразові стартові залишки: чи вже внесені по складу (замок назавжди, крім адміна) */
+export async function listStocktakeLocks() {
+  const { data, error } = await supabase.from("supply_stocktake_locks").select("*");
+  if (error) throw error;
+  return data || [];
+}
+export const stocktakeDone = (locks, warehouse) => (locks || []).some((l) => l.warehouse === warehouse);
+export function subscribeStocktake(onChange) {
+  const ch = rtChannel("supply-stocktake")
+    .on("postgres_changes", { event: "*", schema: "public", table: "supply_stocktake_locks" }, onChange)
+    .subscribe();
+  return () => { supabase.removeChannel(ch); };
+}
 export const shipOrder = (orderId, warehouseFromCentral, lines) =>
   doAct({ kind: "shipment", warehouse: CENTRAL, counterparty: warehouseFromCentral, order_id: orderId, lines });
 export const receiveOrder = (orderId, salonKey, lines) =>

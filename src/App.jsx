@@ -77,7 +77,7 @@ import {
   listActs, actLines, writeoffLines, salonSupplyExpenseLines, actSalon, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
   shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
   markOrderedFromSupplier, extractNakladna,
-  subscribeSupply,
+  subscribeSupply, listStocktakeLocks, stocktakeDone, subscribeStocktake,
 } from "./lib/supply.js";
 import {
   listTrainings, createTraining, updateTraining, deleteTraining,
@@ -7761,14 +7761,23 @@ function SupplyModule({ cab }) {
   const { items, stock, reload } = useSupply();
   const [orderPrefill, setOrderPrefill] = useState(null);
   const [editOrder, setEditOrder] = useState(null);
+  const [locks, setLocks] = useState([]);
+  useEffect(() => {
+    const load = () => listStocktakeLocks().then(setLocks).catch(() => setLocks([]));
+    load();
+    return subscribeStocktake(load);
+  }, []);
 
   // Липинського списує госп.потреби прямо з Основного складу, без «Мого складу»
   const centralWriteoff = cab.key === "lviv-lypynskoho";
+  const myWarehouse = manageWh ? CENTRAL : salonKey;
+  const myStocktakeDone = myWarehouse ? stocktakeDone(locks, myWarehouse) : true;
   const subs = [];
   if (manageWh) subs.push(["central", "Основний склад"], ["incoming", "Замовлення салонів"], ["acts", "Складські акти"], ["items", "Довідник"]);
   if (centralWriteoff) subs.push(["writeoff", "Акт списання"]);
   else if (salonKey) subs.push(["mine", "Мій склад"], ["order", "Замовити"], ["myorders", "Мої замовлення"], ["writeoff", "Акт списання"], ["salonacts", "Рух складу"]);
   if (isTm) subs.push(["terr", "Склади території"], ["torders", "Замовлення території"]);
+  if (myWarehouse) subs.push(["stocktake", myStocktakeDone ? "Стартові залишки ✓" : "Стартові залишки"]);
   const [tab, setTab] = useState(subs[0]?.[0] || "central");
 
   if (items === null) return <div className="loading">Завантаження…</div>;
@@ -7792,6 +7801,88 @@ function SupplyModule({ cab }) {
       {tab === "salonacts" && <SupplyActsView warehouse={salonKey} items={items} />}
       {tab === "terr" && <SupplyTerritory tmKey={cab.tmKey || cab.key} items={items} stock={stock} />}
       {tab === "torders" && <SupplyOrders scope="territory" tmKey={cab.tmKey || cab.key} items={items} stock={stock} onReload={reload} onEditDraft={() => {}} />}
+      {tab === "stocktake" && myWarehouse && (
+        <SupplyStocktake
+          warehouse={myWarehouse} items={items} cabKey={cab.key}
+          locked={myStocktakeDone} doneInfo={locks.find((l) => l.warehouse === myWarehouse)}
+          onReload={() => { reload(); listStocktakeLocks().then(setLocks); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* Одноразове внесення стартових залишків складу. Після збереження —
+   назавжди замкнено (сервер не пропустить ще один adjust не від адміна);
+   далі рух товару лише через прихід/списання. */
+function SupplyStocktake({ warehouse, items, cabKey, locked, doneInfo, onReload }) {
+  const [qtys, setQtys] = useState({});
+  const [step, setStep] = useState("edit"); // edit | confirm
+  const [busy, setBusy] = useState(false);
+
+  const lines = useMemo(
+    () => items.map((it) => ({ item: it, qty: Number(qtys[it.id]) || 0 })).filter((l) => l.qty > 0),
+    [items, qtys],
+  );
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await whAdjust(warehouse, "Стартові залишки", lines.map((l) => ({ item_id: l.item.id, qty: l.qty })));
+      pushToast({ title: "Стартові залишки внесено", body: `${lines.length} позицій · ${whName(warehouse)}` });
+      onReload();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); setStep("edit"); }
+    setBusy(false);
+  };
+
+  if (locked) {
+    return (
+      <div className="admin-panel">
+        <h3>Стартові залишки</h3>
+        <p className="hint">
+          Уже внесено{doneInfo ? ` — ${cabName(doneInfo.done_by)}, ${fmtDeadline(doneInfo.done_at)}` : ""}.
+          Далі залишки складу змінюються лише через прихід і списання — так і задумано, щоб уникнути махінацій.
+        </p>
+      </div>
+    );
+  }
+
+  if (step === "confirm") {
+    return (
+      <div className="admin-panel">
+        <h3>Підтвердіть стартові залишки — {whName(warehouse)}</h3>
+        <p className="hint" style={{ color: "var(--negative-bright)" }}>
+          Це одноразова дія. Після збереження виправити залишки напряму вже не можна — лише через прихід і списання.
+        </p>
+        <div className="wh-lines">
+          {lines.map((l) => (
+            <div className="stocktake-row" key={l.item.id}><span className="stocktake-nm">{l.item.name}</span><b>{l.qty} {l.item.unit}</b></div>
+          ))}
+          {lines.length === 0 && <p className="hint">Не вказано жодної кількості.</p>}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button className="btn-secondary" disabled={busy} onClick={() => setStep("edit")}>Назад, виправити</button>
+          <button className="btn-primary" disabled={busy || !lines.length} onClick={submit}>{busy ? "…" : "Так, зафіксувати назавжди"}</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="admin-panel">
+      <h3>Стартові залишки — {whName(warehouse)}</h3>
+      <p className="hint">Внесіть фактичну кількість по кожній позиції — можна зробити лише ОДИН РАЗ. Далі коригувати залишки напряму не можна, лише через прихід і списання.</p>
+      <div className="wh-lines" style={{ marginTop: 12 }}>
+        {items.map((it) => (
+          <div className="stocktake-row" key={it.id}>
+            <span className="stocktake-nm">{it.name}</span>
+            <NumInput className="tm-in" allowEmpty placeholder="0" value={qtys[it.id] ?? ""} onChange={(v) => setQtys((s) => ({ ...s, [it.id]: v }))} />
+            <span className="stocktake-unit">{it.unit}</span>
+          </div>
+        ))}
+        {items.length === 0 && <p className="hint">Довідник порожній — спершу додайте позиції.</p>}
+      </div>
+      <button className="btn-primary" style={{ marginTop: 14 }} disabled={!items.length} onClick={() => setStep("confirm")}>Перевірити й зберегти</button>
     </div>
   );
 }
@@ -11047,6 +11138,11 @@ td.sh.sh-plan{font-weight:400;}
 .wh-modal-h .modal-close{position:static;width:28px;height:28px;top:auto;right:auto;}
 .wh-modal-b{padding:16px 18px 18px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
 .wh-lines{display:flex;flex-direction:column;gap:7px;}
+.stocktake-row{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);}
+.stocktake-row:last-child{border-bottom:none;}
+.stocktake-nm{flex:1;font-size:12.5px;}
+.stocktake-row .tm-in{width:80px;}
+.stocktake-unit{font-size:11px;color:var(--muted);min-width:24px;}
 .wh-line{display:flex;gap:6px;align-items:center;}
 .wh-line select{flex:1;min-width:0;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 9px;font-family:inherit;font-size:12.5px;background:var(--input-bg);color:var(--ink);}
 .wh-line-qty{width:72px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;text-align:right;background:var(--input-bg);color:var(--ink);}
