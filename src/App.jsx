@@ -5386,12 +5386,15 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
   // чи можна редагувати цей режим для цього салону (замок від адміністратора — лише СМ)
   const modeAllowed = (k) => canEditSalon(k) && !(lockedFor && lockedFor(k));
   const scrollRef = React.useRef(null);
+  const scrolledForYm = React.useRef(null); // яким місяцем вже прокрутили — не збивати при кожному оновленні даних
   const nDays = daysInMonth(ym);
   const today = todayISO();
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || ym !== nowYm()) return;
+    if (scrolledForYm.current === ym) return; // дані онови­лись (правка/realtime) — не смикаємо скрол користувача
+    scrolledForYm.current = ym;
     const d = new Date().getDate();
     el.scrollLeft = Math.max(0, (d - 4) * 27); // ~ширина клітинки
   }, [ym, shifts]);
