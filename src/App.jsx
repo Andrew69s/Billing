@@ -5314,7 +5314,7 @@ function ShiftCellMenu({ pos, salonOptions, editMode, onClose, onSet }) {
             <span>Заміна:</span>
             <select defaultValue="" onChange={(e) => { if (e.target.value) onSet({ type: "subst", salon: e.target.value }); }}>
               <option value="" disabled>магазин</option>
-              {salonOptions.map((s) => <option key={s.key} value={s.key}>{s.city}</option>)}
+              {salonOptions.map((s) => <option key={s.key} value={s.key}>{salonShortName(s)}</option>)}
             </select>
           </div>
         )}
@@ -7753,7 +7753,7 @@ function SupplyTerritory({ tmKey, items, stock }) {
   return (
     <div className="wh-view">
       <div className="tm-salon-chips" style={{ marginBottom: 14 }}>
-        {salons.map((s) => <button key={s.key} className={`chip ${s.key === pick ? "active" : ""}`} onClick={() => setPick(s.key)}>{s.city}</button>)}
+        {salons.map((s) => <button key={s.key} className={`chip ${s.key === pick ? "active" : ""}`} onClick={() => setPick(s.key)}>{salonShortName(s)}</button>)}
       </div>
       {pick && <SupplySalonStock salonKey={pick} items={items} stock={stock} onOrderAll={() => {}} />}
     </div>
@@ -7857,19 +7857,20 @@ function SupplyStocktake({ warehouse, items, cabKey, locked, doneInfo, onReload 
   if (step === "confirm") {
     return (
       <div className="admin-panel">
-        <h3>Підтвердіть стартові залишки — {whName(warehouse)}</h3>
+        <h3>⚠️ Це ще НЕ збережено — останній крок</h3>
         <p className="hint" style={{ color: "var(--negative-bright)" }}>
-          Це одноразова дія. Після збереження виправити залишки напряму вже не можна — лише через прихід і списання.
+          Нижче — те, що потрапить у {whName(warehouse)}. Натисніть «Так, зафіксувати назавжди», інакше нічого не збережеться.
+          Це одноразова дія — після збереження виправити залишки напряму вже не можна, лише через прихід і списання.
         </p>
         <div className="wh-lines">
           {lines.map((l) => (
             <div className="stocktake-row" key={l.item.id}><span className="stocktake-nm">{l.item.name}</span><b>{l.qty} {l.item.unit}</b></div>
           ))}
-          {lines.length === 0 && <p className="hint">Не вказано жодної кількості.</p>}
+          {lines.length === 0 && <p className="hint">Не вказано жодної кількості — поверніться й заповніть хоча б одну позицію.</p>}
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
           <button className="btn-secondary" disabled={busy} onClick={() => setStep("edit")}>Назад, виправити</button>
-          <button className="btn-primary" disabled={busy || !lines.length} onClick={submit}>{busy ? "…" : "Так, зафіксувати назавжди"}</button>
+          <button className="btn-primary" disabled={busy || !lines.length} onClick={submit}>{busy ? "Зберігаю…" : "Так, зафіксувати назавжди"}</button>
         </div>
       </div>
     );
@@ -7889,7 +7890,12 @@ function SupplyStocktake({ warehouse, items, cabKey, locked, doneInfo, onReload 
         ))}
         {items.length === 0 && <p className="hint">Довідник порожній — спершу додайте позиції.</p>}
       </div>
-      <button className="btn-primary" style={{ marginTop: 14 }} disabled={!items.length} onClick={() => setStep("confirm")}>Перевірити й зберегти</button>
+      <button
+        className="btn-primary" style={{ marginTop: 14 }} disabled={!items.length}
+        onClick={() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); setStep("confirm"); }}
+      >
+        Переглянути перед збереженням →
+      </button>
     </div>
   );
 }
@@ -8242,7 +8248,7 @@ function ExpensesModule({ cab }) {
       {scopeSalons.length > 1 && (
         <div className="tm-salon-chips" style={{ marginBottom: 12 }}>
           <button className={`chip ${pick === "all" ? "active" : ""}`} onClick={() => setPick("all")}>усі</button>
-          {scopeSalons.map((s) => <button key={s.key} className={`chip ${pick === s.key ? "active" : ""}`} onClick={() => setPick(s.key)}>{s.city}</button>)}
+          {scopeSalons.map((s) => <button key={s.key} className={`chip ${pick === s.key ? "active" : ""}`} onClick={() => setPick(s.key)}>{salonShortName(s)}</button>)}
         </div>
       )}
       <div className="inv-viewtabs" style={{ marginBottom: 12 }}>
