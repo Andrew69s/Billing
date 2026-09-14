@@ -12,7 +12,7 @@ import {
   Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
   Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
   Wrench, MessageSquare, Send, Banknote, Menu,
-  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent,
+  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -4909,6 +4909,7 @@ function InvoicesModule({ cab }) {
   const [salonF, setSalonF] = useState("all");
   const [preview, setPreview] = useState(null);
   const [editInv, setEditInv] = useState(null);
+  const [q, setQ] = useState("");
 
   const canCreate = cab.type === "sm";
   const canManage = cab.type === "accountant" || cab.type === "manager" || cab.type === "tm";
@@ -4921,7 +4922,19 @@ function InvoicesModule({ cab }) {
   const archived = (r) => r.status === "documented" || r.status === "cancelled";
   const overdueCount = rows.filter(isInvOverdue).length;
 
-  let shown = rows.filter((r) => {
+  // пошук: покупець / постачальник / № рахунку / коментар / позиції / салон
+  const ql = q.trim().toLowerCase();
+  const matchesQuery = (r) => {
+    if (!ql) return true;
+    const hay = [
+      r.counterparty, r.issuer, r.invoice_no, r.comment, cabName(r.created_by),
+      ...(Array.isArray(r.items) ? r.items.map((it) => it.name) : []),
+    ].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(ql);
+  };
+  const rowsQ = ql ? rows.filter(matchesQuery) : rows;
+
+  let shown = rowsQ.filter((r) => {
     if (salonF !== "all" && r.created_by !== salonF) return false;
     if (filter === "overdue") return isInvOverdue(r);
     if (filter === "open") return !archived(r);
@@ -4959,17 +4972,22 @@ function InvoicesModule({ cab }) {
         <InvoiceAnalytics rows={rows} cab={cab} />
       ) : view === "board" ? (
         <>
-          {multiSalon && (
-            <div className="inv-toolbar">
+          <div className="inv-toolbar">
+            <div className="inv-search">
+              <Search size={14} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Пошук: покупець, постачальник, № рахунку, позиція…" />
+              {q && <button className="inv-search-clear" onClick={() => setQ("")}><X size={13} /></button>}
+            </div>
+            {multiSalon && (
               <select value={salonF} onChange={(e) => setSalonF(e.target.value)}>
                 <option value="all">Усі салони</option>
                 {salonKeys.map((k) => <option key={k} value={k}>{cabName(k)}</option>)}
               </select>
-            </div>
-          )}
+            )}
+          </div>
           <div className="inv-board">
             {INVOICE_FLOW.map((st) => {
-              const col = rows.filter((r) => r.status === st && (salonF === "all" || r.created_by === salonF));
+              const col = rowsQ.filter((r) => r.status === st && (salonF === "all" || r.created_by === salonF));
               const ordered = st === "issued"
                 ? [...col].sort((a, b) => (isInvOverdue(b) ? 1 : 0) - (isInvOverdue(a) ? 1 : 0) || (a.created_at < b.created_at ? 1 : -1))
                 : [...col].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
@@ -4997,6 +5015,11 @@ function InvoicesModule({ cab }) {
           </div>
 
           <div className="inv-toolbar">
+            <div className="inv-search">
+              <Search size={14} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Пошук: покупець, постачальник, № рахунку, позиція…" />
+              {q && <button className="inv-search-clear" onClick={() => setQ("")}><X size={13} /></button>}
+            </div>
             <select value={sort} onChange={(e) => setSort(e.target.value)}>
               <option value="date_desc">Спочатку нові</option>
               <option value="date_asc">Спочатку старі</option>
@@ -5011,6 +5034,7 @@ function InvoicesModule({ cab }) {
               </select>
             )}
           </div>
+          {ql && <p className="hint" style={{ margin: "-6px 0 10px" }}>Знайдено {shown.length} з {rowsQ.length}{rowsQ.length !== rows.length ? ` (усього ${rows.length})` : ""}.</p>}
 
           <div className="inv-filters">
             <button className={`inv-fchip inv-fchip-over ${filter === "overdue" ? "on" : ""} ${overdueCount > 0 && filter !== "overdue" ? "glow" : ""}`} onClick={() => setFilter("overdue")}>
@@ -10538,6 +10562,11 @@ td.sh.sh-plan{font-weight:400;}
 .inv-viewtabs button:hover{color:var(--on-dark);}
 .inv-viewtabs button.on{color:var(--gold-bright);border-bottom-color:var(--gold);}
 .inv-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;}
+.inv-search{display:flex;align-items:center;gap:7px;flex:1;min-width:220px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:0 10px;color:var(--muted);}
+.inv-search input{flex:1;border:none;background:none;padding:8px 0;font-family:inherit;font-size:12.5px;color:var(--ink);}
+.inv-search input:focus{outline:none;}
+.inv-search-clear{background:none;border:none;color:var(--muted);cursor:pointer;display:flex;padding:2px;}
+.inv-search-clear:hover{color:var(--negative-bright);}
 .inv-toolbar select{appearance:none;-webkit-appearance:none;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23BE8A2E' d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 10px center;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 28px 7px 11px;font-family:inherit;font-size:12px;color:var(--ink);cursor:pointer;}
 .inv-anl-filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;}
 .inv-anl-filters label{display:flex;flex-direction:column;gap:3px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--on-dark-2);}
