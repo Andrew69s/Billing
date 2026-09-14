@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
-  verifyLogin, getLogin, currentCabinet, signOutCab, initAfterAuth,
+  verifyLogin, getLogin, currentCabinet, signOutCab, initAfterAuth, loadReassignCache,
   ADMIN_KEY, ADMIN_NAME, listRecoveryRequests, clearRecovery,
   masterLogin, confirmRecovery, adminSetPassword,
   listReassignments, addReassignment, removeReassignment,
@@ -11577,6 +11577,11 @@ function AppMain() {
   useEffect(() => {
     let active = true;
     (async () => {
+      // Дека вибору кабінету рендериться ДО входу — без цього виклику лічильник
+      // магазинів на тайлі ТМ показував лише БАЗОВЕ призначення (org.js SALONS),
+      // ігноруючи реальні перепризначення між ТМ. Кеш вантажиться асинхронно,
+      // тож після завантаження форсуємо ре-рендер, щоб дека одразу оновилась.
+      loadReassignCache().then(() => { if (active) bumpRefs(); }).catch(() => {});
       const keep = localStorage.getItem(KEEP_KEY) === "1";
       const aliveTab = sessionStorage.getItem(ALIVE_KEY) === "1";
       const cab = await currentCabinet();
