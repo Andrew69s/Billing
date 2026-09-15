@@ -10707,8 +10707,9 @@ td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(
 td.sh-subst{background:rgba(78,108,151,.16);color:#4E6C97;font-weight:600;}
 td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);font-size:9px;}
 /* напівпрозора заливка станів (відпустка/відсутність/вихідний/заміна) на дуже вузьких клітинках
-   зливається в суцільну пляму без видимої межі — примусово підсилюємо роздільник між сусідніми днями */
-td.sh-vac,td.sh-absent,td.sh-off,td.sh-subst{box-shadow:inset -1px 0 0 rgba(0,0,0,.3);}
+   зливається в суцільну пляму без видимої межі (base var(--line) занадто близький до кольору
+   заливки) — форсуємо явний темний бордер, border-collapse все одно бере темнішу межу */
+td.sh-vac,td.sh-absent,td.sh-off,td.sh-subst{border-left-color:rgba(0,0,0,.6)!important;border-right-color:rgba(0,0,0,.6)!important;}
 td.sh-fill{background:#0a0a0a;}
 td.sh-fill-plan{background:linear-gradient(135deg,#0a0a0a 0 46%,transparent 46%);}
 td.sh-fill.sh-edit:hover{background:#333;}
