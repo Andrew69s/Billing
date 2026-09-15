@@ -838,6 +838,72 @@ function ThemeToggle() {
   );
 }
 
+function NewsQuickModal({ onClose }) {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const send = async () => {
+    if (!title.trim()) return;
+    setBusy(true);
+    try {
+      for (const k of ALL_CAB_KEYS) await notify({ recipient: k, kind: "news", title: title.trim(), body: body.trim(), actor: ADMIN_KEY, link: "" });
+      pushToast({ title: "Новину надіслано", body: `${ALL_CAB_KEYS.length} кабінет(ів)` });
+      onClose();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); setBusy(false); }
+  };
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Нова новина</h3>
+          <button className="modal-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <input className="task-input" placeholder="Заголовок" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+          <textarea className="task-input" rows={3} placeholder="Текст (необовʼязково)" value={body} onChange={(e) => setBody(e.target.value)} />
+          <p className="hint">Прилітає в сповіщення (дзвіночок) усім кабінетам ({ALL_CAB_KEYS.length}). Обрати конкретних отримувачів — в Адміністрування → Новини.</p>
+        </div>
+        <div className="modal-foot">
+          <span />
+          <button className="btn-primary" onClick={send} disabled={busy || !title.trim()}>{busy ? "…" : "Надіслати всім"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function QuickCreate({ cabKey }) {
+  const [open, setOpen] = useState(false);
+  const [modal, setModal] = useState(null); // "task" | "news" | null
+  const cab = useMemo(() => ({ key: cabKey, type: cabType(cabKey) }), [cabKey]);
+  const isAdmin = cabKey === ADMIN_KEY;
+  return (
+    <div className="qc-wrap">
+      <button className="topbar-quick" onClick={() => setOpen((v) => !v)} aria-label="Створити" title="Нова задача чи новина">
+        <Plus size={18} />
+      </button>
+      {open && (
+        <>
+          <div className="notif-backdrop" onClick={() => setOpen(false)} />
+          <div className="qc-panel">
+            <button className="qc-item" onClick={() => { setOpen(false); setModal("task"); }}>
+              <ListChecks size={15} /> Нова задача
+            </button>
+            {isAdmin && (
+              <button className="qc-item" onClick={() => { setOpen(false); setModal("news"); }}>
+                <Sparkles size={15} /> Новина для всіх
+              </button>
+            )}
+          </div>
+        </>
+      )}
+      {modal === "task" && <TaskCreateModal cab={cab} onClose={() => setModal(null)} onCreated={() => {}} />}
+      {modal === "news" && <NewsQuickModal onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
 function TopBar({ title, onBack, onLogout, cabKey, onMenu }) {
   return (
     <div className="topbar">
@@ -851,6 +917,7 @@ function TopBar({ title, onBack, onLogout, cabKey, onMenu }) {
       </button>
       <div className="topbar-right">
         <CalcBusyDot />
+        {cabKey && <QuickCreate cabKey={cabKey} />}
         <ThemeToggle />
         {cabKey && <FeedbackButton cabKey={cabKey} />}
         {cabKey && <NotificationCenter cabKey={cabKey} />}
@@ -5469,9 +5536,12 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
 
   const cellContent = (s, homeSalon) => {
     if (!s) return { txt: "", cls: "" };
-    if (s.state === "closed") return { txt: "", cls: "sh-closed" };
-    if (s.state === "off") return { txt: "", cls: "sh-off" };
-    if (s.state === "absent") return { txt: (ABSENCE_REASONS[s.absence_reason] || "×").slice(0, 4), cls: s.absence_reason === "vacation" ? "sh-absent sh-vac" : "sh-absent" };
+    if (s.state === "closed") return { txt: "", cls: "sh-closed", title: "Зачинено" };
+    if (s.state === "off") return { txt: "", cls: "sh-off", title: "Вихідний" };
+    if (s.state === "absent") {
+      const label = ABSENCE_REASONS[s.absence_reason] || "Відсутність";
+      return { txt: label.slice(0, 4), cls: s.absence_reason === "vacation" ? "sh-absent sh-vac" : "sh-absent", title: label };
+    }
     const worked = s.fact_h != null;
     const planned = s.plan_h != null;
     if (!worked && !planned) return { txt: "", cls: "" };
@@ -5479,7 +5549,11 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
     const hVal = worked ? s.fact_h : s.plan_h;
     const hTxt = hVal != null && Number(hVal) !== 1 ? String(hVal).replace(/\.0$/, "") : "";
     const subst = s.salon_key !== homeSalon;
-    if (subst) return { txt: hTxt || salonByKey(s.salon_key)?.city?.slice(0, 3) || "?", cls: "sh-subst" };
+    const substSalon = subst ? salonByKey(s.salon_key) : null;
+    if (subst) {
+      const nm = substSalon ? salonShortName(substSalon) : "?";
+      return { txt: hTxt || nm.slice(0, 4), cls: "sh-subst", title: `Заміна: ${substSalon ? salonLabel(substSalon) : "?"}${hTxt ? ` · ${hTxt} год` : ""}` };
+    }
     // відпрацював → повна заливка; заплановано → напівпрозора
     return { txt: hTxt, cls: worked ? "sh-fill" : "sh-fill-plan" };
   };
@@ -5527,11 +5601,12 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
                         const wd = dayKey(ym, d);
                         let s = shiftMap[`${e.id}:${wd}`];
                         if (!s && closedDays[`${e.salon_key}:${wd}`]) s = { state: "closed" };
-                        const { txt, cls } = cellContent(s, e.salon_key);
+                        const { txt, cls, title } = cellContent(s, e.salon_key);
                         const edit = modeAllowed(e.salon_key);
                         return (
                           <td key={d}
                             className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
+                            title={title || undefined}
                             onClick={edit ? (ev) => openMenu(ev, e.id, d, e.salon_key) : undefined}>
                             {txt}
                           </td>
@@ -10019,7 +10094,7 @@ const CSS = `
   .topbar .topbar-back{padding:9px 10px;font-size:0;flex-shrink:0;}
   .topbar-back svg{width:18px;height:18px;}
   .topbar-right{gap:8px;flex-shrink:0;}
-  .topbar .topbar-fb,.topbar .topbar-theme,.topbar .notif-bell,.topbar .topbar-menu{width:40px;height:40px;}
+  .topbar .topbar-fb,.topbar .topbar-theme,.topbar .topbar-quick,.topbar .notif-bell,.topbar .topbar-menu{width:40px;height:40px;}
   .role-select-inner h1{font-size:27px;}
   .item-body{flex-direction:column;}
   .shot-slot{align-self:flex-start;}
@@ -10185,6 +10260,14 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
 .topbar-logout{background:rgba(var(--sf),.06);border:1px solid var(--line-dark);color:var(--on-dark-2);font-size:12px;padding:7px 13px;border-radius:999px;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease);}
 .topbar-logout:hover{color:var(--negative-bright);border-color:rgba(224,145,127,.4);}
+
+.qc-wrap{position:relative;}
+.topbar-quick{background:rgba(var(--sf),.05);border:1px solid var(--line-dark);color:var(--on-dark-2);width:36px;height:36px;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease),transform .15s var(--ease);}
+.topbar-quick:hover{color:var(--gold-bright);border-color:rgba(220,169,74,.4);transform:rotate(90deg);}
+.qc-panel{position:absolute;top:46px;right:0;min-width:190px;z-index:61;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 24px 60px -18px rgba(0,0,0,.55);padding:6px;display:flex;flex-direction:column;gap:2px;}
+.qc-item{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:8px;background:none;border:none;color:var(--on-dark);font-size:13px;text-align:left;cursor:pointer;transition:background .12s var(--ease);}
+.qc-item:hover{background:rgba(var(--sf),.08);}
+.qc-item svg{color:var(--gold-bright);flex-shrink:0;}
 
 /* ---------- сповіщення ---------- */
 .notif-wrap{position:relative;}
@@ -10488,7 +10571,7 @@ table.sched .rh{text-align:left;padding:2px 10px;white-space:nowrap;background:v
 table.sched .rh .nm{font-size:11px;font-weight:600;color:var(--ink);}
 table.sched .rh .rl{font-size:8.5px;color:var(--muted);}
 table.sched .grp td{background:var(--surface-sink);text-align:left;padding:2px 10px;font-size:10px;font-weight:700;color:var(--ink-soft);position:sticky;left:0;}
-td.sh{height:19px;color:var(--ink);}
+td.sh{height:19px;color:var(--ink);overflow:hidden;white-space:nowrap;text-overflow:clip;}
 td.sh-edit{cursor:pointer;}
 td.sh-edit:hover{background:rgba(190,138,46,.1);}
 td.sh-plan{color:var(--muted);}
@@ -10497,6 +10580,9 @@ td.sh-vac{background:rgba(160,58,42,.34)!important;color:var(--negative-bright)!
 td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(--surface-sink) 3px,transparent 3px,transparent 6px);}
 td.sh-subst{background:rgba(78,108,151,.16);color:#4E6C97;font-weight:600;}
 td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);font-size:9px;}
+/* напівпрозора заливка станів (відпустка/відсутність/вихідний/заміна) на дуже вузьких клітинках
+   зливається в суцільну пляму без видимої межі — примусово підсилюємо роздільник між сусідніми днями */
+td.sh-vac,td.sh-absent,td.sh-off,td.sh-subst{box-shadow:inset -1px 0 0 rgba(0,0,0,.3);}
 td.sh-fill{background:#0a0a0a;}
 td.sh-fill-plan{background:linear-gradient(135deg,#0a0a0a 0 46%,transparent 46%);}
 td.sh-fill.sh-edit:hover{background:#333;}
