@@ -7551,13 +7551,13 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
 
   const openOrder = async (o) => setOpen({ order: o, lines: o._lines || await orderLines(o.id) });
   const markOrdered = async (o) => {
-    if (!confirm(`Замовлення для «${salonByKey(o.salon_key)?.city}»: позначити, що замовлено в постачальників?`)) return;
+    if (!confirm(`Замовлення для «${salonLabel(salonByKey(o.salon_key))}»: позначити, що замовлено в постачальників?`)) return;
     setBusyId(o.id);
     try {
       await markOrderedFromSupplier(o.id);
-      pushToast({ title: "Позначено «Їде»", body: salonByKey(o.salon_key)?.city });
+      pushToast({ title: "Позначено «Їде»", body: salonLabel(salonByKey(o.salon_key)) });
       notify({ recipient: o.salon_key, kind: "supply", title: "Ваше замовлення в дорозі 🚚", body: "Оля замовила товар у постачальників", actor: cabKey || "", link: "warehouse" });
-      notifyWhManagers(cabKey, { kind: "supply", title: `Замовлення в дорозі: ${salonByKey(o.salon_key)?.city}`, body: "Оля замовила в постачальників", actor: cabKey || "", link: "warehouse" });
+      notifyWhManagers(cabKey, { kind: "supply", title: `Замовлення в дорозі: ${salonLabel(salonByKey(o.salon_key))}`, body: "Оля замовила в постачальників", actor: cabKey || "", link: "warehouse" });
       load(); onReload && onReload();
     } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
     setBusyId("");
@@ -7572,9 +7572,9 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
     if (!confirm(`Підтвердити отримання замовлення (${recv.length} поз.)?`)) return;
     try {
       await receiveOrder(o.id, o.salon_key, recv);
-      pushToast({ title: "Отримання підтверджено", body: salonByKey(o.salon_key)?.city });
+      pushToast({ title: "Отримання підтверджено", body: salonLabel(salonByKey(o.salon_key)) });
       notifyWhManagers(null, {
-        kind: "supply", title: `Салон прийняв замовлення: ${salonByKey(o.salon_key)?.city}`,
+        kind: "supply", title: `Салон прийняв замовлення: ${salonLabel(salonByKey(o.salon_key))}`,
         body: `${recv.length} поз.`, actor: o.salon_key, link: "warehouse",
       });
       load(); onReload && onReload();
@@ -7588,7 +7588,7 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
           <div className={`wh-ord ${o.status}`} key={o.id}>
             <div className="wh-ord-top">
               <span className="wh-ord-nm">
-                {scope === "mine" ? monthLabel(o.created_at.slice(0, 7)) : salonByKey(o.salon_key)?.city}
+                {scope === "mine" ? monthLabel(o.created_at.slice(0, 7)) : salonLabel(salonByKey(o.salon_key))}
                 {o._count != null && <span className="wh-ord-cnt"> · {o._count} поз.</span>}
                 {o._mismatch && <span className="wh-ord-warn"><AlertTriangle size={12} /> розбіжність</span>}
               </span>
@@ -7623,7 +7623,7 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
       {open && createPortal(
         <div className="modal-overlay" onClick={() => setOpen(null)}>
           <div className="wh-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="wh-modal-h"><span>{salonByKey(open.order.salon_key)?.city} · {ORDER_ST[open.order.status]}</span><button className="modal-close" onClick={() => setOpen(null)}><X size={16} /></button></div>
+            <div className="wh-modal-h"><span>{salonLabel(salonByKey(open.order.salon_key))} · {ORDER_ST[open.order.status]}</span><button className="modal-close" onClick={() => setOpen(null)}><X size={16} /></button></div>
             <div className="wh-modal-b">
               <table className="wh-tbl"><tbody>
                 {open.lines.map((l) => (
@@ -7661,7 +7661,7 @@ function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
     setBusy(true);
     try {
       await shipOrder(order.id, order.salon_key, ls);
-      pushToast({ title: "Відправлено", body: salonByKey(order.salon_key)?.city });
+      pushToast({ title: "Відправлено", body: salonLabel(salonByKey(order.salon_key)) });
       notify({
         recipient: order.salon_key, kind: "supply",
         title: "Замовлення зі складу відправлено",
@@ -7669,7 +7669,7 @@ function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
         actor: cabKey || "", link: "warehouse",
       });
       notifyWhManagers(cabKey, {
-        kind: "supply", title: `Замовлення відправлено: ${salonByKey(order.salon_key)?.city}`,
+        kind: "supply", title: `Замовлення відправлено: ${salonLabel(salonByKey(order.salon_key))}`,
         body: `${ls.length} поз.`, actor: cabKey || "", link: "warehouse",
       });
       onDone();
@@ -7678,7 +7678,7 @@ function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
   return createPortal(
     <div className="modal-overlay" onClick={() => !busy && onClose()}>
       <div className="wh-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="wh-modal-h"><span>Відправити → {salonByKey(order.salon_key)?.city}</span><button className="modal-close" onClick={onClose}><X size={16} /></button></div>
+        <div className="wh-modal-h"><span>Відправити → {salonLabel(salonByKey(order.salon_key))}</span><button className="modal-close" onClick={onClose}><X size={16} /></button></div>
         <div className="wh-modal-b">
           <table className="wh-tbl"><thead><tr><th>Позиція</th><th>Замовлено</th><th>На складі</th><th>Відправити</th></tr></thead>
             <tbody>{lines.map((l) => (
