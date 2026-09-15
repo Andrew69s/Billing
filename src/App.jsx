@@ -5537,8 +5537,8 @@ const shiftErr = (e) => {
   return m || "Помилка";
 };
 
-function ShiftCellMenu({ pos, salonOptions, editMode, current, onClose, onSet }) {
-  const curHours = current ? current[editMode === "plan" ? "plan_h" : "fact_h"] : null;
+function ShiftCellMenu({ pos, salonOptions, field, current, onClose, onSet }) {
+  const curHours = current ? current[field === "plan" ? "plan_h" : "fact_h"] : null;
   const [hrs, setHrs] = useState(curHours != null && Number(curHours) !== 1 ? String(curHours) : "");
   const submitHours = () => { if (hrs !== "" && !Number.isNaN(Number(hrs))) onSet({ type: "worked", hours: Number(hrs) }); };
   return createPortal(
@@ -5570,32 +5570,243 @@ function ShiftCellMenu({ pos, salonOptions, editMode, current, onClose, onSet })
             </select>
           </div>
         )}
-        <div className="shift-menu-hint">{editMode === "plan" ? "редагуємо план" : "редагуємо факт"}</div>
+        <div className="shift-menu-hint">{field === "plan" ? "редагуємо план" : "редагуємо факт"}</div>
       </div>
     </>,
     document.body,
   );
 }
 
-function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, lockedFor }) {
-  const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
-  const [editMode, setEditMode] = useState("plan");
-  const canEdit = salons.some((s) => canEditSalon(s.key));
-  // чи можна редагувати цей режим для цього салону (замок від адміністратора — лише СМ)
-  const modeAllowed = (k) => canEditSalon(k) && !(lockedFor && lockedFor(k));
-  const scrollRef = React.useRef(null);
-  const scrolledForYm = React.useRef(null); // яким місяцем вже прокрутили — не збивати при кожному оновленні даних
-  const nDays = daysInMonth(ym);
-  const today = todayISO();
+/* пошук будь-якого співробітника з території (не лише свого магазину) —
+   щоб СМ міг вказати, що хтось інший сьогодні тут на заміні */
+function ShiftSubstSearch({ pos, candidates, onPick, onClose }) {
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const list = s ? candidates.filter((e) => e.full_name.toLowerCase().includes(s)) : candidates;
+    return list.slice(0, 40);
+  }, [q, candidates]);
+  return createPortal(
+    <>
+      <div className="dtf-backdrop" onClick={onClose} />
+      <div className="shift-menu shift-search-menu" style={{ top: pos.top, left: pos.left }}>
+        <input
+          className="shift-search-input" autoFocus placeholder="Пошук співробітника з території…"
+          value={q} onChange={(e) => setQ(e.target.value)}
+        />
+        <div className="shift-search-list">
+          {filtered.length === 0 && <div className="shift-search-empty">Нікого не знайдено</div>}
+          {filtered.map((e) => (
+            <button key={e.id} className="shift-search-item" onClick={() => onPick(e)}>
+              <span className="ssi-name">{e.full_name}</span>
+              <span className="ssi-from">{salonByKey(e.salon_key) ? salonShortName(salonByKey(e.salon_key)) : ""}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
 
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || ym !== nowYm()) return;
-    if (scrolledForYm.current === ym) return; // дані онови­лись (правка/realtime) — не смикаємо скрол користувача
-    scrolledForYm.current = ym;
-    const d = new Date().getDate();
-    el.scrollLeft = Math.max(0, (d - 4) * 27); // ~ширина клітинки
-  }, [ym, shifts]);
+/* Одна незалежна таблиця — «План» або «Факт» (field визначає, яке поле редагує клік).
+   Обидві рендеряться поруч у ShiftGrid, нічого не накладається одне на одне. */
+function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today }) {
+  const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
+  const [substMenu, setSubstMenu] = useState(null); // { salonKey, day, pos }
+  const nDays = daysInMonth(ym);
+  const modeAllowed = (k) => canEditSalon(k) && !(lockedFor && lockedFor(k));
+
+  const openMenu = (e, empId, day, homeSalon) => {
+    if (!modeAllowed(homeSalon)) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.min(r.left, window.innerWidth - 210) } });
+  };
+  const openSubstMenu = (e, salonKey, day) => {
+    if (!modeAllowed(salonKey)) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setSubstMenu({ salonKey, day, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 260), left: Math.min(r.left, window.innerWidth - 236) } });
+  };
+
+  const applySet = async (action) => {
+    const { empId, day, homeSalon } = menu;
+    const wd = dayKey(ym, day);
+    setMenu(null);
+    const cur = shiftMap[`${empId}:${wd}`] || {};
+    let row = { employee_id: empId, work_date: wd, salon_key: cur.salon_key || homeSalon, plan_h: cur.plan_h ?? null, fact_h: cur.fact_h ?? null, state: "work", absence_reason: cur.absence_reason || "", is_senior: cur.is_senior || false, updated_by: cabKey };
+    const factOnly = field === "fact"; // у таблиці «Факт» план не чіпаємо (він може бути замкнений)
+    if (action.type === "clear") {
+      if (factOnly && cur.plan_h != null) {
+        row.fact_h = null; row.state = "work"; row.absence_reason = "";
+        await upsertShift(row).catch((e) => alert(shiftErr(e))); onChange(); return;
+      }
+      await deleteShift(empId, wd).catch(() => {}); onChange(); return;
+    }
+    if (action.type === "worked") {
+      const h = action.hours != null && !Number.isNaN(action.hours) ? action.hours : 1;
+      if (field === "plan") row.plan_h = h; else row.fact_h = h;
+      row.state = "work"; row.absence_reason = "";
+    } else if (action.type === "off") {
+      row.state = "off"; row.fact_h = null; if (!factOnly) row.plan_h = null;
+    } else if (action.type === "absent") {
+      const reason = prompt("Причина (відпустка / лікарняний / відгул / прогул / навчання):", "відпустка") || "";
+      const key = Object.entries(ABSENCE_REASONS).find(([, v]) => v.toLowerCase() === reason.trim().toLowerCase())?.[0] || "vacation";
+      row.state = "absent"; row.absence_reason = key; row.fact_h = null;
+    } else if (action.type === "subst") {
+      row.salon_key = action.salon;
+      const h = action.hours != null && !Number.isNaN(action.hours) ? action.hours : 1;
+      if (field === "plan") row.plan_h = h; else row.fact_h = h;
+      row.state = "work";
+    }
+    await upsertShift(row).catch((e) => alert(shiftErr(e)));
+    onChange();
+  };
+
+  const pickSubst = async (emp) => {
+    const { salonKey, day } = substMenu;
+    setSubstMenu(null);
+    const wd = dayKey(ym, day);
+    const cur = shiftMap[`${emp.id}:${wd}`] || {};
+    const sameSalon = cur.salon_key === salonKey;
+    const row = {
+      employee_id: emp.id, work_date: wd, salon_key: salonKey,
+      plan_h: field === "plan" ? 1 : (sameSalon ? cur.plan_h ?? null : null),
+      fact_h: field === "fact" ? 1 : (sameSalon ? cur.fact_h ?? null : null),
+      state: "work", absence_reason: "", updated_by: cabKey,
+    };
+    try {
+      await upsertShift(row);
+      pushToast({ title: "Заміну додано", body: `${emp.full_name} · ${salonShortName(salonByKey(salonKey) || {})}` });
+      onChange();
+    } catch (e) { pushToast({ title: "Не вдалося додати заміну", body: shiftErr(e) }); }
+  };
+
+  const cellInfo = (s, homeSalon, day) => {
+    if (!s) return { txt: "", cls: "" };
+    if (s.state === "closed") return { txt: "", cls: "sh-closed", title: "Зачинено" };
+    if (s.state === "off") return { txt: "", cls: "sh-off", title: "Вихідний" };
+    if (s.state === "absent") {
+      const label = ABSENCE_REASONS[s.absence_reason] || "Відсутність";
+      return { txt: "", cls: s.absence_reason === "vacation" ? "sh-absent sh-vac" : "sh-absent", title: label };
+    }
+    const hVal = field === "plan" ? s.plan_h : s.fact_h;
+    if (hVal == null) {
+      if (field === "fact" && s.plan_h != null && dayKey(ym, day) < today) {
+        return { txt: "", cls: "sh-gap", title: "Заплановано, факт не внесено" };
+      }
+      return { txt: "", cls: "" };
+    }
+    const hTxt = Number(hVal) !== 1 ? String(hVal).replace(/\.0$/, "") : "";
+    const subst = s.salon_key !== homeSalon;
+    if (subst) {
+      const sn = salonByKey(s.salon_key);
+      return { txt: hTxt, cls: "sh-subst", title: `Заміна: ${sn ? salonLabel(sn) : "?"}${hTxt ? ` · ${hTxt} год` : ""}` };
+    }
+    return { txt: hTxt, cls: field === "fact" ? "sh-fill" : "sh-fill-plan" };
+  };
+
+  const groups = useMemo(() => salons.map((s) => {
+    const home = employees.filter((e) => e.salon_key === s.key && e.status === "active");
+    const substIds = new Set();
+    shifts.forEach((sh) => {
+      if (sh.salon_key !== s.key || sh.state !== "work") return;
+      if ((field === "plan" ? sh.plan_h : sh.fact_h) == null) return;
+      const emp = employees.find((e) => e.id === sh.employee_id);
+      if (emp && emp.salon_key !== s.key) substIds.add(emp.id);
+    });
+    const rows = [...home, ...employees.filter((e) => substIds.has(e.id))]
+      .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name));
+    return { salon: s, emps: rows };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [salons, employees, shifts, field]);
+
+  return (
+    <div className="grid-scroll">
+      <table className="sched">
+        <thead>
+          <tr>
+            <th className="rh" />
+            {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => (
+              <th key={d} className={isWeekendDay(ym, d) ? "we" : ""}>
+                {d}<br /><span className="wd">{WEEKDAYS_SHORT[shiftDow(ym, d)].toLowerCase()}</span>
+              </th>
+            ))}
+            <th className="rh sh-sum-h">{field === "plan" ? "план" : "факт"}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map(({ salon, emps }) => {
+            const edit = modeAllowed(salon.key);
+            return (
+              <React.Fragment key={salon.key}>
+                <tr className="grp"><td colSpan={nDays + 2}>{salonLabel(salon)}</td></tr>
+                {emps.length === 0 && <tr><td className="rh muted" colSpan={nDays + 2}>немає співробітників</td></tr>}
+                {emps.map((e) => {
+                  const isForeign = e.salon_key !== salon.key;
+                  const t = monthTally(shifts, e.id, e.salon_key);
+                  return (
+                    <tr key={e.id} className={isForeign ? "subst-row" : ""}>
+                      <td className="rh">
+                        <span className="nm">{e.full_name}</span><br />
+                        <span className="rl">{isForeign ? `заміна · ${empRoleShort[e.role]}` : empRoleShort[e.role]}</span>
+                      </td>
+                      {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => {
+                        const wd = dayKey(ym, d);
+                        let s = shiftMap[`${e.id}:${wd}`];
+                        if (isForeign && (!s || s.salon_key !== salon.key)) s = null; // тут показуємо лише дні, де він саме на заміні в ЦЬОМУ магазині
+                        if (!s && !isForeign && closedDays[`${salon.key}:${wd}`]) s = { state: "closed" };
+                        const { txt, cls, title } = cellInfo(s, salon.key, d);
+                        return (
+                          <td key={d}
+                            className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
+                            title={title || undefined}
+                            onClick={edit ? (ev) => openMenu(ev, e.id, d, isForeign ? salon.key : e.salon_key) : undefined}>
+                            {txt}
+                          </td>
+                        );
+                      })}
+                      <td className="rh sh-sum">
+                        {field === "plan"
+                          ? <><b>{t.planDays}</b> дн{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</>
+                          : <><b>{t.factDays}</b> дн{t.substDays ? ` · зам. ${t.substDays}` : ""}{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</>}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {edit && (
+                  <tr className="subst-add-row">
+                    <td className="rh subst-add-label">+ заміна</td>
+                    {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => (
+                      <td key={d} className="sh sh-edit sh-add" title="Додати заміну з території (пошук)" onClick={(ev) => openSubstMenu(ev, salon.key, d)} />
+                    ))}
+                    <td className="rh" />
+                  </tr>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+      {menu && (
+        <ShiftCellMenu
+          pos={menu.pos} field={field} onClose={() => setMenu(null)} onSet={applySet}
+          current={shiftMap[`${menu.empId}:${dayKey(ym, menu.day)}`]}
+          salonOptions={SALONS.filter((s) => s.key !== menu.homeSalon)}
+        />
+      )}
+      {substMenu && (
+        <ShiftSubstSearch
+          pos={substMenu.pos} onClose={() => setSubstMenu(null)} onPick={pickSubst}
+          candidates={employees.filter((e) => e.status === "active" && e.salon_key !== substMenu.salonKey)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, lockedFor }) {
+  const today = todayISO();
+  const canEditAny = salons.some((s) => canEditSalon(s.key));
   const shiftMap = useMemo(() => {
     const m = {};
     shifts.forEach((s) => { m[`${s.employee_id}:${s.work_date}`] = s; });
@@ -5607,148 +5818,31 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
     return m;
   }, [storeDays]);
 
-  const openMenu = (e, empId, day, homeSalon) => {
-    if (!modeAllowed(homeSalon)) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.min(r.left, window.innerWidth - 210) } });
-  };
-  const applySet = async (action) => {
-    const { empId, day, homeSalon } = menu;
-    const wd = dayKey(ym, day);
-    setMenu(null);
-    const cur = shiftMap[`${empId}:${wd}`] || {};
-    let row = { employee_id: empId, work_date: wd, salon_key: cur.salon_key || homeSalon, plan_h: cur.plan_h ?? null, fact_h: cur.fact_h ?? null, state: "work", absence_reason: cur.absence_reason || "", is_senior: cur.is_senior || false, updated_by: cabKey };
-    const factOnly = editMode === "fact"; // у режимі «Факт» план не чіпаємо (він може бути замкнений)
-    if (action.type === "clear") {
-      if (factOnly && cur.plan_h != null) {
-        row.fact_h = null; row.state = "work"; row.absence_reason = "";
-        await upsertShift(row).catch((e) => alert(shiftErr(e))); onChange(); return;
-      }
-      await deleteShift(empId, wd).catch(() => {}); onChange(); return;
-    }
-    if (action.type === "worked") {
-      const h = action.hours != null && !Number.isNaN(action.hours) ? action.hours : 1;
-      if (editMode === "plan") row.plan_h = h; else row.fact_h = h;
-      row.state = "work"; row.absence_reason = "";
-    } else if (action.type === "off") {
-      row.state = "off"; row.fact_h = null; if (!factOnly) row.plan_h = null;
-    } else if (action.type === "absent") {
-      const reason = prompt("Причина (відпустка / лікарняний / відгул / прогул / навчання):", "відпустка") || "";
-      const key = Object.entries(ABSENCE_REASONS).find(([, v]) => v.toLowerCase() === reason.trim().toLowerCase())?.[0] || "vacation";
-      row.state = "absent"; row.absence_reason = key; row.fact_h = null;
-    } else if (action.type === "subst") {
-      row.salon_key = action.salon;
-      const h = action.hours != null && !Number.isNaN(action.hours) ? action.hours : 1;
-      if (editMode === "plan") row.plan_h = h; else row.fact_h = h;
-      row.state = "work";
-    }
-    await upsertShift(row).catch((e) => alert(shiftErr(e)));
-    onChange();
-  };
-
-  const cellContent = (s, homeSalon) => {
-    if (!s) return { txt: "", cls: "" };
-    if (s.state === "closed") return { txt: "", cls: "sh-closed", title: "Зачинено" };
-    if (s.state === "off") return { txt: "", cls: "sh-off", title: "Вихідний" };
-    if (s.state === "absent") {
-      const label = ABSENCE_REASONS[s.absence_reason] || "Відсутність";
-      return { txt: label.slice(0, 4), cls: s.absence_reason === "vacation" ? "sh-absent sh-vac" : "sh-absent", title: label };
-    }
-    const worked = s.fact_h != null;
-    const planned = s.plan_h != null;
-    if (!worked && !planned) return { txt: "", cls: "" };
-    // «1» — старе умовне позначення «була зміна», без конкретних годин — не показуємо як число
-    const hVal = worked ? s.fact_h : s.plan_h;
-    const hTxt = hVal != null && Number(hVal) !== 1 ? String(hVal).replace(/\.0$/, "") : "";
-    const subst = s.salon_key !== homeSalon;
-    const substSalon = subst ? salonByKey(s.salon_key) : null;
-    if (subst) {
-      const nm = substSalon ? salonShortName(substSalon) : "?";
-      return { txt: hTxt || nm.slice(0, 4), cls: "sh-subst", title: `Заміна: ${substSalon ? salonLabel(substSalon) : "?"}${hTxt ? ` · ${hTxt} год` : ""}` };
-    }
-    // відпрацював → повна заливка; заплановано → напівпрозора
-    return { txt: hTxt, cls: worked ? "sh-fill" : "sh-fill-plan" };
-  };
-
-  const groups = salons.map((s) => ({
-    salon: s,
-    emps: employees.filter((e) => e.salon_key === s.key && e.status === "active")
-      .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
-  }));
+  const tableProps = { ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today };
 
   return (
-    <div className="shift-grid-wrap">
-      {canEdit && (
-        <div className="shift-modebar">
-          <span>Клік по клітинці редагує:</span>
-          <button className={editMode === "plan" ? "on" : ""} onClick={() => setEditMode("plan")}>План</button>
-          <button className={editMode === "fact" ? "on" : ""} onClick={() => setEditMode("fact")}>Факт</button>
-          {salons.length > 1 && !salons.every((s) => canEditSalon(s.key)) && <span className="muted" style={{ marginLeft: 6 }}>· редагувати можна лише свої магазини</span>}
-        </div>
+    <div className="shift-grid-wrap shift-grid-dual">
+      {canEditAny && (
+        <p className="hint shift-hint-top">
+          Клік по клітинці — вказати години, вихідний чи відсутність. Рядок «+ заміна» знизу блоку магазину —
+          пошуком додати співробітника з іншого магазину, який сьогодні тут.
+        </p>
       )}
-      <div className="grid-scroll" ref={scrollRef}>
-        <table className="sched">
-          <thead>
-            <tr>
-              <th className="rh" />
-              {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => (
-                <th key={d} className={isWeekendDay(ym, d) ? "we" : ""}>
-                  {d}<br /><span className="wd">{WEEKDAYS_SHORT[shiftDow(ym, d)].toLowerCase()}</span>
-                </th>
-              ))}
-              <th className="rh sh-sum-h">відпрац.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {groups.map(({ salon, emps }) => (
-              <React.Fragment key={salon.key}>
-                <tr className="grp"><td colSpan={nDays + 2}>{salonLabel(salon)}</td></tr>
-                {emps.length === 0 && <tr><td className="rh muted" colSpan={nDays + 2}>немає співробітників</td></tr>}
-                {emps.map((e) => {
-                  const t = monthTally(shifts, e.id, e.salon_key);
-                  return (
-                    <tr key={e.id}>
-                      <td className="rh"><span className="nm">{e.full_name}</span><br /><span className="rl">{empRoleShort[e.role]}</span></td>
-                      {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => {
-                        const wd = dayKey(ym, d);
-                        let s = shiftMap[`${e.id}:${wd}`];
-                        if (!s && closedDays[`${e.salon_key}:${wd}`]) s = { state: "closed" };
-                        const { txt, cls, title } = cellContent(s, e.salon_key);
-                        const edit = modeAllowed(e.salon_key);
-                        return (
-                          <td key={d}
-                            className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
-                            title={title || undefined}
-                            onClick={edit ? (ev) => openMenu(ev, e.id, d, e.salon_key) : undefined}>
-                            {txt}
-                          </td>
-                        );
-                      })}
-                      <td className="rh sh-sum"><b>{t.factDays}</b> дн{t.planDays ? ` / ${t.planDays} план` : ""}{t.substDays ? ` · зам. ${t.substDays}` : ""}{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</td>
-                    </tr>
-                  );
-                })}
-              </React.Fragment>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <h4 className="shift-table-h">План</h4>
+      <ShiftTable field="plan" {...tableProps} />
+      <h4 className="shift-table-h">Факт</h4>
+      <ShiftTable field="fact" {...tableProps} />
+
       <div className="shift-legend">
-        <span><i className="sw sh-fill" />відпрацював</span>
+        <span><i className="sw sh-fill" />відпрацював (факт)</span>
         <span><i className="sw sh-fill-plan" />заплановано</span>
         <span><i className="sw sh-off" />вихідний</span>
         <span><i className="sw sh-vac" />відпустка</span>
-        <span><i className="sw sh-subst">Т</i>заміна на іншому магазині</span>
+        <span><i className="sw sh-subst" />заміна на іншому магазині</span>
+        <span><i className="sw sh-gap" />план є, факт не внесено</span>
         <span><i className="sw sh-closed" />зачинено</span>
         <span><i className="sw sh-absent" />інша відсутність</span>
       </div>
-      {menu && (
-        <ShiftCellMenu
-          pos={menu.pos} editMode={editMode} onClose={() => setMenu(null)} onSet={applySet}
-          current={shiftMap[`${menu.empId}:${dayKey(ym, menu.day)}`]}
-          salonOptions={SALONS.filter((s) => s.key !== menu.homeSalon)}
-        />
-      )}
     </div>
   );
 }
@@ -5827,10 +5921,10 @@ function ShiftScheduleModule({ cab }) {
 
   // графік показуємо по всіх 8 магазинах усім (ТМ, керівник, СМ) — для підмін і координації
   const salons = SALONS;
+  // редагувати графік свого магазину може лише сам СМ — ТМ і керівник тільки переглядають
+  // і порівнюють план/факт (за проханням: «ніхто крім СМ не може редагувати свій графік»)
   const canEditSalon = useMemo(() => {
     if (cab.type === "sm") return (k) => k === cab.key;
-    if (cab.type === "manager") return () => true;
-    if (cab.type === "tm") { const my = cab.tmKey || cab.key; return (k) => salonTmOn(k) === my; }
     return () => false;
   }, [cab]);
   // замок стосується лише СМ (правки від його імені); ТМ/керівник не блокуються
@@ -10575,10 +10669,6 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 /* ---------- команда / співробітники ---------- */
 /* ---------- графік змін ---------- */
 .inv-toolbar-sel{appearance:none;-webkit-appearance:none;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23BE8A2E' d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 10px center;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 28px 7px 11px;font-family:inherit;font-size:12.5px;color:var(--ink);cursor:pointer;}
-.shift-modebar{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--on-dark-2);margin-bottom:10px;}
-.shift-modebar button{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:5px 13px;font-size:11.5px;font-family:inherit;cursor:pointer;}
-.shift-modebar button.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
-.shift-modebar button:disabled{opacity:.45;cursor:not-allowed;}
 .shift-lock{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:12px;}
 .shift-lock-h{font-weight:700;font-size:13px;color:var(--gold-bright);}
 .shift-lock .hint{margin:3px 0 0;}
@@ -10690,35 +10780,45 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .trn-dates .over-field{flex:1;}
 .trn-modal-f,.zsu-modal-f{display:flex;justify-content:flex-end;gap:8px;margin-top:4px;}
 .trn-modal input[type=date],.zsu-modal input[type=date],.zsu-modal input[type=text],.zsu-modal input:not([type]){background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:12.5px;color:var(--ink);width:100%;}
-.grid-scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
-table.sched{border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;}
+/* без горизонтального скролу — таблиця фіксованого макета розтягується на всю ширину,
+   стовпці днів рівномірно ділять залишок після колонки імені й підсумку (мал. екрани — медіа нижче) */
+.shift-grid-dual{display:flex;flex-direction:column;}
+.shift-table-h{font-family:'Fraunces',serif;font-size:15px;font-weight:600;color:var(--ink);margin:16px 0 6px;}
+.shift-table-h:first-of-type{margin-top:6px;}
+.shift-hint-top{margin-bottom:2px;}
+.grid-scroll{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
+table.sched{table-layout:fixed;width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:10px;}
 table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
-table.sched thead th{background:var(--surface-alt);color:var(--muted);font-weight:600;padding:2px 0;min-width:24px;line-height:1.15;position:sticky;top:0;}
+table.sched thead th{background:var(--surface-alt);color:var(--muted);font-weight:600;padding:2px 0;line-height:1.15;}
 table.sched thead th.we{background:rgba(63,107,74,.14);color:var(--positive);}
-table.sched .wd{font-size:8px;opacity:.7;}
-table.sched .rh{text-align:left;padding:2px 10px;white-space:nowrap;background:var(--surface);font-family:'Inter',sans-serif;position:sticky;left:0;z-index:1;min-width:150px;line-height:1.25;}
-table.sched .rh .nm{font-size:11px;font-weight:600;color:var(--ink);}
-table.sched .rh .rl{font-size:8.5px;color:var(--muted);}
-table.sched .grp td{background:var(--surface-sink);text-align:left;padding:2px 10px;font-size:10px;font-weight:700;color:var(--ink-soft);position:sticky;left:0;}
-td.sh{height:19px;color:var(--ink);overflow:hidden;white-space:nowrap;text-overflow:clip;}
+table.sched .wd{font-size:7.5px;opacity:.7;}
+table.sched .rh{width:82px;text-align:left;padding:2px 6px;background:var(--surface);font-family:'Inter',sans-serif;line-height:1.2;overflow:hidden;}
+table.sched .rh .nm{font-size:10px;font-weight:600;color:var(--ink);word-break:break-word;}
+table.sched .rh .rl{font-size:8px;color:var(--muted);}
+table.sched .grp td{background:var(--surface-sink);text-align:left;padding:2px 8px;font-size:9.5px;font-weight:700;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+td.sh{height:20px;color:var(--ink);overflow:hidden;white-space:nowrap;text-overflow:clip;font-size:10px;font-weight:600;}
 td.sh-edit{cursor:pointer;}
 td.sh-edit:hover{background:rgba(190,138,46,.1);}
-td.sh-plan{color:var(--muted);}
 td.sh-off{background:rgba(190,138,46,.2);}
 td.sh-vac{background:rgba(160,58,42,.34)!important;color:var(--negative-bright)!important;font-weight:700;}
 td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(--surface-sink) 3px,transparent 3px,transparent 6px);}
 td.sh-subst{background:rgba(78,108,151,.16);color:#4E6C97;font-weight:600;}
-td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);font-size:9px;}
-/* напівпрозора заливка станів (відпустка/відсутність/вихідний/заміна) на дуже вузьких клітинках
-   зливається в суцільну пляму без видимої межі (base var(--line) занадто близький до кольору
-   заливки) — форсуємо явний темний бордер, border-collapse все одно бере темнішу межу */
+td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);}
+td.sh-gap{background:transparent;box-shadow:inset 0 0 0 1.5px rgba(220,169,74,.6);}
+/* напівпрозора заливка станів на дуже вузьких клітинках зливається в суцільну пляму без видимої
+   межі (base var(--line) занадто близький до кольору заливки) — форсуємо темний бордер */
 td.sh-vac,td.sh-absent,td.sh-off,td.sh-subst{border-left-color:rgba(0,0,0,.6)!important;border-right-color:rgba(0,0,0,.6)!important;}
 td.sh-fill{background:#0a0a0a;}
 td.sh-fill-plan{background:linear-gradient(135deg,#0a0a0a 0 46%,transparent 46%);}
 td.sh-fill.sh-edit:hover{background:#333;}
 td.sh-today{outline:2px solid var(--gold);outline-offset:-2px;}
-td.sh-sum,th.sh-sum-h{background:var(--surface-alt);font-size:10px;color:var(--muted);white-space:nowrap;padding:0 8px;text-align:right;position:sticky;right:0;}
+td.sh-sum,th.sh-sum-h{width:52px;background:var(--surface-alt);font-size:8.5px;color:var(--muted);padding:0 3px;text-align:right;line-height:1.2;}
 td.sh-sum b{color:var(--ink);}
+tr.subst-row .rh{background:rgba(78,108,151,.07);}
+tr.subst-row .rl{color:#4E6C97;}
+tr.subst-add-row .rh{color:var(--muted);font-size:9px;font-style:italic;background:var(--surface);}
+td.sh-add{cursor:pointer;background:repeating-linear-gradient(45deg,transparent,transparent 4px,rgba(78,108,151,.12) 4px,rgba(78,108,151,.12) 8px);}
+td.sh-add:hover{background:rgba(78,108,151,.26);}
 .shift-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--on-dark-2);}
 .shift-legend span{display:flex;align-items:center;gap:6px;}
 .shift-legend .sw{width:16px;height:16px;border-radius:3px;border:1px solid var(--line-strong);background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--pos);font-style:normal;font-family:'IBM Plex Mono',monospace;}
@@ -10727,9 +10827,8 @@ td.sh-sum b{color:var(--ink);}
 .shift-legend .sw.sh-off{background:rgba(190,138,46,.24);}
 .shift-legend .sw.sh-vac{background:rgba(160,58,42,.34);}
 .shift-legend .sw.sh-absent{background:rgba(160,58,42,.12);}
+.shift-legend .sw.sh-gap{box-shadow:inset 0 0 0 1.5px rgba(220,169,74,.6);background:var(--surface);}
 .shift-menu-work{background:var(--pos-soft,rgba(63,107,74,.2))!important;color:var(--positive)!important;font-weight:600;}
-td.sh{font-size:12px;font-weight:600;}
-td.sh.sh-plan{font-weight:400;}
 .shift-menu{position:fixed;z-index:301;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 20px 50px -14px rgba(0,0,0,.5);padding:10px;width:200px;animation:fadeIn .14s ease both;}
 .shift-menu-row{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;align-items:center;}
 .shift-menu-row button{flex:1;min-width:38px;padding:6px 4px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);font-family:inherit;font-size:11.5px;color:var(--ink-soft);cursor:pointer;}
@@ -10739,6 +10838,21 @@ td.sh.sh-plan{font-weight:400;}
 .shift-menu-hours input{width:52px;flex:none;padding:6px 5px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:11.5px;color:var(--ink);background:var(--surface-alt);text-align:center;}
 .shift-menu-hours button{flex:1;}
 .shift-menu-hint{font-size:10px;color:var(--muted);text-align:center;font-family:'IBM Plex Mono',monospace;}
+.shift-search-menu{width:236px;}
+.shift-search-input{width:100%;padding:7px 9px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:12.5px;background:var(--surface-alt);color:var(--ink);margin-bottom:8px;}
+.shift-search-list{max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;}
+.shift-search-item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 9px;border-radius:6px;border:none;background:var(--surface-alt);font-family:inherit;font-size:12px;color:var(--ink);cursor:pointer;text-align:left;}
+.shift-search-item:hover{background:rgba(190,138,46,.16);}
+.ssi-from{color:var(--muted);font-size:10.5px;flex-shrink:0;}
+.shift-search-empty{padding:10px;text-align:center;color:var(--muted);font-size:12px;}
+@media (max-width:640px){
+  table.sched{font-size:8px;}
+  table.sched .rh{width:58px;padding:2px 4px;}
+  table.sched .rh .nm{font-size:8.5px;}
+  table.sched .rh .rl{font-size:7px;}
+  td.sh{height:22px;font-size:9px;}
+  td.sh-sum,th.sh-sum-h{width:34px;font-size:7px;padding:0 2px;}
+}
 
 /* щоденний вхід */
 .checkin-overlay{align-items:flex-start;padding-top:6vh;}
