@@ -9001,13 +9001,15 @@ function TrainingModule({ cab }) {
 
   const setResult = async (t, emp, patch) => {
     const cur = resKey(t.id, emp.id) || {};
+    const status = patch.status ?? cur.status ?? "not_assigned";
     const row = {
       training_id: t.id, employee_id: emp.id, salon_key: emp.salon_key,
-      passed: cur.passed || false, score: cur.score ?? null, passed_on: cur.passed_on || null,
-      updated_by: cab.key, ...patch,
+      status, passed: status === "passed",
+      // «Не призначено» — бал не має сенсу, тож не зберігаємо
+      score: status === "not_assigned" ? null : (patch.score !== undefined ? patch.score : cur.score ?? null),
+      passed_on: status === "passed" ? (cur.passed_on || todayISO()) : null,
+      updated_by: cab.key,
     };
-    if (patch.passed === true && !row.passed_on) row.passed_on = todayISO();
-    if (patch.passed === false) row.passed_on = null;
     try { await upsertTrainingResult(row); reload(); }
     catch (e) { alert(e.message || e); }
   };
@@ -9061,13 +9063,22 @@ function TrainingModule({ cab }) {
                   {activeEmps.length === 0 && <tr><td className="hint">немає активних співробітників</td></tr>}
                   {activeEmps.map((e) => {
                     const r = resKey(t.id, e.id) || {};
+                    const status = r.status || "not_assigned";
                     return (
                       <tr key={e.id} className={r.passed ? "done" : ""}>
                         <td>{e.full_name}<span className="trn-role">{empRoleShort[e.role]}</span></td>
-                        <td className="trn-chk"><button className={`chk ${r.passed ? "on" : ""}`} onClick={() => setResult(t, e, { passed: !r.passed })} /></td>
+                        <td className="trn-status">
+                          <select className="trn-status-sel" value={status} onChange={(ev) => setResult(t, e, { status: ev.target.value })}>
+                            <option value="not_assigned">Не призначено</option>
+                            <option value="passed">Виконано</option>
+                            <option value="failed">Провалено</option>
+                          </select>
+                        </td>
                         <td className="trn-score">
-                          <NumInput value={r.score ?? ""} allowEmpty placeholder="бал" className="trn-score-in"
-                            onChange={(v) => setResult(t, e, { score: v === "" || v == null ? null : Number(v) })} />
+                          {status !== "not_assigned" && (
+                            <NumInput value={r.score ?? ""} allowEmpty placeholder="бал" className="trn-score-in"
+                              onChange={(v) => setResult(t, e, { score: v === "" || v == null ? null : Number(v) })} />
+                          )}
                         </td>
                         <td className="trn-when">{r.passed && r.passed_on ? fmtDeadline(r.passed_on) : ""}</td>
                       </tr>
@@ -9934,7 +9945,11 @@ const CSS = `
    їх не бачив — поле показувало чорний текст на темному фоні (нечитабельно). */
 *{box-sizing:border-box;}
 ::selection{background:rgba(190,138,46,.28);}
-input,select,textarea{color:var(--ink);}
+/* фон за замовч. теж треба — інакше поле без власного background лишається
+   білим від браузера, а колір тексту (світлий у темній темі) стає нечитабельним
+   на білому фоні; клас з власним background (напр. .field-input{background:none})
+   все одно переможе цей загальний фолбек своєю вищою специфічністю селектора */
+input,select,textarea{color:var(--ink);background:var(--input-bg);}
 input::placeholder,textarea::placeholder{color:var(--muted);opacity:.75;}
 select option{background:var(--surface);color:var(--ink);}
 
@@ -10717,6 +10732,8 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .trn-emp-tbl .chk{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line-strong,var(--line));background:none;cursor:pointer;}
 .trn-emp-tbl .chk.on{background:var(--positive);border-color:var(--positive);}
 .trn-score-in{width:56px;background:var(--surface-alt);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-family:inherit;font-size:12px;text-align:center;}
+.trn-status{width:132px;}
+.trn-status-sel{width:100%;background:var(--surface-alt);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-family:inherit;font-size:12px;color:var(--ink);}
 .trn-when{font-size:10.5px;color:var(--muted);white-space:nowrap;}
 .trn-salon-grid{display:flex;flex-direction:column;gap:4px;}
 .trn-salon-row{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;padding:3px 0;}
