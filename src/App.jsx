@@ -35,7 +35,7 @@ import {
 import {
   loadCalcRefs, tmCond, smCond, planBracketLabel, smCategoryOptions, managerCoefOptions,
 } from "./lib/calcRefs.js";
-import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, markSeen, markTaskAck, subscribeTasks } from "./lib/tasks.js";
+import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, deleteTaskBatch, groupTasks, markSeen, markTaskAck, subscribeTasks } from "./lib/tasks.js";
 import {
   INVOICE_STATUS, INVOICE_FLOW, nextStatus, deriveVat,
   listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice, getInvoice,
@@ -4113,8 +4113,10 @@ function TaskCard({ t, cabKey, onStatus, onDelete, autoOpen, cardRef }) {
     } catch (e) { pushToast({ title: "Не вдалося нагадати", body: String(e.message || e) }); }
   };
 
+  const minePending = mine && t.status !== "done";
+
   return (
-    <div ref={cardRef} className={`task-card ${isOverdue(t) ? "task-overdue" : ""} ${t.status === "done" ? "task-card-done" : ""} ${open ? "task-card-open" : ""} ${autoOpen ? "task-card-focus" : ""}`}>
+    <div ref={cardRef} className={`task-card ${isOverdue(t) ? "task-overdue" : ""} ${t.status === "done" ? "task-card-done" : ""} ${minePending ? "task-card-mine" : ""} ${open ? "task-card-open" : ""} ${autoOpen ? "task-card-focus" : ""}`}>
       <button className="task-card-main" onClick={() => setOpen((v) => !v)}>
         {t.priority && <Star size={13} className="task-star" fill="currentColor" />}
         <span className="task-title">{t.title}</span>
@@ -4165,6 +4167,77 @@ function TaskCard({ t, cabKey, onStatus, onDelete, autoOpen, cardRef }) {
                   <Trash2 size={13} /> Видалити
                 </button>
               )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Задача, поставлена одразу кільком (спільний batch_id) — одна картка;
+   розгортається на список отримувачів зі статусом кожного. */
+function TaskGroupCard({ group, cabKey, onDeleteBatch, autoOpen, cardRef }) {
+  const items = group.items;
+  const first = items[0];
+  const owner = first.created_by === cabKey;
+  const total = items.length;
+  const doneCount = items.filter((it) => it.status === "done").length;
+  const [open, setOpen] = useState(!!autoOpen);
+  const [remindBusy, setRemindBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const myItem = items.find((it) => it.assignee === cabKey);
+  const minePending = myItem && myItem.status !== "done";
+
+  const remindAll = async () => {
+    const pending = items.filter((it) => it.status !== "done");
+    if (!pending.length) return;
+    setRemindBusy(true);
+    try {
+      await Promise.all(pending.map((it) => notify({ recipient: it.assignee, kind: "task_new", title: "Нова задача", body: it.title, actor: cabKey, link: `tasks:${it.id}` })));
+      pushToast({ title: "Нагадано, хто не виконав", body: `${pending.length} кабінет(ів)` });
+    } catch (e) { pushToast({ title: "Не вдалося нагадати", body: String(e.message || e) }); }
+    setRemindBusy(false);
+  };
+
+  const delBatch = () => {
+    if (!confirmDel) { setConfirmDel(true); setTimeout(() => setConfirmDel(false), 4000); return; }
+    onDeleteBatch(items.map((it) => it.id));
+  };
+
+  return (
+    <div ref={cardRef} className={`task-card task-group ${isOverdue(first) ? "task-overdue" : ""} ${minePending ? "task-card-mine" : ""} ${open ? "task-card-open" : ""} ${autoOpen ? "task-card-focus" : ""}`}>
+      <button className="task-card-main" onClick={() => setOpen((v) => !v)}>
+        {first.priority && <Star size={13} className="task-star" fill="currentColor" />}
+        <span className="task-title">{first.title}</span>
+        <span className="task-card-sub">
+          від {cabName(first.created_by)} · {total} отримувач(ів)
+          {taskDue(first) && <> · <span className={isOverdue(first) ? "task-due-over" : ""}>до {fmtDeadline(taskDue(first))}</span></>}
+        </span>
+        <span className="task-group-progress" title={`Виконали ${doneCount} з ${total}`}>{doneCount}/{total}</span>
+      </button>
+
+      {open && (
+        <div className="task-card-detail">
+          {first.description && <p className="task-desc">{first.description}</p>}
+          <div className="task-group-list">
+            {items.map((it) => (
+              <div key={it.id} className={`task-group-row ${it.status === "done" ? "tg-done" : "tg-open"} ${it.assignee === cabKey && it.status !== "done" ? "tg-mine" : ""}`}>
+                <span className="tg-name">{cabName(it.assignee)}</span>
+                <span className="tg-status">{it.status === "done" ? "Виконано ✓" : it.status === "in_progress" ? "В роботі" : "Не виконано"}</span>
+              </div>
+            ))}
+          </div>
+          {owner && (
+            <div className="task-actions">
+              {cabKey === ADMIN_KEY && doneCount < total && (
+                <button className="btn-secondary small" onClick={remindAll} disabled={remindBusy}>
+                  <Bell size={13} /> Нагадати, хто не виконав
+                </button>
+              )}
+              <button className="btn-danger small" onClick={delBatch}>
+                <Trash2 size={13} /> {confirmDel ? "Точно видалити всі?" : "Видалити"}
+              </button>
             </div>
           )}
         </div>
@@ -4408,15 +4481,35 @@ function TasksModule({ cab }) {
     try { await deleteTask(id); reload(); }
     catch (e) { alert("Не вдалося видалити: " + (e.message || e)); }
   };
+  const onDeleteBatch = async (ids) => {
+    try { await deleteTaskBatch(ids); reload(); }
+    catch (e) { pushToast({ title: "Не вдалося видалити", body: String(e.message || e) }); }
+  };
 
   if (tasks === null) return <div className="loading">Завантаження…</div>;
 
   const visible = onlyPriority ? tasks.filter((t) => t.priority) : tasks;
-  const active = visible.filter((t) => t.status !== "done");
-  const done = visible.filter((t) => t.status === "done");
+  // задачі, поставлені кільком отримувачам одразу (спільний batch_id), рендеримо
+  // однією карткою — розгортається на «хто виконав / хто ні»; в «виконані» падає,
+  // лише коли виконали абсолютно всі.
+  const groups = groupTasks(visible);
+  const activeGroups = groups.filter((g) => g.items.some((it) => it.status !== "done"));
+  const doneGroups = groups.filter((g) => g.items.every((it) => it.status === "done"));
+  const allGroups = groupTasks(tasks);
+  const renderGroup = (g) => {
+    const focusHere = g.items.some((it) => it.id === focusId);
+    if (g.items.length > 1) {
+      return (
+        <TaskGroupCard key={g.batchId} group={g} cabKey={cab.key} onStatus={onStatus} onDeleteBatch={onDeleteBatch}
+          autoOpen={focusHere} cardRef={focusHere ? focusRef : undefined} />
+      );
+    }
+    const t = g.items[0];
+    return <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} autoOpen={t.id === focusId} cardRef={t.id === focusId ? focusRef : undefined} />;
+  };
 
   const inWork = tasks.filter((t) => t.status === "in_progress").length;
-  const unfinished = tasks.filter((t) => t.status !== "done").length;
+  const unfinished = allGroups.filter((g) => g.items.some((it) => it.status !== "done")).length;
   const unseen = tasks.filter((t) => t.assignee === cab.key && t.status !== "done" && !(t.seen || {})[cab.key]).length;
 
   return (
@@ -4437,22 +4530,22 @@ function TasksModule({ cab }) {
         </button>
       </div>
 
-      {active.length === 0 ? (
+      {activeGroups.length === 0 ? (
         <div className="admin-empty">{onlyPriority ? "Пріоритетних задач немає." : "Активних задач немає."}</div>
       ) : (
         <div className="task-list">
-          {active.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} autoOpen={t.id === focusId} cardRef={t.id === focusId ? focusRef : undefined} />)}
+          {activeGroups.map(renderGroup)}
         </div>
       )}
 
-      {done.length > 0 && (
+      {doneGroups.length > 0 && (
         <>
           <button className="task-done-toggle" onClick={() => setShowDone((v) => !v)}>
-            Виконані ({done.length}) {showDone ? "▾" : "▸"}
+            Виконані ({doneGroups.length}) {showDone ? "▾" : "▸"}
           </button>
           {showDone && (
             <div className="task-list">
-              {done.map((t) => <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} autoOpen={t.id === focusId} cardRef={t.id === focusId ? focusRef : undefined} />)}
+              {doneGroups.map(renderGroup)}
             </div>
           )}
         </>
@@ -10460,6 +10553,20 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .task-done-toggle:hover{color:var(--on-dark);}
 .btn-danger.small{background:rgba(160,58,42,.12);border:1px solid rgba(224,145,127,.3);color:var(--negative);border-radius:var(--radius-sm);padding:7px 13px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .14s var(--ease);}
 .btn-danger.small:hover{background:rgba(160,58,42,.2);}
+
+/* задача, поставлена мені особисто і ще не виконана — підсвічуємо синім, щоб впадала в очі в спільному списку */
+.task-card.task-card-mine{border-left:3px solid #4E6C97;background:rgba(78,108,151,.06);}
+/* задача одразу кільком отримувачам — одна картка замість N однакових */
+.task-group-progress{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:var(--muted);background:var(--surface-alt);border-radius:999px;padding:2px 9px;flex-shrink:0;}
+.task-group-list{display:flex;flex-direction:column;gap:4px;margin-top:10px;}
+.task-group-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px;border-radius:8px;font-size:12.5px;background:var(--surface-alt);}
+.task-group-row .tg-name{font-weight:600;color:var(--ink);}
+.task-group-row .tg-status{font-size:11px;font-family:'IBM Plex Mono',monospace;}
+.task-group-row.tg-done{background:rgba(63,107,74,.1);}
+.task-group-row.tg-done .tg-status{color:var(--positive);}
+.task-group-row.tg-open .tg-status{color:var(--negative);}
+.task-group-row.tg-mine{outline:1.5px solid #4E6C97;background:rgba(78,108,151,.1);}
+.task-group-row.tg-mine .tg-status{color:#4E6C97;}
 
 /* ---------- безнальні рахунки ---------- */
 /* ---------- команда / співробітники ---------- */

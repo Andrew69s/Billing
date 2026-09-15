@@ -8,8 +8,11 @@ export async function listTasks() {
   return data || [];
 }
 
-/* створити задачу для кожного з assignees (масив cabinet_key) */
+/* створити задачу для кожного з assignees (масив cabinet_key).
+   Якщо отримувачів кілька — позначаємо всі рядки спільним batch_id,
+   щоб той, хто поставив, бачив їх однією карткою (див. groupTasks). */
 export async function createTasks({ title, description, assignees, due_at, priority, created_by }) {
+  const batch_id = assignees.length > 1 ? crypto.randomUUID() : null;
   const rows = assignees.map((assignee) => ({
     title: title.trim(),
     description: (description || "").trim(),
@@ -17,8 +20,30 @@ export async function createTasks({ title, description, assignees, due_at, prior
     created_by,
     priority: !!priority,
     due_at: due_at || null,
+    batch_id,
   }));
   const { error } = await supabase.from("tasks").insert(rows);
+  if (error) throw error;
+}
+
+/* згрупувати рядки задач по batch_id (задачі без пари лишаються окремими групами з 1 елементом) */
+export function groupTasks(tasks) {
+  const groups = [];
+  const byBatch = {};
+  tasks.forEach((t) => {
+    if (t.batch_id) {
+      let g = byBatch[t.batch_id];
+      if (!g) { g = { batchId: t.batch_id, items: [] }; byBatch[t.batch_id] = g; groups.push(g); }
+      g.items.push(t);
+    } else {
+      groups.push({ batchId: null, items: [t] });
+    }
+  });
+  return groups;
+}
+
+export async function deleteTaskBatch(ids) {
+  const { error } = await supabase.from("tasks").delete().in("id", ids);
   if (error) throw error;
 }
 
