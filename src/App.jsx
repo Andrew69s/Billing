@@ -5805,6 +5805,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
 }
 
 function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, lockedFor }) {
+  const [viewField, setViewField] = useState("plan"); // яку з двох незалежних таблиць показуємо — перемикач вгорі
   const today = todayISO();
   const canEditAny = salons.some((s) => canEditSalon(s.key));
   const shiftMap = useMemo(() => {
@@ -5821,17 +5822,13 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
   const tableProps = { ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today };
 
   return (
-    <div className="shift-grid-wrap shift-grid-dual">
-      {canEditAny && (
-        <p className="hint shift-hint-top">
-          Клік по клітинці — вказати години, вихідний чи відсутність. Рядок «+ заміна» знизу блоку магазину —
-          пошуком додати співробітника з іншого магазину, який сьогодні тут.
-        </p>
-      )}
-      <h4 className="shift-table-h">План</h4>
-      <ShiftTable field="plan" {...tableProps} />
-      <h4 className="shift-table-h">Факт</h4>
-      <ShiftTable field="fact" {...tableProps} />
+    <div className="shift-grid-wrap">
+      <div className="shift-modebar">
+        <button className={viewField === "plan" ? "on" : ""} onClick={() => setViewField("plan")}>План</button>
+        <button className={viewField === "fact" ? "on" : ""} onClick={() => setViewField("fact")}>Факт</button>
+        {canEditAny && <span className="muted shift-modebar-hint">· клік по клітинці — вказати години; «+ заміна» знизу блоку — додати співробітника з іншого магазину пошуком</span>}
+      </div>
+      <ShiftTable field={viewField} {...tableProps} />
 
       <div className="shift-legend">
         <span><i className="sw sh-fill" />відпрацював (факт)</span>
@@ -10782,10 +10779,10 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .trn-modal input[type=date],.zsu-modal input[type=date],.zsu-modal input[type=text],.zsu-modal input:not([type]){background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:12.5px;color:var(--ink);width:100%;}
 /* без горизонтального скролу — таблиця фіксованого макета розтягується на всю ширину,
    стовпці днів рівномірно ділять залишок після колонки імені й підсумку (мал. екрани — медіа нижче) */
-.shift-grid-dual{display:flex;flex-direction:column;}
-.shift-table-h{font-family:'Fraunces',serif;font-size:15px;font-weight:600;color:var(--ink);margin:16px 0 6px;}
-.shift-table-h:first-of-type{margin-top:6px;}
-.shift-hint-top{margin-bottom:2px;}
+.shift-modebar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--on-dark-2);margin-bottom:10px;}
+.shift-modebar button{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:5px 13px;font-size:11.5px;font-family:inherit;cursor:pointer;}
+.shift-modebar button.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
+.shift-modebar-hint{font-size:11.5px;}
 .grid-scroll{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
 table.sched{table-layout:fixed;width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:10px;}
 table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
