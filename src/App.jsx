@@ -9879,12 +9879,14 @@ const CSS = `
   -webkit-font-smoothing:antialiased;
   text-rendering:optimizeLegibility;
 }
-.app-root *{box-sizing:border-box;}
-.app-root ::selection{background:rgba(190,138,46,.28);}
-/* базовий колір тексту полів — щоб у темній темі не лишався чорним */
-.app-root input,.app-root select,.app-root textarea{color:var(--ink);}
-.app-root input::placeholder,.app-root textarea::placeholder{color:var(--muted);opacity:.75;}
-.app-root select option{background:var(--surface);color:var(--ink);}
+/* БЕЗ префікса .app-root: модалки рендеряться через createPortal(...,document.body)
+   і фізично лежать ПОЗА .app-root у DOM, тож скопований на .app-root селектор
+   їх не бачив — поле показувало чорний текст на темному фоні (нечитабельно). */
+*{box-sizing:border-box;}
+::selection{background:rgba(190,138,46,.28);}
+input,select,textarea{color:var(--ink);}
+input::placeholder,textarea::placeholder{color:var(--muted);opacity:.75;}
+select option{background:var(--surface);color:var(--ink);}
 
 /* ---------- role select & pin ---------- */
 .role-select{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px;}
@@ -10184,15 +10186,16 @@ const CSS = `
 .fade-in{animation:fadeIn .38s var(--ease) both;}
 @keyframes detailIn{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
 @keyframes pulse{0%,100%{opacity:.5;}50%{opacity:1;}}
-.app-root *:focus-visible{outline:2px solid var(--gold-bright);outline-offset:2px;border-radius:3px;}
-.app-root button{transition:transform .12s var(--ease),box-shadow .12s var(--ease),background .15s var(--ease),border-color .15s var(--ease),color .15s var(--ease);}
-.app-root button:active:not(:disabled){transform:scale(.985);}
+/* без .app-root — інакше не діє в модалках-порталах (див. коментар вище) */
+*:focus-visible{outline:2px solid var(--gold-bright);outline-offset:2px;border-radius:3px;}
+button{transition:transform .12s var(--ease),box-shadow .12s var(--ease),background .15s var(--ease),border-color .15s var(--ease),color .15s var(--ease);}
+button:active:not(:disabled){transform:scale(.985);}
 .tm-tab,.inner-tabs button{min-height:38px;}
 .grade-btn,.store-remove,.shot-remove{min-width:28px;}
 
-.app-root ::-webkit-scrollbar{width:10px;height:10px;}
-.app-root ::-webkit-scrollbar-thumb{background:rgba(var(--sf),.14);border-radius:999px;border:2px solid transparent;background-clip:content-box;}
-.app-root ::-webkit-scrollbar-thumb:hover{background:rgba(var(--sf),.24);background-clip:content-box;}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-thumb{background:rgba(var(--sf),.14);border-radius:999px;border:2px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-thumb:hover{background:rgba(var(--sf),.24);background-clip:content-box;}
 
 @media (prefers-reduced-motion:reduce){
   .app-root *,.app-root *::before,.app-root *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;}
