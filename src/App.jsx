@@ -4096,11 +4096,21 @@ function TaskCard({ t, cabKey, onStatus, onDelete, autoOpen, cardRef }) {
   const [open, setOpen] = useState(!!autoOpen);
   const [doneMode, setDoneMode] = useState(false);
   const [comment, setComment] = useState("");
+  const [reminded, setReminded] = useState(false);
   const ds = dotState(t);
 
   const finish = async () => {
     await onStatus(t.id, "done", comment.trim() || undefined);
     setDoneMode(false); setComment("");
+  };
+
+  const remind = async () => {
+    try {
+      await notify({ recipient: t.assignee, kind: "task_new", title: "Нова задача", body: t.title, actor: cabKey, link: `tasks:${t.id}` });
+      pushToast({ title: "Нагадано", body: cabName(t.assignee) });
+      setReminded(true);
+      setTimeout(() => setReminded(false), 4000);
+    } catch (e) { pushToast({ title: "Не вдалося нагадати", body: String(e.message || e) }); }
   };
 
   return (
@@ -4144,6 +4154,11 @@ function TaskCard({ t, cabKey, onStatus, onDelete, autoOpen, cardRef }) {
               )}
               {(owner || mine) && t.status === "done" && (
                 <button className="btn-secondary small" onClick={() => onStatus(t.id, "open")}>Повернути</button>
+              )}
+              {cabKey === ADMIN_KEY && !mine && t.status !== "done" && (
+                <button className="btn-secondary small" onClick={remind} disabled={reminded}>
+                  <Bell size={13} /> {reminded ? "Нагадано" : "Нагадати"}
+                </button>
               )}
               {owner && (
                 <button className="btn-danger small" onClick={() => { if (confirm("Видалити задачу?")) onDelete(t.id); }}>
