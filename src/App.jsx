@@ -5679,7 +5679,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
     } catch (e) { pushToast({ title: "Не вдалося додати заміну", body: shiftErr(e) }); }
   };
 
-  const cellInfo = (s, homeSalon, day) => {
+  const cellInfo = (s, homeSalon) => {
     if (!s) return { txt: "", cls: "" };
     if (s.state === "closed") return { txt: "", cls: "sh-closed", title: "Зачинено" };
     if (s.state === "off") return { txt: "", cls: "sh-off", title: "Вихідний" };
@@ -5688,12 +5688,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
       return { txt: "", cls: s.absence_reason === "vacation" ? "sh-absent sh-vac" : "sh-absent", title: label };
     }
     const hVal = field === "plan" ? s.plan_h : s.fact_h;
-    if (hVal == null) {
-      if (field === "fact" && s.plan_h != null && dayKey(ym, day) < today) {
-        return { txt: "", cls: "sh-gap", title: "Заплановано, факт не внесено" };
-      }
-      return { txt: "", cls: "" };
-    }
+    if (hVal == null) return { txt: "", cls: "" };
     const hTxt = Number(hVal) !== 1 ? String(hVal).replace(/\.0$/, "") : "";
     const subst = s.salon_key !== homeSalon;
     if (subst) {
@@ -5753,7 +5748,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
                         let s = shiftMap[`${e.id}:${wd}`];
                         if (isForeign && (!s || s.salon_key !== salon.key)) s = null; // тут показуємо лише дні, де він саме на заміні в ЦЬОМУ магазині
                         if (!s && !isForeign && closedDays[`${salon.key}:${wd}`]) s = { state: "closed" };
-                        const { txt, cls, title } = cellInfo(s, salon.key, d);
+                        const { txt, cls, title } = cellInfo(s, salon.key);
                         return (
                           <td key={d}
                             className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
@@ -5803,9 +5798,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
 }
 
 function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, lockedFor }) {
-  const [viewField, setViewField] = useState("plan"); // яку з двох незалежних таблиць показуємо — перемикач вгорі
   const today = todayISO();
-  const canEditAny = salons.some((s) => canEditSalon(s.key));
   const shiftMap = useMemo(() => {
     const m = {};
     shifts.forEach((s) => { m[`${s.employee_id}:${s.work_date}`] = s; });
@@ -5821,20 +5814,13 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
 
   return (
     <div className="shift-grid-wrap">
-      <div className="shift-modebar">
-        <button className={viewField === "plan" ? "on" : ""} onClick={() => setViewField("plan")}>План</button>
-        <button className={viewField === "fact" ? "on" : ""} onClick={() => setViewField("fact")}>Факт</button>
-        {canEditAny && <span className="muted shift-modebar-hint">· клік по клітинці — вказати години; «+ заміна» знизу блоку — додати співробітника з іншого магазину пошуком</span>}
-      </div>
-      <ShiftTable field={viewField} {...tableProps} />
+      <ShiftTable field="fact" {...tableProps} />
 
       <div className="shift-legend">
-        <span><i className="sw sh-fill" />відпрацював (факт)</span>
-        <span><i className="sw sh-fill-plan" />заплановано</span>
+        <span><i className="sw sh-fill" />відпрацював</span>
         <span><i className="sw sh-off" />вихідний</span>
         <span><i className="sw sh-vac" />відпустка</span>
         <span><i className="sw sh-subst" />заміна на іншому магазині</span>
-        <span><i className="sw sh-gap" />план є, факт не внесено</span>
         <span><i className="sw sh-closed" />зачинено</span>
         <span><i className="sw sh-absent" />інша відсутність</span>
       </div>
@@ -10777,10 +10763,6 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .trn-modal input[type=date],.zsu-modal input[type=date],.zsu-modal input[type=text],.zsu-modal input:not([type]){background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:12.5px;color:var(--ink);width:100%;}
 /* без горизонтального скролу — таблиця фіксованого макета розтягується на всю ширину,
    стовпці днів рівномірно ділять залишок після колонки імені й підсумку (мал. екрани — медіа нижче) */
-.shift-modebar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--on-dark-2);margin-bottom:10px;}
-.shift-modebar button{background:none;border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:5px 13px;font-size:11.5px;font-family:inherit;cursor:pointer;}
-.shift-modebar button.on{background:rgba(220,169,74,.16);color:var(--gold-bright);border-color:rgba(220,169,74,.4);}
-.shift-modebar-hint{font-size:11.5px;}
 .grid-scroll{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
 table.sched{table-layout:fixed;width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:10px;}
 table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
@@ -10799,7 +10781,6 @@ td.sh-vac{background:rgba(160,58,42,.34)!important;color:var(--negative-bright)!
 td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(--surface-sink) 3px,transparent 3px,transparent 6px);}
 td.sh-subst{background:rgba(78,108,151,.16);color:#4E6C97;font-weight:600;}
 td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);}
-td.sh-gap{background:transparent;box-shadow:inset 0 0 0 1.5px rgba(220,169,74,.6);}
 /* напівпрозора заливка станів на дуже вузьких клітинках зливається в суцільну пляму без видимої
    межі (base var(--line) занадто близький до кольору заливки) — форсуємо темний бордер */
 td.sh-vac,td.sh-absent,td.sh-off,td.sh-subst{border-left-color:rgba(0,0,0,.6)!important;border-right-color:rgba(0,0,0,.6)!important;}
@@ -10822,7 +10803,6 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .shift-legend .sw.sh-off{background:rgba(190,138,46,.24);}
 .shift-legend .sw.sh-vac{background:rgba(160,58,42,.34);}
 .shift-legend .sw.sh-absent{background:rgba(160,58,42,.12);}
-.shift-legend .sw.sh-gap{box-shadow:inset 0 0 0 1.5px rgba(220,169,74,.6);background:var(--surface);}
 .shift-menu{position:fixed;z-index:301;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 20px 50px -14px rgba(0,0,0,.5);padding:10px;width:200px;animation:fadeIn .14s ease both;}
 /* палітра — клік по клітинці спершу пропонує обрати КОЛІР (стан), як на паперовому графіку */
 .shift-swatches{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
