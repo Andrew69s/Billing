@@ -5545,9 +5545,11 @@ function ShiftCellMenu({ pos, salonOptions, field, current, onClose, onSet }) {
     <>
       <div className="dtf-backdrop" onClick={onClose} />
       <div className="shift-menu" style={{ top: pos.top, left: pos.left }}>
-        <div className="shift-menu-row">
-          <button className="shift-menu-work" onClick={() => onSet({ type: "worked" })}>✓ На зміні</button>
-          <button onClick={() => onSet({ type: "off" })}>Вихідний</button>
+        <div className="shift-swatches">
+          <button className="sw-btn sw-black" onClick={() => onSet({ type: "worked" })}><i className="sw-ic sw-ic-black" />На зміні</button>
+          <button className="sw-btn sw-amber" onClick={() => onSet({ type: "off" })}><i className="sw-ic sw-ic-amber" />Вихідний</button>
+          <button className="sw-btn sw-red" onClick={() => onSet({ type: "absent" })}><i className="sw-ic sw-ic-red" />Відсутній</button>
+          <button className="sw-btn sw-clear" onClick={() => onSet({ type: "clear" })}><i className="sw-ic sw-ic-clear" />Прибрати</button>
         </div>
         <div className="shift-menu-row shift-menu-hours">
           <input
@@ -5557,13 +5559,9 @@ function ShiftCellMenu({ pos, salonOptions, field, current, onClose, onSet }) {
           />
           <button disabled={hrs === ""} onClick={submitHours}>Вказати години</button>
         </div>
-        <div className="shift-menu-row">
-          <button onClick={() => onSet({ type: "absent" })}>Відсутній</button>
-          <button onClick={() => onSet({ type: "clear" })}>Прибрати</button>
-        </div>
         {salonOptions.length > 0 && (
           <div className="shift-menu-row shift-menu-subst">
-            <span>Заміна:</span>
+            <i className="sw-ic sw-ic-blue" /><span>Заміна:</span>
             <select defaultValue="" onChange={(e) => { if (e.target.value) onSet({ type: "subst", salon: e.target.value, hours: hrs !== "" ? Number(hrs) : undefined }); }}>
               <option value="" disabled>магазин</option>
               {salonOptions.map((s) => <option key={s.key} value={s.key}>{salonShortName(s)}</option>)}
@@ -5747,8 +5745,8 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
                   return (
                     <tr key={e.id} className={isForeign ? "subst-row" : ""}>
                       <td className="rh">
-                        <span className="nm">{e.full_name}</span><br />
-                        <span className="rl">{isForeign ? `заміна · ${empRoleShort[e.role]}` : empRoleShort[e.role]}</span>
+                        <span className="nm">{e.full_name}</span>
+                        {isForeign && <><br /><span className="rl">заміна</span></>}
                       </td>
                       {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => {
                         const wd = dayKey(ym, d);
@@ -10825,8 +10823,17 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .shift-legend .sw.sh-vac{background:rgba(160,58,42,.34);}
 .shift-legend .sw.sh-absent{background:rgba(160,58,42,.12);}
 .shift-legend .sw.sh-gap{box-shadow:inset 0 0 0 1.5px rgba(220,169,74,.6);background:var(--surface);}
-.shift-menu-work{background:var(--pos-soft,rgba(63,107,74,.2))!important;color:var(--positive)!important;font-weight:600;}
 .shift-menu{position:fixed;z-index:301;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 20px 50px -14px rgba(0,0,0,.5);padding:10px;width:200px;animation:fadeIn .14s ease both;}
+/* палітра — клік по клітинці спершу пропонує обрати КОЛІР (стан), як на паперовому графіку */
+.shift-swatches{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+.sw-btn{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);font-family:inherit;font-size:12px;color:var(--ink-soft);cursor:pointer;text-align:left;}
+.sw-btn:hover{background:rgba(190,138,46,.14);color:var(--ink);}
+.sw-ic{width:14px;height:14px;border-radius:4px;flex-shrink:0;border:1px solid var(--line-strong);}
+.sw-ic-black{background:#0a0a0a;}
+.sw-ic-amber{background:rgba(190,138,46,.55);}
+.sw-ic-red{background:rgba(160,58,42,.75);}
+.sw-ic-blue{background:#4E6C97;}
+.sw-ic-clear{background:transparent;background-image:linear-gradient(45deg,transparent 45%,var(--negative) 45%,var(--negative) 55%,transparent 55%);}
 .shift-menu-row{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;align-items:center;}
 .shift-menu-row button{flex:1;min-width:38px;padding:6px 4px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);font-family:inherit;font-size:11.5px;color:var(--ink-soft);cursor:pointer;}
 .shift-menu-row button:hover{background:rgba(190,138,46,.14);}
