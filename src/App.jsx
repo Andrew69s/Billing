@@ -5437,6 +5437,10 @@ function useShiftMonth(ym) {
 const shiftErr = (e) => {
   const m = String(e?.message || e || "");
   if (m.includes("schedule_locked")) return "Коригування графіка заблоковано адміністратором. Зверніться до Шаха, щоб розблокував.";
+  // технічні помилки бази (constraint/relation/column) — не показуємо сирий SQL користувачу
+  if (/violates .* constraint|relation ".*" (does not exist|violates)|column ".*" of relation/.test(m)) {
+    return "Не вдалося зберегти через технічну помилку. Спробуйте ще раз — якщо повториться, повідомте Шаха.";
+  }
   return m || "Помилка";
 };
 
@@ -5846,7 +5850,7 @@ function DailyCheckIn({ salon, onDone }) {
       pushToast({ title: "Зміну розпочато", body: `${rows.filter((r) => r.state === "work").length} на зміні` });
       setStep("ontime");
       setBusy(false);
-    } catch (e) { alert(e.message || e); setBusy(false); }
+    } catch (e) { alert(shiftErr(e)); setBusy(false); }
   };
   // після кроку «вчасність відкриття» — питання про готівку, потім у програму
   const proceedToCash = async () => {
@@ -5884,7 +5888,7 @@ function DailyCheckIn({ salon, onDone }) {
         pushToast({ title: "Відмічено невчасне відкриття", body: `ТМ повідомлено` });
       }
       await proceedToCash();
-    } catch (e) { alert(e.message || e); setBusy(false); }
+    } catch (e) { alert(shiftErr(e)); setBusy(false); }
   };
   const answerCash = async (taken) => {
     setBusy(true);
@@ -5901,7 +5905,7 @@ function DailyCheckIn({ salon, onDone }) {
     try {
       await setStoreDay({ salon_key: salon.key, work_date: today, opened_by: salon.key, closed: true, closed_reason: closeReason.trim() });
       onDone();
-    } catch (e) { alert(e.message || e); setBusy(false); }
+    } catch (e) { alert(shiftErr(e)); setBusy(false); }
   };
 
   if (step === "ontime") {

@@ -29,10 +29,18 @@ export async function listShifts(ym) {
   return data || [];
 }
 
+/* колонки shifts NOT NULL зі значенням за замовч. — підставляємо завжди самі.
+   Причина:upsert() масивом (upsertShiftsBatch) шле один INSERT на всі рядки одразу,
+   і якщо в одному рядку батчу поле є, а в іншому — ні (напр. absence_reason лише
+   у «відсутніх»), PostgREST вирівнює стовпці і шле null там, де поля не було —
+   а не пропускає стовпець, щоб спрацював DEFAULT. NOT NULL без явного значення
+   валив увесь запис («null value in column ... violates not-null constraint»). */
+const SHIFT_ROW_DEFAULTS = { state: "work", absence_reason: "", is_senior: false, note: "", updated_by: "" };
+
 export async function upsertShift(row) {
   const { error } = await supabase
     .from("shifts")
-    .upsert({ ...row, updated_at: new Date().toISOString() }, { onConflict: "employee_id,work_date" });
+    .upsert({ ...SHIFT_ROW_DEFAULTS, ...row, updated_at: new Date().toISOString() }, { onConflict: "employee_id,work_date" });
   if (error) throw error;
 }
 
@@ -40,7 +48,7 @@ export async function upsertShiftsBatch(rows) {
   if (!rows.length) return;
   const { error } = await supabase
     .from("shifts")
-    .upsert(rows.map((r) => ({ ...r, updated_at: new Date().toISOString() })), { onConflict: "employee_id,work_date" });
+    .upsert(rows.map((r) => ({ ...SHIFT_ROW_DEFAULTS, ...r, updated_at: new Date().toISOString() })), { onConflict: "employee_id,work_date" });
   if (error) throw error;
 }
 
