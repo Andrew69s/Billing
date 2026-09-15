@@ -5548,7 +5548,7 @@ function ShiftCellMenu({ pos, field, current, onClose, onSet }) {
         <div className="shift-swatches">
           <button className="sw-btn sw-black" onClick={() => onSet({ type: "worked" })}><i className="sw-ic sw-ic-black" />На зміні</button>
           <button className="sw-btn sw-amber" onClick={() => onSet({ type: "off" })}><i className="sw-ic sw-ic-amber" />Вихідний</button>
-          <button className="sw-btn sw-red" onClick={() => onSet({ type: "absent" })}><i className="sw-ic sw-ic-red" />Відсутній</button>
+          <button className="sw-btn sw-red" onClick={() => onSet({ type: "absent" })}><i className="sw-ic sw-ic-red" />Відпустка</button>
           <button className="sw-btn sw-clear" onClick={() => onSet({ type: "clear" })}><i className="sw-ic sw-ic-clear" />Прибрати</button>
         </div>
         <div className="shift-menu-row shift-menu-hours">
@@ -10786,7 +10786,7 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .sw-ic{width:14px;height:14px;border-radius:4px;flex-shrink:0;border:1px solid var(--line-strong);}
 .sw-ic-black{background:#0a0a0a;}
 .sw-ic-amber{background:rgba(190,138,46,.55);}
-.sw-ic-red{background:rgba(160,58,42,.75);}
+.sw-ic-red{background:#D9433B;}
 .sw-ic-blue{background:#4E6C97;}
 .sw-ic-clear{background:transparent;background-image:linear-gradient(45deg,transparent 45%,var(--negative) 45%,var(--negative) 55%,transparent 55%);}
 .shift-menu-row{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;align-items:center;}
