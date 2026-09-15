@@ -77,7 +77,7 @@ import {
   listActs, actLines, writeoffLines, salonSupplyExpenseLines, actSalon, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
   shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
   markOrderedFromSupplier, extractNakladna,
-  subscribeSupply, listStocktakeLocks, stocktakeDone, subscribeStocktake,
+  subscribeSupply,
 } from "./lib/supply.js";
 import {
   listTrainings, createTraining, updateTraining, deleteTraining,
@@ -5537,7 +5537,7 @@ const shiftErr = (e) => {
   return m || "Помилка";
 };
 
-function ShiftCellMenu({ pos, salonOptions, field, current, onClose, onSet }) {
+function ShiftCellMenu({ pos, field, current, onClose, onSet }) {
   const curHours = current ? current[field === "plan" ? "plan_h" : "fact_h"] : null;
   const [hrs, setHrs] = useState(curHours != null && Number(curHours) !== 1 ? String(curHours) : "");
   const submitHours = () => { if (hrs !== "" && !Number.isNaN(Number(hrs))) onSet({ type: "worked", hours: Number(hrs) }); };
@@ -5559,16 +5559,6 @@ function ShiftCellMenu({ pos, salonOptions, field, current, onClose, onSet }) {
           />
           <button disabled={hrs === ""} onClick={submitHours}>Вказати години</button>
         </div>
-        {salonOptions.length > 0 && (
-          <div className="shift-menu-row shift-menu-subst">
-            <i className="sw-ic sw-ic-blue" /><span>Заміна:</span>
-            <select defaultValue="" onChange={(e) => { if (e.target.value) onSet({ type: "subst", salon: e.target.value, hours: hrs !== "" ? Number(hrs) : undefined }); }}>
-              <option value="" disabled>магазин</option>
-              {salonOptions.map((s) => <option key={s.key} value={s.key}>{salonShortName(s)}</option>)}
-            </select>
-          </div>
-        )}
-        <div className="shift-menu-hint">{field === "plan" ? "редагуємо план" : "редагуємо факт"}</div>
       </div>
     </>,
     document.body,
@@ -5784,7 +5774,6 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
         <ShiftCellMenu
           pos={menu.pos} field={field} onClose={() => setMenu(null)} onSet={applySet}
           current={shiftMap[`${menu.empId}:${dayKey(ym, menu.day)}`]}
-          salonOptions={SALONS.filter((s) => s.key !== menu.homeSalon)}
         />
       )}
       {substMenu && (
@@ -8112,23 +8101,14 @@ function SupplyModule({ cab }) {
   const { items, stock, reload } = useSupply();
   const [orderPrefill, setOrderPrefill] = useState(null);
   const [editOrder, setEditOrder] = useState(null);
-  const [locks, setLocks] = useState([]);
-  useEffect(() => {
-    const load = () => listStocktakeLocks().then(setLocks).catch(() => setLocks([]));
-    load();
-    return subscribeStocktake(load);
-  }, []);
 
   // Липинського списує госп.потреби прямо з Основного складу, без «Мого складу»
   const centralWriteoff = cab.key === "lviv-lypynskoho";
-  const myWarehouse = manageWh ? CENTRAL : salonKey;
-  const myStocktakeDone = myWarehouse ? stocktakeDone(locks, myWarehouse) : true;
   const subs = [];
   if (manageWh) subs.push(["central", "Основний склад"], ["incoming", "Замовлення салонів"], ["acts", "Складські акти"], ["items", "Довідник"]);
   if (centralWriteoff) subs.push(["writeoff", "Акт списання"]);
   else if (salonKey) subs.push(["mine", "Мій склад"], ["order", "Замовити"], ["myorders", "Мої замовлення"], ["writeoff", "Акт списання"], ["salonacts", "Рух складу"]);
   if (isTm) subs.push(["terr", "Склади території"], ["torders", "Замовлення території"]);
-  if (myWarehouse) subs.push(["stocktake", myStocktakeDone ? "Стартові залишки ✓" : "Стартові залишки"]);
   const [tab, setTab] = useState(subs[0]?.[0] || "central");
 
   if (items === null) return <div className="loading">Завантаження…</div>;
@@ -8152,18 +8132,13 @@ function SupplyModule({ cab }) {
       {tab === "salonacts" && <SupplyActsView warehouse={salonKey} items={items} />}
       {tab === "terr" && <SupplyTerritory tmKey={cab.tmKey || cab.key} items={items} stock={stock} />}
       {tab === "torders" && <SupplyOrders scope="territory" tmKey={cab.tmKey || cab.key} items={items} stock={stock} onReload={reload} onEditDraft={() => {}} />}
-      {tab === "stocktake" && myWarehouse && (
-        <SupplyStocktake
-          warehouse={myWarehouse} items={items} cabKey={cab.key}
-          locked={myStocktakeDone} doneInfo={locks.find((l) => l.warehouse === myWarehouse)}
-          onReload={() => { reload(); listStocktakeLocks().then(setLocks); }}
-        />
-      )}
     </div>
   );
 }
 
-/* Одноразове внесення стартових залишків складу. Після збереження —
+/* Одноразове внесення стартових залишків складу — усі 8 складів це вже зробили
+   (вересень 2026), вкладку прибрано з навігації. Компонент лишив на випадок,
+   якщо з'явиться новий склад і знадобиться знову. Після збереження —
    назавжди замкнено (сервер не пропустить ще один adjust не від адміна);
    далі рух товару лише через прихід/списання. */
 function SupplyStocktake({ warehouse, items, cabKey, locked, doneInfo, onReload }) {
