@@ -4223,8 +4223,11 @@ function TaskGroupCard({ group, cabKey, onDeleteBatch, autoOpen, cardRef }) {
           <div className="task-group-list">
             {items.map((it) => (
               <div key={it.id} className={`task-group-row ${it.status === "done" ? "tg-done" : "tg-open"} ${it.assignee === cabKey && it.status !== "done" ? "tg-mine" : ""}`}>
-                <span className="tg-name">{cabName(it.assignee)}</span>
-                <span className="tg-status">{it.status === "done" ? "Виконано ✓" : it.status === "in_progress" ? "В роботі" : "Не виконано"}</span>
+                <div className="tg-row-main">
+                  <span className="tg-name">{cabName(it.assignee)}</span>
+                  <span className="tg-status">{it.status === "done" ? "Виконано ✓" : it.status === "in_progress" ? "В роботі" : "Не виконано"}</span>
+                </div>
+                {it.comment && <p className="tg-comment">💬 {it.comment}</p>}
               </div>
             ))}
           </div>
@@ -10627,9 +10630,11 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 /* задача одразу кільком отримувачам — одна картка замість N однакових */
 .task-group-progress{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:var(--muted);background:var(--surface-alt);border-radius:999px;padding:2px 9px;flex-shrink:0;}
 .task-group-list{display:flex;flex-direction:column;gap:4px;margin-top:10px;}
-.task-group-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px;border-radius:8px;font-size:12.5px;background:var(--surface-alt);}
+.task-group-row{padding:6px 10px;border-radius:8px;font-size:12.5px;background:var(--surface-alt);}
+.tg-row-main{display:flex;align-items:center;justify-content:space-between;gap:10px;}
 .task-group-row .tg-name{font-weight:600;color:var(--ink);}
 .task-group-row .tg-status{font-size:11px;font-family:'IBM Plex Mono',monospace;}
+.tg-comment{margin:5px 0 0;font-size:12px;color:var(--ink-soft);background:rgba(190,138,46,.07);border-radius:6px;padding:6px 9px;}
 .task-group-row.tg-done{background:rgba(63,107,74,.1);}
 .task-group-row.tg-done .tg-status{color:var(--positive);}
 .task-group-row.tg-open .tg-status{color:var(--negative);}
