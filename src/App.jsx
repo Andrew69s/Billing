@@ -2930,7 +2930,17 @@ const smStatusBadge = (st) => (
 
 function SalonReviewPanel({ tmKey, reviewer }) {
   const [ym, setYm] = useState(salaryYm());
-  const salons = useMemo(() => salonsOfTm(tmKey, ym), [tmKey, ym]);
+  const salons = useMemo(() => {
+    const mine = salonsOfTm(tmKey, ym);
+    if (tmKey !== ADMIN_KEY) return mine;
+    // ТМ, чий кабінет приховано (звільнився) — за старі місяці, коли магазин ще
+    // рахувався за ним, погоджувати вже нікому: адмін бере ці подання на себе.
+    const orphaned = SALONS.filter((s) => {
+      const owner = salonTmOn(s.key, ym);
+      return owner !== tmKey && HIDDEN_TM_KEYS.includes(owner);
+    });
+    return orphaned.length ? [...mine, ...orphaned] : mine;
+  }, [tmKey, ym]);
   const [employees, setEmployees] = useState(null);
   const [bySalon, setBySalon] = useState(null); // { salonKey: rows[] }
   const [openSalon, setOpenSalon] = useState(null);
