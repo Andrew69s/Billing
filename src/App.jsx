@@ -7267,7 +7267,7 @@ function ManagerCashOverview() {
           )}
         </div>
         <div className="cash-hero-terrs">
-          {TMS.map((t) => (
+          {TMS.filter((t) => salonsOfTm(t.key).length > 0).map((t) => (
             <div key={t.key}>
               <div className="n">{uah(subtotals[t.key])}</div>
               <div className="l">{tmTitle[t.key]}</div>
