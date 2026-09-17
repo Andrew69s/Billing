@@ -7990,7 +7990,8 @@ function SupplyWriteoff({ salonKey, warehouse, items, stock, onReload }) {
       await whWriteoff(wh, article, reason.trim(), good);
       pushToast({ title: "Акт списання створено", body: `${articleLabel(articles, article)} · ${suah(total)}` });
       setReason(""); setLines([{ item_id: "", qty: "" }]); load(); onReload();
-    } catch (e) { alert(e.message || e); setBusy(false); }
+    } catch (e) { alert(e.message || e); }
+    setBusy(false);
   };
 
   return (
