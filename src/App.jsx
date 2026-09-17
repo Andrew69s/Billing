@@ -3869,7 +3869,8 @@ function FeedbackItem({ r, onPreview, onReload }) {
       await resolveFeedback(r, comment);
       pushToast({ title: "Звернення опрацьовано", body: r.from_cabinet ? `Сповіщення надіслано: ${cabName(r.from_cabinet)}` : "" });
       onReload();
-    } catch (e) { alert(e.message || e); setBusy(false); }
+    } catch (e) { alert(e.message || e); }
+    setBusy(false);
   };
 
   return (
