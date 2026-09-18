@@ -32,12 +32,15 @@ export async function createEzSale({ salonKey, ym, nomenclature, article, orderN
   if (error) throw error;
 }
 
-export async function processEzSale(sale, { costPrice, extraCosts }, by) {
+export async function processEzSale(sale, { costPrice, costNp, costAcquiring, costVat }, by) {
   const cost = Number(costPrice) || 0;
-  const extra = Number(extraCosts) || 0;
+  const np = Number(costNp) || 0;
+  const acquiring = Number(costAcquiring) || 0;
+  const vat = Number(costVat) || 0;
+  const extra = np + acquiring + vat;
   const netProfit = Math.max(0, Number(sale.amount) - cost - extra);
   const { error } = await supabase.from("ez_sales").update({
-    cost_price: cost, extra_costs: extra, net_profit: netProfit,
+    cost_price: cost, cost_np: np, cost_acquiring: acquiring, cost_vat: vat, extra_costs: extra, net_profit: netProfit,
     status: "confirmed", processed_by: by || "", processed_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }).eq("id", sale.id);

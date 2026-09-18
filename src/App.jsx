@@ -8510,14 +8510,17 @@ const ezStatusBadge = (st) => (
 
 function EzProcessRow({ sale, cabKey, onDone }) {
   const [costPrice, setCostPrice] = useState("");
-  const [extraCosts, setExtraCosts] = useState("");
+  const [costNp, setCostNp] = useState("");
+  const [costAcquiring, setCostAcquiring] = useState("");
+  const [costVat, setCostVat] = useState("");
   const [busy, setBusy] = useState(false);
-  const netPreview = Math.max(0, Number(sale.amount) - (Number(costPrice) || 0) - (Number(extraCosts) || 0));
+  const extraTotal = (Number(costNp) || 0) + (Number(costAcquiring) || 0) + (Number(costVat) || 0);
+  const netPreview = Math.max(0, Number(sale.amount) - (Number(costPrice) || 0) - extraTotal);
 
   const process = async () => {
     setBusy(true);
     try {
-      await processEzSale(sale, { costPrice, extraCosts }, cabKey);
+      await processEzSale(sale, { costPrice, costNp, costAcquiring, costVat }, cabKey);
       // після підтвердження перераховуємо суму всіх підтверджених продажів ЕЗ цього
       // магазину за місяць — саме вона віднімається від обороту для категоризації
       const all = await listEzSales({ salonKey: sale.salon_key, ym: sale.ym });
@@ -8538,7 +8541,9 @@ function EzProcessRow({ sale, cabKey, onDone }) {
       </div>
       <div className="item-fields">
         <Field label="Вхідна ціна" suffix="грн" value={costPrice} onChange={setCostPrice} />
-        <Field label="Затрати" suffix="грн" value={extraCosts} onChange={setExtraCosts} />
+        <Field label="Доставка НП" suffix="грн" value={costNp} onChange={setCostNp} />
+        <Field label="Еквайринг" suffix="грн" value={costAcquiring} onChange={setCostAcquiring} />
+        <Field label="ПДВ" suffix="грн" value={costVat} onChange={setCostVat} />
       </div>
       <div className="ez-process-foot">
         <span>Прибуток: <b>{suah(netPreview)}</b></span>
