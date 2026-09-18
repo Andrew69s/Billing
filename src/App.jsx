@@ -52,6 +52,9 @@ import {
   getStoreDay, setStoreDay, listStoreDays, subscribeShifts, monthTally,
   listScheduleLocks, setScheduleLock, scheduleLockedFor, subscribeScheduleLocks, planFactGaps,
 } from "./lib/shifts.js";
+import { getSmPlan, listSmPlans, saveSmPlan, setPlanLock, subscribePlans, emptyPlan } from "./lib/plans.js";
+import { upsertTurnoverMonthFact, listTurnoverHistory, subscribeTurnoverHistory } from "./lib/turnover.js";
+import { EZ_PAYMENT_METHODS, listEzSales, createEzSale, processEzSale, deleteEzSale, subscribeEzSales } from "./lib/ez.js";
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
 } from "./lib/notifications.js";
@@ -277,6 +280,11 @@ async function loadSmData(salonKey, empId, ym) {
 }
 async function saveSmData(salonKey, empId, ym, data) {
   try { await window.storage.set(smKey(salonKey, empId, ym), JSON.stringify(data), true); } catch (e) { console.error(e); }
+  // фіксуємо реальний оборот в історію (для авто-категоризації) — лише коли це вже
+  // не чернетка: подано СМ або скориговано ТМ
+  if ((data.status === "submitted" || data.status === "corrected") && data.base?.monthFact) {
+    upsertTurnoverMonthFact(salonKey, ym, data.base.monthFact).catch(() => {});
+  }
 }
 async function listSmMonths(salonKey, empId) {
   try {
@@ -2292,9 +2300,9 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
     <div className="criteria-form">
       <BlockHeader n="1" title="Основна частина за виконання плану" />
       <SmItem num="1.1" title="Категорія та база" amount={showAmounts ? calc.baseAdjusted : undefined} screenshotKey="base" {...shot}>
-        <Field readOnly={readOnly} label="Середній ТО за 3 міс" suffix="грн" value={data.base.avg3To} onChange={(v) => update(["base", "avg3To"], v)} />
+        <Field readOnly label="Середній ТО за 3 міс (авто, без ЕЗ)" suffix="грн" value={Math.round(calc?.avg3 || 0)} onChange={() => {}} />
         <SelectField readOnly={readOnly} label="Категорія салону" value={data.base.categoryOverride} onChange={(v) => update(["base", "categoryOverride"], v)} options={catOptions} />
-        <Field readOnly={readOnly} label="План ТО на місяць" suffix="грн" value={data.bonus.monthlyToPlan} onChange={(v) => update(["bonus", "monthlyToPlan"], v)} />
+        <Field readOnly label="План ТО на місяць (від ТМ)" suffix="грн" value={calc?.monthPlan || 0} onChange={() => {}} />
         <Field readOnly={readOnly} label="Факт ТО за місяць" suffix="грн" value={data.base.monthFact} onChange={(v) => update(["base", "monthFact"], v)} />
         <Field readOnly={readOnly} label="Чеки Віктора (фіктивні)" suffix="грн" value={data.base.viktorChecks} onChange={(v) => update(["base", "viktorChecks"], v)} />
         <Field readOnly={readOnly} label="Низькорентабельні чеки" suffix="грн" value={data.base.lowMarginChecks} onChange={(v) => update(["base", "lowMarginChecks"], v)} />
@@ -2303,10 +2311,15 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
           <div className="ez-sub">
             <span>Факт скоригований: {fmt(calc.factAdjusted)} (мінус Віктор, мінус 50% низькорентабельних)</span>
             <span>% виконання плану ТО: {calc.planPercent.toFixed(1)}%</span>
-            <span>Категорія: {calc.category}</span>
+            <span>
+              Категорія: {calc.category}
+              {!calc.hasHistory && " (за самовведеним «Середній ТО» — історії ще нема)"}
+              {calc.hasHistory && calc.avg3Months < 3 && ` (середнє за ${calc.avg3Months} міс. — повна історія за 3 міс. накопичиться згодом)`}
+            </span>
             <span>Брекет: {planBracketLabel(calc.bracket)}</span>
             <span>База: {fmt(calc.baseRaw)}</span>
             <span>Відпрац. коеф: {calc.factor.toFixed(2)} (норма вихідних {area === "місто" ? 10 : 9})</span>
+            {!calc.hasPlan && <span>План на цей місяць ще не внесено ТМ — використано власне значення.</span>}
           </div>
         )}
       </SmItem>
@@ -2328,7 +2341,7 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
 
       <BlockHeader n="3" title="Бонусна частина" />
       <SmItem num="3.1" title="Обіг з дзвінків" amount={showAmounts ? calc.bonus.calls : undefined} screenshotKey="calls" {...shot}>
-        <Field readOnly={readOnly} label="Загальний план ТО на місяць" suffix="грн" value={data.bonus.monthlyToPlan} onChange={(v) => update(["bonus", "monthlyToPlan"], v)} />
+        <Field readOnly label="Загальний план ТО на місяць (від ТМ)" suffix="грн" value={calc?.monthPlan || 0} onChange={() => {}} />
         <Field readOnly={readOnly} label="Факт. оборот з дзвінків" suffix="грн" value={data.bonus.callsRevenue} onChange={(v) => update(["bonus", "callsRevenue"], v)} />
         {showAmounts && (
           <div className="ez-sub">
@@ -2343,17 +2356,17 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
       </SmItem>
       <SmItem num="3.3" title="Середній чек" amount={showAmounts ? calc.bonus.avgCheck : undefined} screenshotKey="sc" {...shot}>
         <Field readOnly={readOnly} label="Факт. середній чек" suffix="грн" value={data.bonus.avgCheckFact} onChange={(v) => update(["bonus", "avgCheckFact"], v)} />
-        <Field readOnly={readOnly} label="Поріг 1 → 700 грн" value={data.bonus.scN1} onChange={(v) => update(["bonus", "scN1"], v)} />
-        <Field readOnly={readOnly} label="Поріг 2 → 1 500 грн" value={data.bonus.scN2} onChange={(v) => update(["bonus", "scN2"], v)} />
-        <Field readOnly={readOnly} label="Поріг 3 → 2 000 грн" value={data.bonus.scN3} onChange={(v) => update(["bonus", "scN3"], v)} />
-        <div className="hint">Мінімальний середній чек на місяць надає ТМ.</div>
+        <Field readOnly label="Поріг 1 → 700 грн" value={calc?.planThresholds?.scN1 || 0} onChange={() => {}} />
+        <Field readOnly label="Поріг 2 → 1 500 грн" value={calc?.planThresholds?.scN2 || 0} onChange={() => {}} />
+        <Field readOnly label="Поріг 3 → 2 000 грн" value={calc?.planThresholds?.scN3 || 0} onChange={() => {}} />
+        <div className="hint">Пороги на місяць задає ТМ.</div>
       </SmItem>
       <SmItem num="3.4" title="Довжина чека" amount={showAmounts ? calc.bonus.checkLen : undefined} screenshotKey="cl" {...shot}>
         <Field readOnly={readOnly} label="Факт. довжина чека" value={data.bonus.checkLenFact} onChange={(v) => update(["bonus", "checkLenFact"], v)} />
-        <Field readOnly={readOnly} label="Поріг 1 → 700 грн" value={data.bonus.clN1} onChange={(v) => update(["bonus", "clN1"], v)} />
-        <Field readOnly={readOnly} label="Поріг 2 → 1 500 грн" value={data.bonus.clN2} onChange={(v) => update(["bonus", "clN2"], v)} />
-        <Field readOnly={readOnly} label="Поріг 3 → 2 000 грн" value={data.bonus.clN3} onChange={(v) => update(["bonus", "clN3"], v)} />
-        <div className="hint">Мінімальну довжину чека на місяць надає ТМ.</div>
+        <Field readOnly label="Поріг 1 → 700 грн" value={calc?.planThresholds?.clN1 || 0} onChange={() => {}} />
+        <Field readOnly label="Поріг 2 → 1 500 грн" value={calc?.planThresholds?.clN2 || 0} onChange={() => {}} />
+        <Field readOnly label="Поріг 3 → 2 000 грн" value={calc?.planThresholds?.clN3 || 0} onChange={() => {}} />
+        <div className="hint">Пороги на місяць задає ТМ.</div>
       </SmItem>
       <SmItem num="3.5" title="Атестація (курси)" amount={showAmounts ? calc.bonus.courses : undefined} screenshotKey="courses" {...shot}>
         <CheckField readOnly={readOnly} label="≥ 95% середньо-місячних курсів, без перепризначення" checked={data.bonus.coursesOk} onChange={(v) => update(["bonus", "coursesOk"], v)} />
@@ -3022,6 +3035,118 @@ function SalonReviewPanel({ tmKey, reviewer }) {
 }
 
 /* =========================================================
+   ТМ · ПЛАН ПОКАЗНИКІВ (оборот + пороги чека) по кожному магазину
+========================================================= */
+function SmPlanForm({ salon, ym, tmKey, onBack }) {
+  const [plan, setPlan] = useState(emptyPlan());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    getSmPlan(salon.key, ym).then((p) => { if (active) { setPlan(p); setLoading(false); } });
+    return () => { active = false; };
+  }, [salon.key, ym]);
+
+  const upd = (k) => (v) => setPlan((p) => ({ ...p, [k]: v }));
+  const save = async () => {
+    setSaving(true);
+    try {
+      await saveSmPlan(salon.key, ym, plan, tmKey);
+      pushToast({ title: "План збережено", body: `${salonLabel(salon)} · ${monthLabel(ym)}` });
+      onBack();
+    } catch (e) {
+      pushToast({ title: "Не вдалося зберегти", body: e.message === "plan_locked" ? "Місяць заблоковано адміном" : String(e.message || e) });
+    }
+    setSaving(false);
+  };
+
+  if (loading) return <div className="loading">Завантаження…</div>;
+  return (
+    <div className="embedded">
+      <div className="detail-head">
+        <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> До списку магазинів</button>
+        <span className="detail-title">{salonLabel(salon)} <span className="detail-sub">· {monthLabel(ym)}</span></span>
+      </div>
+      {plan.locked && (
+        <p className="hint" style={{ color: "var(--negative-bright)" }}>
+          Місяць заблоковано адміном — редагування недоступне. Щоб змінити, попросіть Шаха розблокувати в Адміністрування → «Замок планів».
+        </p>
+      )}
+      <div className="criteria-form">
+        <div className="item-fields">
+          <Field label="План обороту на місяць" suffix="грн" value={plan.turnover_plan} onChange={upd("turnover_plan")} readOnly={plan.locked} />
+        </div>
+        <div className="hint" style={{ margin: "14px 0 6px" }}>Пороги середнього чека — три градації бонусу (700 / 1 500 / 2 000 грн)</div>
+        <div className="item-fields">
+          <Field label="Поріг 1 → 700 грн" value={plan.avg_check_t1} onChange={upd("avg_check_t1")} readOnly={plan.locked} />
+          <Field label="Поріг 2 → 1 500 грн" value={plan.avg_check_t2} onChange={upd("avg_check_t2")} readOnly={plan.locked} />
+          <Field label="Поріг 3 → 2 000 грн" value={plan.avg_check_t3} onChange={upd("avg_check_t3")} readOnly={plan.locked} />
+        </div>
+        <div className="hint" style={{ margin: "14px 0 6px" }}>Пороги довжини чека — три градації бонусу (700 / 1 500 / 2 000 грн)</div>
+        <div className="item-fields">
+          <Field label="Поріг 1 → 700 грн" value={plan.check_len_t1} onChange={upd("check_len_t1")} readOnly={plan.locked} />
+          <Field label="Поріг 2 → 1 500 грн" value={plan.check_len_t2} onChange={upd("check_len_t2")} readOnly={plan.locked} />
+          <Field label="Поріг 3 → 2 000 грн" value={plan.check_len_t3} onChange={upd("check_len_t3")} readOnly={plan.locked} />
+        </div>
+        {!plan.locked && (
+          <button className="btn-primary" style={{ marginTop: 16 }} onClick={save} disabled={saving}>
+            {saving ? "Зберігаю…" : "Зберегти план"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SmPlanPanel({ tmKey }) {
+  const [ym, setYm] = useState(salaryYm());
+  const salons = useMemo(() => salonsOfTm(tmKey, ym), [tmKey, ym]);
+  const [plans, setPlans] = useState(null);
+  const [openSalon, setOpenSalon] = useState(null);
+  const months = useMemo(() => recentMonths(12), []);
+
+  const load = React.useCallback(() => {
+    listSmPlans(salons.map((s) => s.key), ym).then(setPlans).catch(() => setPlans({}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [salons, ym]);
+  useEffect(() => { setPlans(null); load(); }, [load]);
+  useEffect(() => subscribePlans(load), [load]);
+
+  if (openSalon) {
+    return <SmPlanForm salon={salonByKey(openSalon)} ym={ym} tmKey={tmKey} onBack={() => setOpenSalon(null)} />;
+  }
+  if (plans === null) return <div className="loading">Завантаження…</div>;
+
+  return (
+    <div className="embedded">
+      <div className="month-row">
+        <select value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+      </div>
+      <p className="hint" style={{ marginBottom: 12 }}>
+        План обороту й пороги чека на місяць — СМ бачить їх у своїй формі ЗП, але змінити не може.
+      </p>
+      <div className="salon-list">
+        {salons.map((s) => {
+          const p = plans[s.key];
+          return (
+            <button className="salon-row" key={s.key} onClick={() => setOpenSalon(s.key)}>
+              <span className="salon-row-main">
+                <span className="salon-row-name">{salonLabel(s)}</span>
+                <span className="salon-row-sub">{p ? `план ${fmt(p.turnover_plan)}` : "план ще не внесено"}{p?.locked ? " · заблоковано" : ""}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
    ЗВЕДЕННЯ ЗП (керівник + бухгалтер)
 ========================================================= */
 async function tmGrandTotal(tmKey, ym) {
@@ -3652,6 +3777,60 @@ function AdminShiftLocks() {
   );
 }
 
+function AdminPlanLocks() {
+  const [ym, setYm] = useState(salaryYm());
+  const [plans, setPlans] = useState(null);
+  const [busy, setBusy] = useState("");
+  const months = useMemo(() => recentMonths(12), []);
+  const load = React.useCallback(() => {
+    listSmPlans(SALONS.map((s) => s.key), ym).then(setPlans).catch(() => setPlans({}));
+  }, [ym]);
+  useEffect(() => { setPlans(null); load(); }, [load]);
+  useEffect(() => subscribePlans(load), [load]);
+  if (plans === null) return <div className="loading">Завантаження…</div>;
+
+  const toggle = async (s, next) => {
+    setBusy(s.key);
+    try {
+      await setPlanLock(s.key, ym, next, ADMIN_KEY);
+      pushToast({ title: next ? "План заблоковано" : "План розблоковано", body: `${s.city}, ${shortAddr(s.addr)} · ${monthLabel(ym)}` });
+      load();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy("");
+  };
+
+  return (
+    <div className="admin-panel">
+      <h3>Замок планів</h3>
+      <p className="hint">
+        Поки план на місяць не заблоковано, ТМ може його редагувати. Після замка план назавжди
+        фіксується для чесної аналітики план/факт — навіть адмін більше не змінить його випадково.
+      </p>
+      <div className="month-row" style={{ margin: "10px 0" }}>
+        <select value={ym} onChange={(e) => setYm(e.target.value)}>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+      </div>
+      <div className="shlock-list">
+        {SALONS.map((s) => {
+          const p = plans[s.key];
+          const lk = !!p?.locked;
+          return (
+            <div className={`shlock-row ${lk ? "on" : ""}`} key={s.key}>
+              <span className="shlock-nm">{s.city}, {shortAddr(s.addr)}</span>
+              <span className="shlock-state ok">{p ? `план ${fmt(p.turnover_plan)}` : "план не внесено"}</span>
+              <button className={lk ? "btn-secondary small" : "btn-primary small"} disabled={busy === s.key || !p}
+                onClick={() => toggle(s, !lk)}>
+                {lk ? "Розблокувати" : "Заблокувати"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AdminSupplyArticles() {
   const [all, setAll] = useState(null);   // повний список (builtin + custom)
   const [label, setLabel] = useState("");
@@ -3963,6 +4142,7 @@ function AdminPanel() {
     ["fop", "ФОП по СМ"],
     ["modaccess", "Доступ до вкладок"],
     ["shiftlock", "Замок графіків"],
+    ["planlocks", "Замок планів"],
     ["articles", "Статті списань"],
     ["news", "Новини"],
     ["rights", "Права"],
@@ -3983,6 +4163,7 @@ function AdminPanel() {
       {tab === "fop" && <AdminFop />}
       {tab === "modaccess" && <AdminModuleAccess />}
       {tab === "shiftlock" && <AdminShiftLocks />}
+      {tab === "planlocks" && <AdminPlanLocks />}
       {tab === "articles" && <AdminSupplyArticles />}
       {tab === "news" && <AdminNews />}
       {tab === "rights" && <AdminRights />}
@@ -9724,6 +9905,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
     { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
     { key: "salons", label: "ЗП салонів", group: "Головне", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
+    { key: "plans", label: "План показників", group: "Головне", icon: <TrendingUp size={16} />, render: () => <SmPlanPanel tmKey={tmKey} /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },

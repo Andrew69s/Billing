@@ -266,16 +266,21 @@ function calcRecord(r: any, teamSize = 1) {
   return { threshold, beaten, team, teamBonus, bonus: Math.round(teamBonus / team) };
 }
 function calcQuarterly(q: any) { if (!q.threeOfThree) return 0; return Math.round((q.last3SalarySum || 0) * 0.1); }
-function calcSmAll(data: any, ym: string, area: string, teamSize = 1) {
+function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: any, avg3FromHistory?: number | null, ezProfitSum = 0) {
   const daysInMonth = daysInMonthOf(ym);
-  const avg3 = data.base.avg3To || 0;
+  // «Середній ТО за 3 міс» — авто з реальної історії обороту (без ЕЗ), якщо вже
+  // накопичилось достатньо місяців; поки історії нема (старі місяці/новий магазин) —
+  // fallback на самовведене значення, щоб не зламати вже подані розрахунки.
+  const avg3 = avg3FromHistory != null ? avg3FromHistory : (data.base.avg3To || 0);
   const autoCategory = categoryOf(avg3);
   const category = data.base.categoryOverride || autoCategory;
   // % виконання плану ТО — як у ТМ (план/факт), а не ручне поле:
   // план ТО на місяць — те саме число, що СМ вносить для бонусу за дзвінки (3.1);
   // факт коригується: чеки Віктора (фіктивні) мінусуються повністю,
   // низькорентабельні чеки рахуються в оборот лише на 50%.
-  const monthPlan = data.bonus?.monthlyToPlan || 0;
+  // План ТО і пороги чека — тепер задає ТМ (sm_plans), а не сам СМ; якщо плану на
+  // місяць ще не внесено — fallback на те, що СМ вписав у форму (старі місяці).
+  const monthPlan = (planRow?.turnover_plan) || data.bonus?.monthlyToPlan || 0;
   const monthFact = data.base.monthFact || 0;
   const viktorChecks = data.base.viktorChecks || 0;
   const lowMarginChecks = data.base.lowMarginChecks || 0;
@@ -292,7 +297,18 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1) {
   const baseAdjusted = Math.round(baseRaw * factor);
   const dailyRate = Math.round(baseRaw / Math.max(1, daysInMonth - normDaysOff(area)));
   const mgr = calcManagerBlock(data.manager, baseRaw);
-  const bonus = calcBonusBlock(data.bonus, dailyRate, teamSize);
+  // Пороги середнього чека/довжини чека — теж із плану ТМ, якщо він уже внесений
+  // (fallback на самовведені СМ значення для місяців до впровадження плану).
+  const effectiveBonusInput = planRow ? {
+    ...data.bonus,
+    scN1: planRow.avg_check_t1, scN2: planRow.avg_check_t2, scN3: planRow.avg_check_t3,
+    clN1: planRow.check_len_t1, clN2: planRow.check_len_t2, clN3: planRow.check_len_t3,
+  } : data.bonus;
+  const bonus = calcBonusBlock(effectiveBonusInput, dailyRate, teamSize);
+  // 20% чистого прибутку по підтверджених ТМ продажах ЕЗ цього магазину за місяць — на команду
+  const ezTeam = Math.round(((ezProfitSum || 0) * 0.20) / Math.max(1, teamSize || 1));
+  bonus.ezTeam = ezTeam;
+  bonus.subtotal += ezTeam;
   const ppi = calcPpi(data.ppi, teamSize);
   const record = calcRecord(data.record, teamSize);
   const quarterly = calcQuarterly(data.quarterly);
@@ -308,7 +324,9 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1) {
   const total = grossTotal - deducted;
   return {
     daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate,
-    monthPlan, monthFact, viktorChecks, lowMarginChecks, factAdjusted, planPercent,
+    monthPlan, monthFact, viktorChecks, lowMarginChecks, factAdjusted, planPercent, avg3,
+    hasPlan: !!planRow, hasHistory: avg3FromHistory != null,
+    planThresholds: { scN1: effectiveBonusInput.scN1, scN2: effectiveBonusInput.scN2, scN3: effectiveBonusInput.scN3, clN1: effectiveBonusInput.clN1, clN2: effectiveBonusInput.clN2, clN3: effectiveBonusInput.clN3 },
     mgr, bonus, ppi, record, quarterly, bonusExtra, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total,
   };
 }
@@ -384,9 +402,53 @@ Deno.serve(async (req) => {
         .select("salon_key").eq("status", "active").in("salon_key", salonKeys);
       for (const e of emps || []) teamBySalon[e.salon_key] = (teamBySalon[e.salon_key] || 0) + 1;
     }
+
+    // план ТМ (оборот + пороги чека), підтверджені продажі ЕЗ, історія обороту — для авто-категоризації
+    const planByPair: Record<string, any> = {};
+    const ezByPair: Record<string, number> = {};
+    const historyBySalon: Record<string, Record<string, number>> = {};
+    if (salonKeys.length) {
+      const { data: plans } = await svc.from("sm_plans").select("*").in("salon_key", salonKeys);
+      for (const p of plans || []) planByPair[`${p.salon_key}|${p.ym}`] = p;
+
+      const { data: ez } = await svc.from("ez_sales")
+        .select("salon_key, ym, net_profit").eq("status", "confirmed").in("salon_key", salonKeys);
+      for (const e of ez || []) {
+        const key = `${e.salon_key}|${e.ym}`;
+        ezByPair[key] = (ezByPair[key] || 0) + (Number(e.net_profit) || 0);
+      }
+
+      const { data: hist } = await svc.from("store_turnover_history")
+        .select("salon_key, ym, turnover_ex_ez").in("salon_key", salonKeys);
+      for (const h of hist || []) {
+        if (!historyBySalon[h.salon_key]) historyBySalon[h.salon_key] = {};
+        historyBySalon[h.salon_key][h.ym] = Number(h.turnover_ex_ez) || 0;
+      }
+    }
+    const prevYm = (ym: string) => {
+      const [y, m] = ym.split("-").map(Number);
+      const d = new Date(y, m - 2, 1);
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+    };
+    // середній оборот (без ЕЗ) — за останні 3 місяці, або за скільки їх уже є
+    // (1-2), щоб на перших місяцях після впровадження салон не провалювався в
+    // найнижчу категорію через відсутність повної історії. null — лише коли
+    // історії нема геть жодної (тоді calcSmAll бере самовведене base.avg3To).
+    const avg3For = (salonKey: string, ym: string): { avg: number | null; months: number } => {
+      const h = historyBySalon[salonKey];
+      if (!h) return { avg: null, months: 0 };
+      const y2 = prevYm(ym), y3 = prevYm(y2);
+      const vals = [ym, y2, y3].map((y) => h[y]).filter((v) => v != null);
+      if (!vals.length) return { avg: null, months: 0 };
+      return { avg: Math.round(vals.reduce((s, v) => s + v, 0) / vals.length), months: vals.length };
+    };
+
     const out = items.map((it: any) => {
       const area = SALONS[it.salonKey]?.area || "область";
-      return calcSmAll(it.data, it.ym, area, teamBySalon[it.salonKey] || 1);
+      const planRow = planByPair[`${it.salonKey}|${it.ym}`];
+      const { avg: avg3, months: avg3Months } = avg3For(it.salonKey, it.ym);
+      const ezSum = ezByPair[`${it.salonKey}|${it.ym}`] || 0;
+      return { ...calcSmAll(it.data, it.ym, area, teamBySalon[it.salonKey] || 1, planRow, avg3, ezSum), avg3Months };
     });
     return json(op === "sm" ? out[0] : out);
   }
