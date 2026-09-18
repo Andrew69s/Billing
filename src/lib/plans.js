@@ -16,6 +16,28 @@ export async function getSmPlan(salonKey, ym) {
   return data ? { ...emptyPlan(), ...data } : emptyPlan();
 }
 
+export async function listSmPlansForSalon(salonKey, months) {
+  const { data, error } = await supabase.from("sm_plans").select("*")
+    .eq("salon_key", salonKey).in("ym", months);
+  if (error) throw error;
+  const out = {};
+  for (const row of data || []) out[row.ym] = row;
+  return out;
+}
+
+export async function listSmPlansForSalons(salonKeys, months) {
+  if (!salonKeys.length) return {};
+  const { data, error } = await supabase.from("sm_plans").select("*")
+    .in("salon_key", salonKeys).in("ym", months);
+  if (error) throw error;
+  const out = {};
+  for (const row of data || []) {
+    if (!out[row.salon_key]) out[row.salon_key] = {};
+    out[row.salon_key][row.ym] = row;
+  }
+  return out;
+}
+
 export async function listSmPlans(salonKeys, ym) {
   if (!salonKeys.length) return {};
   const { data, error } = await supabase.from("sm_plans").select("*")

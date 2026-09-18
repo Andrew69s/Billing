@@ -23,6 +23,19 @@ export async function listTurnoverHistory(salonKey, months) {
   return data || [];
 }
 
+export async function listTurnoverHistoryForSalons(salonKeys, months) {
+  if (!salonKeys.length) return {};
+  const { data, error } = await supabase.from("store_turnover_history").select("*")
+    .in("salon_key", salonKeys).in("ym", months);
+  if (error) throw error;
+  const out = {};
+  for (const row of data || []) {
+    if (!out[row.salon_key]) out[row.salon_key] = {};
+    out[row.salon_key][row.ym] = row;
+  }
+  return out;
+}
+
 export function subscribeTurnoverHistory(onChange) {
   const ch = rtChannel("turnover-history-changes")
     .on("postgres_changes", { event: "*", schema: "public", table: "store_turnover_history" }, onChange)

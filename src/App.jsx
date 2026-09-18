@@ -52,8 +52,8 @@ import {
   getStoreDay, setStoreDay, listStoreDays, subscribeShifts, monthTally,
   listScheduleLocks, setScheduleLock, scheduleLockedFor, subscribeScheduleLocks, planFactGaps,
 } from "./lib/shifts.js";
-import { getSmPlan, listSmPlans, saveSmPlan, setPlanLock, subscribePlans, emptyPlan } from "./lib/plans.js";
-import { upsertTurnoverMonthFact, listTurnoverHistory, subscribeTurnoverHistory } from "./lib/turnover.js";
+import { getSmPlan, listSmPlans, listSmPlansForSalon, listSmPlansForSalons, saveSmPlan, setPlanLock, subscribePlans, emptyPlan } from "./lib/plans.js";
+import { upsertTurnoverMonthFact, listTurnoverHistory, listTurnoverHistoryForSalons, subscribeTurnoverHistory } from "./lib/turnover.js";
 import { EZ_PAYMENT_METHODS, listEzSales, createEzSale, processEzSale, deleteEzSale, subscribeEzSales } from "./lib/ez.js";
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
@@ -8597,6 +8597,99 @@ function EzSalesModule({ cab }) {
   );
 }
 
+/* ==================== АНАЛІТИКА: ПЛАН/ФАКТ ПО МІСЯЦЯХ ==================== */
+function AnalyticsPanel({ cab }) {
+  const isManagerLike = cab.type === "manager" || cab.key === ADMIN_KEY;
+  const scopeSalons = isManagerLike ? SALONS : salonsOfTm(cab.tmKey || cab.key);
+  const months = useMemo(() => recentMonths(12).slice().reverse(), []); // від найстарішого до найновішого — для графіка
+  const [salonKey, setSalonKey] = useState(scopeSalons[0]?.key);
+  const [chartData, setChartData] = useState(null);
+  const [ranking, setRanking] = useState(null);
+
+  useEffect(() => {
+    if (!salonKey) return;
+    let active = true;
+    setChartData(null);
+    Promise.all([listTurnoverHistory(salonKey, months), listSmPlansForSalon(salonKey, months)]).then(([hist, plans]) => {
+      if (!active) return;
+      const histByYm = Object.fromEntries(hist.map((h) => [h.ym, h]));
+      setChartData(months.map((ym) => ({
+        ym: monthLabel(ym).replace(" 20", " '"),
+        План: plans[ym]?.turnover_plan || null,
+        Факт: histByYm[ym]?.turnover_ex_ez ?? null,
+      })));
+    });
+    return () => { active = false; };
+  }, [salonKey, months]);
+
+  useEffect(() => {
+    let active = true;
+    const keys = scopeSalons.map((s) => s.key);
+    Promise.all([listTurnoverHistoryForSalons(keys, months), listSmPlansForSalons(keys, months)]).then(([histBy, plansBy]) => {
+      if (!active) return;
+      const rows = scopeSalons.map((s) => {
+        const hist = histBy[s.key] || {};
+        const plans = plansBy[s.key] || {};
+        const pairs = months
+          .map((ym) => ({ fact: hist[ym]?.turnover_ex_ez, plan: plans[ym]?.turnover_plan }))
+          .filter((p) => p.fact != null && p.plan);
+        const avgPct = pairs.length ? pairs.reduce((s2, p) => s2 + (p.fact / p.plan) * 100, 0) / pairs.length : null;
+        return { salon: s, avgPct, monthsCounted: pairs.length };
+      }).filter((r) => r.avgPct != null).sort((a, b) => b.avgPct - a.avgPct);
+      setRanking(rows);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeSalons.map((s) => s.key).join(","), months]);
+
+  return (
+    <div className="tasks-mod">
+      <div className="tasks-head"><h3 className="ov-h">Аналітика: план і факт</h3></div>
+
+      <div className="tm-salon-chips" style={{ marginBottom: 14 }}>
+        {scopeSalons.map((s) => (
+          <button key={s.key} className={`chip ${s.key === salonKey ? "active" : ""}`} onClick={() => setSalonKey(s.key)}>{salonShortName(s)}</button>
+        ))}
+      </div>
+
+      {chartData === null ? <div className="loading">Завантаження…</div> : (
+        <div style={{ width: "100%", height: 280, marginBottom: 20 }}>
+          <ResponsiveContainer>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+              <XAxis dataKey="ym" fontSize={11} />
+              <YAxis fontSize={11} width={70} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+              <Tooltip formatter={(v) => (v == null ? "—" : fmt(v))} />
+              <Legend />
+              <Line type="monotone" dataKey="План" stroke="#BE8A2E" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+              <Line type="monotone" dataKey="Факт" stroke="#4E6C97" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      <p className="hint" style={{ marginBottom: 20 }}>Факт — оборот без ЕЗ. Місяці без внесеного плану або ще без історії на графіку не з'являються.</p>
+
+      <div className="admin-sub-h" style={{ margin: "6px 0 8px" }}>Рейтинг магазинів за виконанням плану (середнє за наявні місяці)</div>
+      {ranking === null ? <div className="loading">Завантаження…</div> : ranking.length === 0 ? (
+        <div className="admin-empty">Ще недостатньо даних — потрібен хоча б один місяць із внесеним планом і зафіксованим фактом.</div>
+      ) : (
+        <div className="salon-list">
+          {ranking.map((r) => (
+            <div className="salon-row" key={r.salon.key} style={{ cursor: "default" }}>
+              <span className="salon-row-main">
+                <span className="salon-row-name">{salonLabel(r.salon)}</span>
+                <span className="salon-row-sub">{r.monthsCounted} {r.monthsCounted === 1 ? "місяць" : "місяців"} з даними</span>
+              </span>
+              <b style={{ color: r.avgPct >= 100 ? "var(--positive)" : "var(--negative)" }}>{r.avgPct.toFixed(0)}%</b>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ==================== РУХ БОНУСІВ ==================== */
 const MONTH_SHORT = ["Січ", "Лют", "Бер", "Кві", "Тра", "Чер", "Лип", "Сер", "Вер", "Жов", "Лис", "Гру"];
 const bnum = (n) => (n == null ? "—" : Math.round(n).toLocaleString("uk-UA"));
@@ -10088,6 +10181,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
     { key: "salons", label: "ЗП салонів", group: "Головне", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
     { key: "plans", label: "План показників", group: "Головне", icon: <TrendingUp size={16} />, render: () => <SmPlanPanel tmKey={tmKey} /> },
+    { key: "analytics", label: "Аналітика", group: "Головне", icon: <TrendingUp size={16} />, render: () => <AnalyticsPanel cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "ez", label: "ЕЗ", group: "Щоденне", icon: <BadgePercent size={16} />, render: () => <EzSalesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
@@ -10122,6 +10216,7 @@ function ManagerCabinet({ onExit, onLogout }) {
     { key: "consol", label: "Зведення ЗП", group: "Головне", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="manager" /> },
     { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <ManagerCashTab /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={cab} /> },
+    { key: "analytics", label: "Аналітика", group: "Щоденне", icon: <TrendingUp size={16} />, render: () => <AnalyticsPanel cab={cab} /> },
     { key: "ez", label: "ЕЗ", group: "Щоденне", icon: <BadgePercent size={16} />, render: () => <EzSalesModule cab={cab} /> },
     { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
     { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
