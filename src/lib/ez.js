@@ -2,7 +2,7 @@
    СМ вносить продаж → ТМ опрацьовує (вхідна ціна, затрати) → рахується чистий прибуток. */
 import { supabase, rtChannel } from "./supabase.js";
 
-export const EZ_PAYMENT_METHODS = { cash: "Готівка", card: "Картка", transfer: "Перерахунок", installment: "ОЧ" };
+export const EZ_PAYMENT_METHODS = { cash: "Готівка", card: "Картка", transfer: "Перерахунок", installment: "ОЧ", combined: "Комбінована" };
 
 export async function listEzSales({ salonKey, salonKeys, ym } = {}) {
   let q = supabase.from("ez_sales").select("*").order("created_at", { ascending: false });
@@ -14,12 +14,19 @@ export async function listEzSales({ salonKey, salonKeys, ym } = {}) {
   return data || [];
 }
 
-export async function createEzSale({ salonKey, ym, nomenclature, article, orderNo, amount, paymentMethod, npDeliveryPaid, createdBy }) {
+/* paymentBreakdown — {cash,card,transfer,installment} при paymentMethod==="combined";
+   сума продажу тоді рахується як сума всіх непорожніх складових. */
+export async function createEzSale({ salonKey, ym, nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown, npDeliveryPaid, createdBy }) {
+  const combined = paymentMethod === "combined";
+  const breakdown = combined
+    ? Object.fromEntries(Object.entries(paymentBreakdown || {}).map(([k, v]) => [k, Number(v) || 0]).filter(([, v]) => v > 0))
+    : null;
+  const totalAmount = combined ? Object.values(breakdown).reduce((s, v) => s + v, 0) : Number(amount) || 0;
   const row = {
     salon_key: salonKey, ym,
     nomenclature: (nomenclature || "").trim(), article: (article || "").trim(), order_no: (orderNo || "").trim(),
-    amount: Number(amount) || 0, payment_method: paymentMethod, np_delivery_paid: !!npDeliveryPaid,
-    created_by: createdBy || "",
+    amount: totalAmount, payment_method: paymentMethod, payment_breakdown: breakdown,
+    np_delivery_paid: !!npDeliveryPaid, created_by: createdBy || "",
   };
   const { error } = await supabase.from("ez_sales").insert(row);
   if (error) throw error;

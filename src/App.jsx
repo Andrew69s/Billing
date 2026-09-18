@@ -898,6 +898,11 @@ function QuickCreate({ cabKey }) {
             <button className="qc-item" onClick={() => { setOpen(false); setModal("task"); }}>
               <ListChecks size={15} /> Нова задача
             </button>
+            {cab.type === "sm" && (
+              <button className="qc-item" onClick={() => { setOpen(false); setModal("ez"); }}>
+                <BadgePercent size={15} /> Продаж ЕЗ
+              </button>
+            )}
             {isAdmin && (
               <button className="qc-item" onClick={() => { setOpen(false); setModal("news"); }}>
                 <Sparkles size={15} /> Новина для всіх
@@ -908,6 +913,7 @@ function QuickCreate({ cabKey }) {
       )}
       {modal === "task" && <TaskCreateModal cab={cab} onClose={() => setModal(null)} onCreated={() => {}} />}
       {modal === "news" && <NewsQuickModal onClose={() => setModal(null)} />}
+      {modal === "ez" && <EzSaleForm salonKey={cabKey} ym={nowYm()} cabKey={cabKey} onClose={() => setModal(null)} onCreated={() => {}} />}
     </div>
   );
 }
@@ -8422,15 +8428,22 @@ function EzSaleForm({ salonKey, ym, cabKey, onClose, onCreated }) {
   const [orderNo, setOrderNo] = useState("");
   const [amount, setAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [breakdown, setBreakdown] = useState({ cash: "", card: "", transfer: "", installment: "" });
   const [npDeliveryPaid, setNpDeliveryPaid] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  const combined = paymentMethod === "combined";
+  const breakdownTotal = Object.values(breakdown).reduce((s, v) => s + (Number(v) || 0), 0);
+  const total = combined ? breakdownTotal : Number(amount) || 0;
+  const setB = (k) => (v) => setBreakdown((b) => ({ ...b, [k]: v }));
+  const valid = nomenclature.trim() && article.trim() && orderNo.trim() && total > 0;
+
   const submit = async () => {
-    if (!amount || Number(amount) <= 0) return;
+    if (!valid) return;
     setBusy(true);
     try {
-      await createEzSale({ salonKey, ym, nomenclature, article, orderNo, amount, paymentMethod, npDeliveryPaid, createdBy: cabKey });
-      pushToast({ title: "Продаж ЕЗ додано", body: suah(Number(amount)) });
+      await createEzSale({ salonKey, ym, nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown: breakdown, npDeliveryPaid, createdBy: cabKey });
+      pushToast({ title: "Продаж ЕЗ додано", body: suah(total) });
       onCreated(); onClose();
     } catch (e) { pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) }); setBusy(false); }
   };
@@ -8443,23 +8456,37 @@ function EzSaleForm({ salonKey, ym, cabKey, onClose, onCreated }) {
           <button className="modal-x" onClick={onClose}><X size={18} /></button>
         </div>
         <div className="modal-body">
-          <label className="over-field" style={{ maxWidth: "100%" }}><span>Номенклатура (необовʼязково)</span>
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>Номенклатура</span>
             <input value={nomenclature} onChange={(e) => setNomenclature(e.target.value)} />
           </label>
-          <label className="over-field" style={{ maxWidth: "100%" }}><span>Артикул (необовʼязково)</span>
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>Артикул</span>
             <input value={article} onChange={(e) => setArticle(e.target.value)} />
           </label>
-          <label className="over-field" style={{ maxWidth: "100%" }}><span>№ замовлення (необовʼязково)</span>
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>№ замовлення</span>
             <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)} />
-          </label>
-          <label className="over-field" style={{ maxWidth: "100%" }}><span>Сума продажу, грн</span>
-            <NumInput allowEmpty value={amount} onChange={setAmount} />
           </label>
           <label className="over-field" style={{ maxWidth: "100%" }}><span>Спосіб оплати</span>
             <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
               {Object.entries(EZ_PAYMENT_METHODS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select>
           </label>
+          {combined ? (
+            <>
+              <div className="item-fields">
+                <Field label="Готівка" suffix="грн" value={breakdown.cash} onChange={setB("cash")} />
+                <Field label="Картка" suffix="грн" value={breakdown.card} onChange={setB("card")} />
+              </div>
+              <div className="item-fields">
+                <Field label="Перерахунок" suffix="грн" value={breakdown.transfer} onChange={setB("transfer")} />
+                <Field label="ОЧ" suffix="грн" value={breakdown.installment} onChange={setB("installment")} />
+              </div>
+              <div className="hint">Разом: <b>{suah(breakdownTotal)}</b></div>
+            </>
+          ) : (
+            <label className="over-field" style={{ maxWidth: "100%" }}><span>Сума продажу, грн</span>
+              <NumInput allowEmpty value={amount} onChange={setAmount} />
+            </label>
+          )}
           <label className="admin-cap">
             <input type="checkbox" checked={npDeliveryPaid} onChange={(e) => setNpDeliveryPaid(e.target.checked)} />
             <span>Оплата за доставку НП</span>
@@ -8467,7 +8494,7 @@ function EzSaleForm({ salonKey, ym, cabKey, onClose, onCreated }) {
         </div>
         <div className="modal-foot">
           <span />
-          <button className="btn-primary" onClick={submit} disabled={busy || !amount}>{busy ? "…" : "Додати продаж"}</button>
+          <button className="btn-primary" onClick={submit} disabled={busy || !valid}>{busy ? "…" : "Додати продаж"}</button>
         </div>
       </div>
     </div>,
