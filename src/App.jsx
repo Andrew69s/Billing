@@ -8415,6 +8415,188 @@ function SupplyStocktake({ warehouse, items, cabKey, locked, doneInfo, onReload 
   );
 }
 
+/* ==================== ПРОДАЖІ ЕЗ (генератори/електроінструмент) ==================== */
+function EzSaleForm({ salonKey, ym, cabKey, onClose, onCreated }) {
+  const [nomenclature, setNomenclature] = useState("");
+  const [article, setArticle] = useState("");
+  const [orderNo, setOrderNo] = useState("");
+  const [amount, setAmount] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [npDeliveryPaid, setNpDeliveryPaid] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!amount || Number(amount) <= 0) return;
+    setBusy(true);
+    try {
+      await createEzSale({ salonKey, ym, nomenclature, article, orderNo, amount, paymentMethod, npDeliveryPaid, createdBy: cabKey });
+      pushToast({ title: "Продаж ЕЗ додано", body: suah(Number(amount)) });
+      onCreated(); onClose();
+    } catch (e) { pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) }); setBusy(false); }
+  };
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Новий продаж ЕЗ</h3>
+          <button className="modal-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>Номенклатура (необовʼязково)</span>
+            <input value={nomenclature} onChange={(e) => setNomenclature(e.target.value)} />
+          </label>
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>Артикул (необовʼязково)</span>
+            <input value={article} onChange={(e) => setArticle(e.target.value)} />
+          </label>
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>№ замовлення (необовʼязково)</span>
+            <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)} />
+          </label>
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>Сума продажу, грн</span>
+            <NumInput allowEmpty value={amount} onChange={setAmount} />
+          </label>
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>Спосіб оплати</span>
+            <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+              {Object.entries(EZ_PAYMENT_METHODS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </label>
+          <label className="admin-cap">
+            <input type="checkbox" checked={npDeliveryPaid} onChange={(e) => setNpDeliveryPaid(e.target.checked)} />
+            <span>Оплата за доставку НП</span>
+          </label>
+        </div>
+        <div className="modal-foot">
+          <span />
+          <button className="btn-primary" onClick={submit} disabled={busy || !amount}>{busy ? "…" : "Додати продаж"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+const ezStatusBadge = (st) => (
+  <span className={`badge ${st === "confirmed" ? "badge-ok" : "badge-warn"}`}>
+    {st === "confirmed" ? "Підтверджено" : "На опрацюванні"}
+  </span>
+);
+
+function EzProcessRow({ sale, cabKey, onDone }) {
+  const [costPrice, setCostPrice] = useState("");
+  const [extraCosts, setExtraCosts] = useState("");
+  const [busy, setBusy] = useState(false);
+  const netPreview = Math.max(0, Number(sale.amount) - (Number(costPrice) || 0) - (Number(extraCosts) || 0));
+
+  const process = async () => {
+    setBusy(true);
+    try {
+      await processEzSale(sale, { costPrice, extraCosts }, cabKey);
+      // після підтвердження перераховуємо суму всіх підтверджених продажів ЕЗ цього
+      // магазину за місяць — саме вона віднімається від обороту для категоризації
+      const all = await listEzSales({ salonKey: sale.salon_key, ym: sale.ym });
+      const ezSum = all.filter((s) => s.status === "confirmed").reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+      await upsertTurnoverEzSum(sale.salon_key, sale.ym, ezSum).catch(() => {});
+      pushToast({ title: "Продаж підтверджено", body: `${salonLabel(salonByKey(sale.salon_key))} · прибуток ${suah(netPreview)}` });
+      notify({ recipient: sale.salon_key, kind: "ez", title: "Продаж ЕЗ підтверджено", body: `${suah(Number(sale.amount))} · прибуток ${suah(netPreview)}`, actor: cabKey, link: "ez" }).catch(() => {});
+      onDone();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); setBusy(false); }
+  };
+
+  return (
+    <div className="ez-process-row">
+      <div className="ez-process-head">
+        <b>{salonLabel(salonByKey(sale.salon_key))}</b>
+        <span className="muted">{sale.nomenclature || "без номенклатури"}{sale.article ? ` · ${sale.article}` : ""}</span>
+        <b>{suah(Number(sale.amount))}</b>
+      </div>
+      <div className="item-fields">
+        <Field label="Вхідна ціна" suffix="грн" value={costPrice} onChange={setCostPrice} />
+        <Field label="Затрати" suffix="грн" value={extraCosts} onChange={setExtraCosts} />
+      </div>
+      <div className="ez-process-foot">
+        <span>Прибуток: <b>{suah(netPreview)}</b></span>
+        <button className="btn-primary small" onClick={process} disabled={busy}>{busy ? "…" : "Опрацьовано"}</button>
+      </div>
+    </div>
+  );
+}
+
+function EzSalesModule({ cab }) {
+  const isSm = cab.type === "sm";
+  const isManagerLike = cab.type === "manager" || cab.key === ADMIN_KEY;
+  const scopeSalons = isSm ? [salonByKey(cab.key)].filter(Boolean) : isManagerLike ? SALONS : salonsOfTm(cab.tmKey || cab.key);
+  const [ym, setYm] = useState(nowYm());
+  const [tab, setTab] = useState(isSm ? "mine" : "pending");
+  const [sales, setSales] = useState(null);
+  const [add, setAdd] = useState(false);
+  const months = useMemo(() => recentMonths(12), []);
+
+  const reload = React.useCallback(() => {
+    listEzSales({ salonKeys: scopeSalons.map((s) => s.key), ym: isSm ? ym : undefined }).then(setSales).catch(() => setSales([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeSalons.map((s) => s.key).join(","), ym, isSm]);
+  useEffect(() => { setSales(null); reload(); }, [reload]);
+  useEffect(() => subscribeEzSales(reload), [reload]);
+
+  if (sales === null) return <div className="loading">Завантаження…</div>;
+
+  const pending = sales.filter((s) => s.status === "pending");
+  const confirmed = sales.filter((s) => s.status === "confirmed").filter((s) => isSm || s.ym === ym);
+
+  return (
+    <div className="tasks-mod">
+      <div className="tasks-head">
+        <h3 className="ov-h">Продажі ЕЗ</h3>
+        {isSm && <button className="btn-primary small" onClick={() => setAdd(true)}><Plus size={14} /> Новий продаж</button>}
+      </div>
+
+      {!isSm && (
+        <div className="trn-tabs" style={{ marginBottom: 10 }}>
+          <button className={tab === "pending" ? "on" : ""} onClick={() => setTab("pending")}>На опрацюванні{pending.length > 0 ? ` (${pending.length})` : ""}</button>
+          <button className={tab === "history" ? "on" : ""} onClick={() => setTab("history")}>Історія</button>
+        </div>
+      )}
+
+      {(isSm || tab === "history") && (
+        <div className="month-row" style={{ marginBottom: 10 }}>
+          <select value={ym} onChange={(e) => setYm(e.target.value)}>
+            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          </select>
+        </div>
+      )}
+
+      {!isSm && tab === "pending" && (
+        pending.length === 0
+          ? <div className="admin-empty">Немає продажів на опрацюванні.</div>
+          : <div className="ez-process-list">{pending.map((s) => <EzProcessRow key={s.id} sale={s} cabKey={cab.key} onDone={reload} />)}</div>
+      )}
+
+      {(isSm || tab === "history") && (
+        <div className="task-list">
+          {(isSm ? sales : confirmed).length === 0 && <div className="admin-empty">Продажів немає.</div>}
+          {(isSm ? sales : confirmed).map((s) => (
+            <div className="ez-sale-row" key={s.id}>
+              <div>
+                <b>{isSm ? (s.nomenclature || "Без номенклатури") : salonLabel(salonByKey(s.salon_key))}</b>
+                <span className="muted"> · {EZ_PAYMENT_METHODS[s.payment_method]}{s.article ? ` · ${s.article}` : ""}</span>
+              </div>
+              <span>{suah(Number(s.amount))}</span>
+              {ezStatusBadge(s.status)}
+              {isSm && s.status === "pending" && (
+                <button className="zsu-undo" title="Видалити" onClick={() => deleteEzSale(s.id).then(() => { pushToast({ title: "Видалено" }); reload(); }).catch((e) => pushToast({ title: "Не вдалося", body: String(e.message || e) }))}>
+                  <Trash2 size={13} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {add && <EzSaleForm salonKey={cab.key} ym={ym} cabKey={cab.key} onClose={() => setAdd(false)} onCreated={reload} />}
+    </div>
+  );
+}
+
 /* ==================== РУХ БОНУСІВ ==================== */
 const MONTH_SHORT = ["Січ", "Лют", "Бер", "Кві", "Тра", "Чер", "Лип", "Сер", "Вер", "Жов", "Лис", "Гру"];
 const bnum = (n) => (n == null ? "—" : Math.round(n).toLocaleString("uk-UA"));
@@ -9907,6 +10089,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "salons", label: "ЗП салонів", group: "Головне", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
     { key: "plans", label: "План показників", group: "Головне", icon: <TrendingUp size={16} />, render: () => <SmPlanPanel tmKey={tmKey} /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "ez", label: "ЕЗ", group: "Щоденне", icon: <BadgePercent size={16} />, render: () => <EzSalesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
@@ -9939,6 +10122,7 @@ function ManagerCabinet({ onExit, onLogout }) {
     { key: "consol", label: "Зведення ЗП", group: "Головне", icon: <Wallet size={16} />, render: () => <ConsolidationPanel role="manager" /> },
     { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <ManagerCashTab /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={cab} /> },
+    { key: "ez", label: "ЕЗ", group: "Щоденне", icon: <BadgePercent size={16} />, render: () => <EzSalesModule cab={cab} /> },
     { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={cab} /> },
     { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={cab} /> },
     { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: () => <SupplyModule cab={cab} /> },
@@ -10002,6 +10186,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
     { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <CashModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "kpi", label: "Показники магазину", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "ez", label: "ЕЗ", group: "Щоденне", icon: <BadgePercent size={16} />, render: () => <EzSalesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "bonus", label: "Рух бонусів", group: ORG_GROUP, icon: <Sparkles size={16} />, render: () => <BonusModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: () => <ExpensesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: () => <SupplyModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
@@ -10885,6 +11070,15 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .zsu-use{padding:3px 10px!important;font-size:10.5px!important;}
 .zsu-undo{background:none;border:none;color:var(--muted);cursor:pointer;display:flex;padding:2px;}
 .zsu-undo:hover{color:var(--negative-bright);}
+
+/* --- Продажі ЕЗ --- */
+.ez-process-list{display:flex;flex-direction:column;gap:10px;}
+.ez-process-row{border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 14px;background:var(--surface);}
+.ez-process-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;}
+.ez-process-head b:last-child{margin-left:auto;}
+.ez-process-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:12.5px;}
+.ez-sale-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:6px;}
+.ez-sale-row > span:nth-child(2){margin-left:auto;font-weight:600;}
 
 /* --- Тестування --- */
 .trn-tabs{display:inline-flex;gap:4px;}
