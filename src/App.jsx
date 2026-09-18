@@ -54,7 +54,7 @@ import {
 } from "./lib/shifts.js";
 import { getSmPlan, listSmPlans, listSmPlansForSalon, listSmPlansForSalons, saveSmPlan, setPlanLock, subscribePlans, emptyPlan } from "./lib/plans.js";
 import { upsertTurnoverMonthFact, listTurnoverHistory, listTurnoverHistoryForSalons, subscribeTurnoverHistory } from "./lib/turnover.js";
-import { EZ_PAYMENT_METHODS, listEzSales, createEzSale, processEzSale, deleteEzSale, subscribeEzSales } from "./lib/ez.js";
+import { EZ_PAYMENT_METHODS, listEzSales, createEzSale, updateEzSale, processEzSale, deleteEzSale, recomputeTurnoverEz, subscribeEzSales } from "./lib/ez.js";
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
 } from "./lib/notifications.js";
@@ -8422,14 +8422,18 @@ function SupplyStocktake({ warehouse, items, cabKey, locked, doneInfo, onReload 
 }
 
 /* ==================== ПРОДАЖІ ЕЗ (генератори/електроінструмент) ==================== */
-function EzSaleForm({ salonKey, ym, cabKey, onClose, onCreated }) {
-  const [nomenclature, setNomenclature] = useState("");
-  const [article, setArticle] = useState("");
-  const [orderNo, setOrderNo] = useState("");
-  const [amount, setAmount] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("cash");
-  const [breakdown, setBreakdown] = useState({ cash: "", card: "", transfer: "", installment: "" });
-  const [npDeliveryPaid, setNpDeliveryPaid] = useState(false);
+function EzSaleForm({ salonKey, ym, cabKey, sale, onClose, onCreated }) {
+  const editing = !!sale;
+  const [nomenclature, setNomenclature] = useState(sale?.nomenclature || "");
+  const [article, setArticle] = useState(sale?.article || "");
+  const [orderNo, setOrderNo] = useState(sale?.order_no || "");
+  const [amount, setAmount] = useState(sale && sale.payment_method !== "combined" ? String(sale.amount) : "");
+  const [paymentMethod, setPaymentMethod] = useState(sale?.payment_method || "cash");
+  const [breakdown, setBreakdown] = useState({
+    cash: sale?.payment_breakdown?.cash || "", card: sale?.payment_breakdown?.card || "",
+    transfer: sale?.payment_breakdown?.transfer || "", installment: sale?.payment_breakdown?.installment || "",
+  });
+  const [npDeliveryPaid, setNpDeliveryPaid] = useState(sale?.np_delivery_paid || false);
   const [busy, setBusy] = useState(false);
 
   const combined = paymentMethod === "combined";
@@ -8437,13 +8441,21 @@ function EzSaleForm({ salonKey, ym, cabKey, onClose, onCreated }) {
   const total = combined ? breakdownTotal : Number(amount) || 0;
   const setB = (k) => (v) => setBreakdown((b) => ({ ...b, [k]: v }));
   const valid = nomenclature.trim() && article.trim() && orderNo.trim() && total > 0;
+  const willRevert = editing && sale.status === "confirmed" && (Number(amount) !== Number(sale.amount) || paymentMethod !== sale.payment_method) && !combined;
 
   const submit = async () => {
     if (!valid) return;
     setBusy(true);
+    const core = { nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown: breakdown, npDeliveryPaid };
     try {
-      await createEzSale({ salonKey, ym, nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown: breakdown, npDeliveryPaid, createdBy: cabKey });
-      pushToast({ title: "Продаж ЕЗ додано", body: suah(total) });
+      if (editing) {
+        await updateEzSale(sale.id, core);
+        if (sale.status === "confirmed") await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
+        pushToast({ title: "Продаж оновлено", body: suah(total) });
+      } else {
+        await createEzSale({ salonKey, ym, createdBy: cabKey, ...core });
+        pushToast({ title: "Продаж ЕЗ додано", body: suah(total) });
+      }
       onCreated(); onClose();
     } catch (e) { pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) }); setBusy(false); }
   };
@@ -8452,7 +8464,7 @@ function EzSaleForm({ salonKey, ym, cabKey, onClose, onCreated }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>Новий продаж ЕЗ</h3>
+          <h3>{editing ? "Редагувати продаж ЕЗ" : "Новий продаж ЕЗ"}</h3>
           <button className="modal-x" onClick={onClose}><X size={18} /></button>
         </div>
         <div className="modal-body">
@@ -8491,10 +8503,16 @@ function EzSaleForm({ salonKey, ym, cabKey, onClose, onCreated }) {
             <input type="checkbox" checked={npDeliveryPaid} onChange={(e) => setNpDeliveryPaid(e.target.checked)} />
             <span>Оплата за доставку НП</span>
           </label>
+          {willRevert && (
+            <p className="hint" style={{ color: "var(--negative-bright)" }}>
+              Продаж уже підтверджено ТМ — оскільки сума чи спосіб оплати змінюються, статус повернеться
+              «на опрацюванні», щоб ТМ переглянув собівартість наново.
+            </p>
+          )}
         </div>
         <div className="modal-foot">
           <span />
-          <button className="btn-primary" onClick={submit} disabled={busy || !valid}>{busy ? "…" : "Додати продаж"}</button>
+          <button className="btn-primary" onClick={submit} disabled={busy || !valid}>{busy ? "…" : editing ? "Зберегти зміни" : "Додати продаж"}</button>
         </div>
       </div>
     </div>,
@@ -8509,11 +8527,13 @@ const ezStatusBadge = (st) => (
 );
 
 function EzProcessRow({ sale, cabKey, onDone }) {
-  const [costPrice, setCostPrice] = useState("");
-  const [costNp, setCostNp] = useState("");
-  const [costAcquiring, setCostAcquiring] = useState("");
-  const [costVat, setCostVat] = useState("");
+  const editingConfirmed = sale.status === "confirmed";
+  const [costPrice, setCostPrice] = useState(sale.cost_price != null ? String(sale.cost_price) : "");
+  const [costNp, setCostNp] = useState(sale.cost_np != null ? String(sale.cost_np) : "");
+  const [costAcquiring, setCostAcquiring] = useState(sale.cost_acquiring != null ? String(sale.cost_acquiring) : "");
+  const [costVat, setCostVat] = useState(sale.cost_vat != null ? String(sale.cost_vat) : "");
   const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
   const extraTotal = (Number(costNp) || 0) + (Number(costAcquiring) || 0) + (Number(costVat) || 0);
   const netPreview = Math.max(0, Number(sale.amount) - (Number(costPrice) || 0) - extraTotal);
 
@@ -8523,13 +8543,22 @@ function EzProcessRow({ sale, cabKey, onDone }) {
       await processEzSale(sale, { costPrice, costNp, costAcquiring, costVat }, cabKey);
       // після підтвердження перераховуємо суму всіх підтверджених продажів ЕЗ цього
       // магазину за місяць — саме вона віднімається від обороту для категоризації
-      const all = await listEzSales({ salonKey: sale.salon_key, ym: sale.ym });
-      const ezSum = all.filter((s) => s.status === "confirmed").reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
-      await upsertTurnoverEzSum(sale.salon_key, sale.ym, ezSum).catch(() => {});
-      pushToast({ title: "Продаж підтверджено", body: `${salonLabel(salonByKey(sale.salon_key))} · прибуток ${suah(netPreview)}` });
-      notify({ recipient: sale.salon_key, kind: "ez", title: "Продаж ЕЗ підтверджено", body: `${suah(Number(sale.amount))} · прибуток ${suah(netPreview)}`, actor: cabKey, link: "ez" }).catch(() => {});
+      await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
+      pushToast({ title: editingConfirmed ? "Розрахунок оновлено" : "Продаж підтверджено", body: `${salonLabel(salonByKey(sale.salon_key))} · прибуток ${suah(netPreview)}` });
+      if (!editingConfirmed) notify({ recipient: sale.salon_key, kind: "ez", title: "Продаж ЕЗ підтверджено", body: `${suah(Number(sale.amount))} · прибуток ${suah(netPreview)}`, actor: cabKey, link: "ez" }).catch(() => {});
       onDone();
     } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); setBusy(false); }
+  };
+
+  const del = async () => {
+    if (!confirmDel) { setConfirmDel(true); setTimeout(() => setConfirmDel(false), 4000); return; }
+    setBusy(true);
+    try {
+      await deleteEzSale(sale.id);
+      if (editingConfirmed) await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
+      pushToast({ title: "Продаж видалено" });
+      onDone();
+    } catch (e) { pushToast({ title: "Не вдалося видалити", body: String(e.message || e) }); setBusy(false); }
   };
 
   return (
@@ -8547,7 +8576,10 @@ function EzProcessRow({ sale, cabKey, onDone }) {
       </div>
       <div className="ez-process-foot">
         <span>Прибуток: <b>{suah(netPreview)}</b></span>
-        <button className="btn-primary small" onClick={process} disabled={busy}>{busy ? "…" : "Опрацьовано"}</button>
+        <span style={{ display: "flex", gap: 8 }}>
+          <button className="btn-danger small" onClick={del} disabled={busy}>{confirmDel ? "Точно видалити?" : "Видалити"}</button>
+          <button className="btn-primary small" onClick={process} disabled={busy}>{busy ? "…" : editingConfirmed ? "Зберегти" : "Опрацьовано"}</button>
+        </span>
       </div>
     </div>
   );
@@ -8561,6 +8593,7 @@ function EzSalesModule({ cab }) {
   const [tab, setTab] = useState(isSm ? "mine" : "pending");
   const [sales, setSales] = useState(null);
   const [add, setAdd] = useState(false);
+  const [editSale, setEditSale] = useState(null);
   const months = useMemo(() => recentMonths(12), []);
 
   const reload = React.useCallback(() => {
@@ -8603,28 +8636,40 @@ function EzSalesModule({ cab }) {
           : <div className="ez-process-list">{pending.map((s) => <EzProcessRow key={s.id} sale={s} cabKey={cab.key} onDone={reload} />)}</div>
       )}
 
-      {(isSm || tab === "history") && (
+      {!isSm && tab === "history" && (
+        confirmed.length === 0
+          ? <div className="admin-empty">Продажів немає.</div>
+          : <div className="ez-process-list">{confirmed.map((s) => <EzProcessRow key={s.id} sale={s} cabKey={cab.key} onDone={reload} />)}</div>
+      )}
+
+      {isSm && (
         <div className="task-list">
-          {(isSm ? sales : confirmed).length === 0 && <div className="admin-empty">Продажів немає.</div>}
-          {(isSm ? sales : confirmed).map((s) => (
+          {sales.length === 0 && <div className="admin-empty">Продажів немає.</div>}
+          {sales.map((s) => (
             <div className="ez-sale-row" key={s.id}>
               <div>
-                <b>{isSm ? (s.nomenclature || "Без номенклатури") : salonLabel(salonByKey(s.salon_key))}</b>
+                <b>{s.nomenclature || "Без номенклатури"}</b>
                 <span className="muted"> · {EZ_PAYMENT_METHODS[s.payment_method]}{s.article ? ` · ${s.article}` : ""}</span>
               </div>
               <span>{suah(Number(s.amount))}</span>
               {ezStatusBadge(s.status)}
-              {isSm && s.status === "pending" && (
-                <button className="zsu-undo" title="Видалити" onClick={() => deleteEzSale(s.id).then(() => { pushToast({ title: "Видалено" }); reload(); }).catch((e) => pushToast({ title: "Не вдалося", body: String(e.message || e) }))}>
-                  <Trash2 size={13} />
-                </button>
-              )}
+              <button className="wh-link" onClick={() => setEditSale(s)}>редагувати</button>
+              <button className="zsu-undo" title="Видалити" onClick={async () => {
+                try {
+                  await deleteEzSale(s.id);
+                  if (s.status === "confirmed") await recomputeTurnoverEz(s.salon_key, s.ym).catch(() => {});
+                  pushToast({ title: "Видалено" }); reload();
+                } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+              }}>
+                <Trash2 size={13} />
+              </button>
             </div>
           ))}
         </div>
       )}
 
       {add && <EzSaleForm salonKey={cab.key} ym={ym} cabKey={cab.key} onClose={() => setAdd(false)} onCreated={reload} />}
+      {editSale && <EzSaleForm salonKey={cab.key} ym={ym} cabKey={cab.key} sale={editSale} onClose={() => setEditSale(null)} onCreated={reload} />}
     </div>
   );
 }

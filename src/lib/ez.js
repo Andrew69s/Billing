@@ -1,6 +1,7 @@
 /* Продажі ЕЗ (генератори/електроінструмент) по магазину:
    СМ вносить продаж → ТМ опрацьовує (вхідна ціна, затрати) → рахується чистий прибуток. */
 import { supabase, rtChannel } from "./supabase.js";
+import { upsertTurnoverEzSum } from "./turnover.js";
 
 export const EZ_PAYMENT_METHODS = { cash: "Готівка", card: "Картка", transfer: "Перерахунок", installment: "ОЧ", combined: "Комбінована" };
 
@@ -16,19 +17,31 @@ export async function listEzSales({ salonKey, salonKeys, ym } = {}) {
 
 /* paymentBreakdown — {cash,card,transfer,installment} при paymentMethod==="combined";
    сума продажу тоді рахується як сума всіх непорожніх складових. */
-export async function createEzSale({ salonKey, ym, nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown, npDeliveryPaid, createdBy }) {
+function ezCoreFields({ nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown, npDeliveryPaid }) {
   const combined = paymentMethod === "combined";
   const breakdown = combined
     ? Object.fromEntries(Object.entries(paymentBreakdown || {}).map(([k, v]) => [k, Number(v) || 0]).filter(([, v]) => v > 0))
     : null;
   const totalAmount = combined ? Object.values(breakdown).reduce((s, v) => s + v, 0) : Number(amount) || 0;
-  const row = {
-    salon_key: salonKey, ym,
+  return {
     nomenclature: (nomenclature || "").trim(), article: (article || "").trim(), order_no: (orderNo || "").trim(),
     amount: totalAmount, payment_method: paymentMethod, payment_breakdown: breakdown,
-    np_delivery_paid: !!npDeliveryPaid, created_by: createdBy || "",
+    np_delivery_paid: !!npDeliveryPaid,
   };
+}
+
+export async function createEzSale({ salonKey, ym, createdBy, ...core }) {
+  const row = { salon_key: salonKey, ym, created_by: createdBy || "", ...ezCoreFields(core) };
   const { error } = await supabase.from("ez_sales").insert(row);
+  if (error) throw error;
+}
+
+/* СМ редагує власний продаж (номенклатура/сума/спосіб оплати тощо). Якщо продаж
+   уже був підтверджений і сума/спосіб оплати змінились — база сама поверне
+   статус «на опрацюванні» (тригер ez_sales_guard), бо стара собівартість ТМ
+   більше не відповідає новій сумі. */
+export async function updateEzSale(id, core) {
+  const { error } = await supabase.from("ez_sales").update(ezCoreFields(core)).eq("id", id);
   if (error) throw error;
 }
 
@@ -51,6 +64,15 @@ export async function processEzSale(sale, { costPrice, costNp, costAcquiring, co
 export async function deleteEzSale(id) {
   const { error } = await supabase.from("ez_sales").delete().eq("id", id);
   if (error) throw error;
+}
+
+/* сума підтверджених продажів ЕЗ цього магазину за місяць — саме вона віднімається
+   від обороту для авто-категоризації. Викликати після будь-якої зміни, що могла
+   вплинути на список підтверджених (опрацювання, редагування, видалення). */
+export async function recomputeTurnoverEz(salonKey, ym) {
+  const all = await listEzSales({ salonKey, ym });
+  const sum = all.filter((s) => s.status === "confirmed").reduce((s2, s) => s2 + (Number(s.amount) || 0), 0);
+  await upsertTurnoverEzSum(salonKey, ym, sum);
 }
 
 export function subscribeEzSales(onChange) {
