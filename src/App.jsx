@@ -2435,7 +2435,7 @@ function StRow({ g, gs, label, inp, cells, cls }) {
             {g}
             {ST_COND[g] && openInfo && (
               <span role="button" tabIndex={0} className="st-info" title="Умови мотивації" aria-label={`Умови: ${g}`}
-                onClick={() => openInfo(g)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openInfo(g); } }}><Info size={13} /></span>
+                onClick={() => openInfo(g)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openInfo(g); } }}><Info size={11} /></span>
             )}
           </span>
         </td>
@@ -2878,7 +2878,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
           <StInfoCtx.Provider value={setInfoGroup}>
           <div className="st-wrap">
             <table className="st">
-              <colgroup><col style={{ width: 136 }} /><col style={{ width: 200 }} /><col style={{ width: 250 }} />{emps.map((e) => <col key={e.id} style={{ width: 190 }} />)}</colgroup>
+              <colgroup><col style={{ width: 122 }} /><col style={{ width: 200 }} /><col style={{ width: 250 }} />{emps.map((e) => <col key={e.id} style={{ width: 190 }} />)}</colgroup>
               <thead>
                 <tr>
                   <th />
@@ -12122,7 +12122,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-sale-row > span:nth-child(2){margin-left:auto;font-weight:600;}
 
 /* --- СМ: розрахунок ЗП магазину (одна таблиця) --- */
-.st-page{max-width:max(1400px,calc(592px + var(--st-n,3) * 190px));margin:0 auto;}
+.st-page{max-width:max(1400px,calc(578px + var(--st-n,3) * 190px));margin:0 auto;}
 .st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
 .st-strip{padding:14px 0;display:flex;flex-wrap:nowrap;align-items:stretch;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
 .st-cell{flex:0 0 auto;padding:0 18px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
@@ -12142,7 +12142,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-hint{font-size:12.5px;color:var(--st-hint);font-weight:400;font-family:'Inter',sans-serif;}
 .st-warn{color:var(--st-neg);}
 .st-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow-x:auto;}
-.st{width:100%;min-width:calc(586px + var(--st-n,3) * 190px);border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
+.st{width:100%;min-width:calc(572px + var(--st-n,3) * 190px);border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
 .st td,.st th{padding:0 14px;height:40px;border-bottom:1px solid var(--line);vertical-align:middle;}
 .st th{height:auto;padding:14px 14px 14px;text-align:left;font-weight:500;border-bottom:1px solid var(--line-strong);}
 .st-hl{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);vertical-align:bottom;}
@@ -12150,8 +12150,9 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-en{font-size:15.5px;font-weight:600;color:var(--ink);}
 .st-er{font-size:12.5px;color:var(--muted);margin-top:3px;display:flex;justify-content:flex-end;align-items:center;gap:5px;flex-wrap:wrap;}
 .st tr.st-gt td{border-top:1px solid var(--line-strong);}
-.st-g-in{display:flex;align-items:center;gap:7px;flex-wrap:nowrap;white-space:nowrap;}
-.st-info{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--st-cap);color:var(--st-cap);cursor:pointer;flex-shrink:0;text-transform:none;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
+.st-g-in{display:block;white-space:nowrap;}
+.st-g{position:relative;}
+.st-info{position:absolute;top:7px;right:7px;display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;border:1.3px solid var(--st-cap);color:var(--st-cap);cursor:pointer;flex-shrink:0;text-transform:none;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
 .st-info:hover,.st-info:focus-visible{color:var(--st-gold);border-color:var(--st-gold);background:rgba(190,138,46,.12);outline:none;}
 .cond-h{margin:16px 0 6px;font-family:'Fraunces',serif;font-size:14.5px;font-weight:600;color:var(--ink);}
 .st-g{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--surface-alt);border-right:1px solid var(--line);}
