@@ -8198,6 +8198,59 @@ function useSupply() {
 }
 
 /* --- рядок вводу товару (для приходу / списання / замовлення) --- */
+/* вибір позиції з пошуком (замість довгого випадаючого списку) */
+function ItemPicker({ value, options, onPick }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  const boxRef = useRef(null);
+  const cur = options.find((o) => o.id === value);
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const list = words.length ? options.filter((o) => words.every((w) => o.name.toLowerCase().includes(w))) : options;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("touchstart", onDoc);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("touchstart", onDoc); };
+  }, [open]);
+  useEffect(() => {
+    if (open) boxRef.current?.querySelector(".wh-pick-opt.hi")?.scrollIntoView({ block: "nearest" });
+  }, [hi, open]);
+
+  const pick = (id) => { onPick(id); setOpen(false); setQ(""); };
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, list.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (list[hi]) pick(list[hi].id); }
+    else if (e.key === "Escape") { setOpen(false); setQ(""); }
+  };
+
+  return (
+    <div className="wh-pick" ref={boxRef}>
+      {open ? (
+        <input autoFocus className="wh-pick-in" value={q} placeholder="Почніть вводити назву…"
+          onChange={(e) => { setQ(e.target.value); setHi(0); }} onKeyDown={onKey} />
+      ) : (
+        <button type="button" className={`wh-pick-btn ${cur ? "" : "empty"}`} onClick={() => { setOpen(true); setHi(0); }}>
+          <span>{cur ? cur.name : "— позиція —"}</span><Search size={13} />
+        </button>
+      )}
+      {open && (
+        <div className="wh-pick-list">
+          {list.length === 0
+            ? <div className="wh-pick-none">Нічого не знайдено</div>
+            : list.map((o, i) => (
+              <button key={o.id} type="button" className={`wh-pick-opt ${i === hi ? "hi" : ""} ${o.id === value ? "cur" : ""}`}
+                onMouseEnter={() => setHi(i)} onClick={() => pick(o.id)}>{o.name}</button>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SupplyLineRow({ items, line, exclude, onChange, onRemove, priceCol, avail }) {
   const opts = items.filter((i) => i.id === line.item_id || !exclude.has(i.id));
   const over = avail != null && Number(line.qty) > avail;
@@ -8216,10 +8269,7 @@ function SupplyLineRow({ items, line, exclude, onChange, onRemove, priceCol, ava
   };
   return (
     <div className="wh-line">
-      <select value={line.item_id} onChange={(e) => pickItem(e.target.value)}>
-        <option value="">— позиція —</option>
-        {opts.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-      </select>
+      <ItemPicker value={line.item_id} options={opts} onPick={pickItem} />
       <NumInput className={`wh-line-qty ${over ? "wh-over" : ""}`} allowEmpty placeholder="к-ть" value={line.qty} onChange={(v) => onChange({ ...line, qty: v })} />
       {priceCol && (
         <NumInput key={line.item_id} className="wh-line-qty" allowEmpty placeholder="ціна" value={line.unit_cost}
@@ -12911,6 +12961,17 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .stocktake-unit{font-size:11px;color:var(--muted);min-width:24px;}
 .wh-line{display:flex;gap:6px;align-items:center;}
 .wh-line select{flex:1;min-width:0;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 9px;font-family:inherit;font-size:12.5px;background:var(--input-bg);color:var(--ink);}
+.wh-pick{position:relative;flex:1;min-width:0;}
+.wh-pick-btn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 9px;font-family:inherit;font-size:12.5px;background:var(--input-bg);color:var(--ink);cursor:pointer;}
+.wh-pick-btn.empty{color:var(--muted);}
+.wh-pick-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wh-pick-btn svg{flex-shrink:0;color:var(--gold);}
+.wh-pick-in{width:100%;box-sizing:border-box;border:1px solid var(--gold);border-radius:var(--radius-sm);padding:7px 9px;font-family:inherit;font-size:12.5px;background:var(--input-bg);color:var(--ink);outline:none;box-shadow:0 0 0 3px rgba(190,138,46,.2);}
+.wh-pick-list{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);max-height:260px;overflow-y:auto;background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius-sm);box-shadow:var(--sh-2);padding:4px;}
+.wh-pick-opt{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 10px;border-radius:6px;font-family:inherit;font-size:12.5px;color:var(--ink);cursor:pointer;}
+.wh-pick-opt.hi{background:rgba(190,138,46,.16);}
+.wh-pick-opt.cur{font-weight:700;color:var(--gold);}
+.wh-pick-none{padding:10px;font-size:12px;color:var(--muted);}
 .wh-line-qty{width:72px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;text-align:right;background:var(--input-bg);color:var(--ink);}
 .wh-line-x{background:none;border:none;color:var(--faint);cursor:pointer;padding:4px;flex-shrink:0;}
 .wh-line-x:hover{color:var(--negative);}
