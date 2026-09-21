@@ -62,7 +62,7 @@ import {
   TM_METRICS, SALON_MONTH_PLAN, daysInYm, dateOf,
   listMetrics, listMetricsRange, daysBetween, listPlans, planOf, effective, saveManual, resetManual, syncFromPlanner, subscribeMetrics, monthAgg, planAgg,
 } from "./lib/territory.js";
-import { getMaintenance, setMaintenance, getSmSalaryLock, setSmSalaryLock, subscribeFlags } from "./lib/appFlags.js";
+import { getMaintenance, setMaintenance, getSmSalaryLock, smSalaryLockedFor, setSmSalaryLock, subscribeFlags } from "./lib/appFlags.js";
 import { submitFeedback, listFeedback, setFeedbackStatus, resolveFeedback, deleteFeedback, subscribeFeedback } from "./lib/feedback.js";
 import {
   bDaysInYm, bDateOf, bonusNet, listBonusYear, saveBonusDay, subscribeBonus, bonusYearAgg,
@@ -3663,37 +3663,52 @@ function AdminMaintenance() {
 }
 
 function SmSalaryLockSwitch() {
-  const [locked, setLocked] = useState(null);
+  const [st, setSt] = useState(null); // { on, open:[] }
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let a = true;
-    const load = () => getSmSalaryLock().then((v) => { if (a) setLocked(v); });
+    const load = () => getSmSalaryLock().then((v) => { if (a) setSt(v); });
     load();
     const off = subscribeFlags(load);
     return () => { a = false; off(); };
   }, []);
-  if (locked === null) return null;
-  const toggle = async (on) => {
+  if (st === null) return null;
+  const save = async (next, title, body) => {
     setBusy(true);
-    try {
-      await setSmSalaryLock(on, ADMIN_KEY);
-      setLocked(on);
-      pushToast({ title: on ? "Розрахунок ЗП закрито для СМ" : "Розрахунок ЗП відкрито для СМ" });
-    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    try { await setSmSalaryLock(next, ADMIN_KEY); setSt(next); pushToast({ title, body }); }
+    catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
     setBusy(false);
+  };
+  const toggleSalon = (s) => {
+    const opened = st.open.includes(s.key);
+    save({ ...st, open: opened ? st.open.filter((k) => k !== s.key) : [...st.open, s.key] },
+      opened ? "Розрахунок ЗП закрито" : "Розрахунок ЗП відкрито", `${s.city}, ${shortAddr(s.addr)}`);
   };
   return (
     <div style={{ marginTop: 22, paddingTop: 18, borderTop: "1px solid var(--line)" }}>
       <h3>Розрахунок ЗП у кабінеті СМ</h3>
       <p className="hint" style={{ marginBottom: 14 }}>
         Поки замок увімкнено, СМ замість розрахунку ЗП бачать «Вибачте, це вікно на доопрацюванні», а нагадування «Подайте ЗП» не показується.
-        Розрахунок ЗП у кабінеті ТМ і «ЗП салонів» працюють як зазвичай.
+        Нижче можна відкрити розрахунок окремим магазинам. Розрахунок ЗП у кабінеті ТМ і «ЗП салонів» працюють як зазвичай.
       </p>
-      <label className={`maint-toggle ${locked ? "on" : ""}`}>
-        <input type="checkbox" checked={locked} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
+      <label className={`maint-toggle ${st.on ? "on" : ""}`}>
+        <input type="checkbox" checked={st.on} disabled={busy} onChange={(e) => save({ ...st, on: e.target.checked }, e.target.checked ? "Розрахунок ЗП закрито для СМ" : "Розрахунок ЗП відкрито для всіх СМ")} />
         <span className="maint-switch" />
-        <span className="maint-label">{locked ? "Розрахунок ЗП для СМ ЗАКРИТО" : "Розрахунок ЗП для СМ відкрито"}</span>
+        <span className="maint-label">{st.on ? "Розрахунок ЗП для СМ ЗАКРИТО" : "Розрахунок ЗП для СМ відкрито"}</span>
       </label>
+      {st.on && (
+        <>
+          <p className="hint" style={{ margin: "14px 0 8px" }}>Відкрито лише для цих магазинів:</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {SALONS.map((s) => (
+              <button key={s.key} className="btn-secondary small" disabled={busy} onClick={() => toggleSalon(s)}
+                style={st.open.includes(s.key) ? { borderColor: "var(--gold)", color: "var(--gold)" } : undefined}>
+                {st.open.includes(s.key) && <Check size={12} />} {s.city}, {shortAddr(s.addr)}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -10401,7 +10416,7 @@ function SalaryDeadlineBanner({ role, tmKey, salonKey }) {
           const pending = d.status === "draft" || d.status === "corrected";
           if (active) setState({ pending, overdue: dl.overdue, dl, ym });
         } else {
-          if (await getSmSalaryLock()) { if (active) setState(null); return; }
+          if (smSalaryLockedFor(await getSmSalaryLock(), salonKey)) { if (active) setState(null); return; }
           const emps = await listEmployees().catch(() => []);
           const rows = await salonSalaryRows(salonKey, ym, emps);
           const pending = rows.length === 0 || rows.some((r) => r.data.status !== "submitted" && r.data.status !== "corrected" && r.data.status !== "approved");
@@ -10534,11 +10549,11 @@ function SmSalaryGate({ salon }) {
   const [locked, setLocked] = useState(null);
   useEffect(() => {
     let a = true;
-    const load = () => getSmSalaryLock().then((v) => { if (a) setLocked(v); });
+    const load = () => getSmSalaryLock().then((v) => { if (a) setLocked(smSalaryLockedFor(v, salon.key)); });
     load();
     const off = subscribeFlags(load);
     return () => { a = false; off(); };
-  }, []);
+  }, [salon.key]);
   if (locked === null) return <div className="loading">Завантаження…</div>;
   if (locked) {
     return (

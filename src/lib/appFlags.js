@@ -27,6 +27,11 @@ export const getMaintenance = () => getFlag("maintenance").catch(() => null);
 export const setMaintenance = (on, message, by) =>
   setFlag("maintenance", { on: !!on, message: message || "", since: on ? new Date().toISOString() : null }, by);
 
-/* замок «Розрахунок ЗП» у кабінеті СМ: немає запису → замкнено (безпечне значення за замовчуванням) */
-export const getSmSalaryLock = () => getFlag("sm_salary_lock").then((f) => (f ? !!f.on : true)).catch(() => true);
-export const setSmSalaryLock = (on, by) => setFlag("sm_salary_lock", { on: !!on }, by);
+/* замок «Розрахунок ЗП» у кабінеті СМ: { on, open:[salonKey…] } — on закриває всім, open — винятки (магазини, де відкрито).
+   Немає запису → замкнено всім (безпечне значення за замовчуванням) */
+export const getSmSalaryLock = () =>
+  getFlag("sm_salary_lock")
+    .then((f) => ({ on: f ? !!f.on : true, open: Array.isArray(f?.open) ? f.open : [] }))
+    .catch(() => ({ on: true, open: [] }));
+export const smSalaryLockedFor = (st, salonKey) => !!st.on && !st.open.includes(salonKey);
+export const setSmSalaryLock = (st, by) => setFlag("sm_salary_lock", { on: !!st.on, open: st.open || [] }, by);
