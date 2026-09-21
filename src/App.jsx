@@ -2829,10 +2829,6 @@ function SmStoreSalary({ salon, review, ymProp }) {
               <div className="st-cap">Ставка ЗП</div>
               <div className="st-rate">{stNum(c0.baseRaw)} ₴</div>
             </div>
-            <div className="st-cell st-legend">
-              <div><span className="st-lg-box" />поле для внесення</div>
-              <div><span className="st-lg-num">870</span>рахується само</div>
-            </div>
             <div className="st-cell st-total">
               <div className="st-cap">До виплати по магазину</div>
               <div className="st-rate">{stNum(totalNet)} ₴</div>
@@ -12077,18 +12073,20 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 /* --- СМ: розрахунок ЗП магазину (одна таблиця) --- */
 .st-page{max-width:1560px;margin:0 auto;}
 .st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
-.st-strip{padding:18px 0;display:flex;flex-wrap:wrap;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
-.st-cell{padding:0 24px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
-.st-cell.st-total{border-right:none;margin-left:auto;align-items:flex-end;text-align:right;}
+.st-strip{padding:14px 0;display:flex;flex-wrap:nowrap;align-items:stretch;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
+.st-cell{flex:0 0 auto;padding:0 22px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
+.st-cell:first-child{flex:1 1 auto;min-width:0;padding-left:24px;}
+.st-cell.st-total{border-right:none;margin-left:auto;align-items:flex-end;text-align:right;justify-content:center;}
+@media (max-width:1150px){.st-strip{flex-wrap:wrap;row-gap:14px;}.st-cell:first-child{flex:1 1 100%;}}
 .st-cap{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);}
 .st-plan{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace;color:var(--ink);}
 .st-plan em,.st-adjs em{font-style:normal;font-family:'Inter',sans-serif;font-size:11px;color:var(--muted);margin-right:5px;}
 .st-plan b{font-size:20px;font-weight:600;}
 .st-plan label,.st-adjs label{display:inline-flex;align-items:center;}
-.st-pct{font-size:28px;font-weight:600;color:var(--st-neg);}
+.st-pct{font-size:26px;font-weight:600;color:var(--st-neg);}
 .st-pct.ok{color:var(--st-pos);}
 .st-adjs{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
-.st-rate{font-family:'IBM Plex Mono',monospace;font-size:28px;font-weight:600;color:var(--st-gold);}
+.st-rate{font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:600;color:var(--st-gold);}
 .st-hint{font-size:12.5px;color:var(--st-hint);font-weight:400;font-family:'Inter',sans-serif;}
 .st-warn{color:var(--st-neg);}
 .st-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow-x:auto;}
