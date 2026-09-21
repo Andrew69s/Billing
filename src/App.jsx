@@ -2957,8 +2957,10 @@ function SmStoreSalary({ salon }) {
             </div>
             <div className="st-cell">
               <div className="st-cap">Виконання без ЕЗ</div>
-              <div className={`st-pct st-pct-big ${pctNoEz >= 100 ? "ok" : ""}`}>{pctNoEz.toFixed(0)}%</div>
-              <div className="st-hint">{stNum(c0.factAdjusted - ez.total)} з {stNum(c0.monthPlan)}</div>
+              <div className="st-rate st-ez-sum">{stNum(c0.factAdjusted - ez.total)} ₴</div>
+              <div className="st-hint">
+                <span className={`st-pct-sm ${pctNoEz >= 100 ? "ok" : ""}`}>{pctNoEz.toFixed(0)}%</span> від плану {stNum(c0.monthPlan)}
+              </div>
             </div>
             <div className="st-cell">
               <div className="st-cap">Категорія · {d0.base.categoryOverride ? "вручну" : "авто"}</div>
@@ -11843,7 +11845,9 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-cb input:focus-visible + .st-cb-box{outline:2px solid var(--gold);outline-offset:2px;}
 .st-cb-t{font-size:12px;color:var(--ink);white-space:nowrap;pointer-events:none;}
 .st-ezv{font-family:'IBM Plex Mono',monospace;font-size:14px;}
-.st-pct-big{font-size:30px;line-height:1;}
+.st-ez-sum{color:var(--ink);}
+.st-pct-sm{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:var(--negative);}
+.st-pct-sm.ok{color:var(--positive);}
 .st tr.st-gross td{background:var(--surface-alt);border-top:1px solid var(--line-strong);}
 .st-lbl{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink);white-space:nowrap;}
 .st-two{display:flex;gap:6px;align-items:center;}
