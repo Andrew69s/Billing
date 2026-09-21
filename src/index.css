@@ -12,6 +12,12 @@ body,
   min-height: 100vh;
 }
 
+/* автомасштаб під екран (див. src/lib/screenFit.js): zoom на body чіпає і застосунок, і модалки-портали */
 body {
   background: #1b2431;
+  zoom: var(--ui-zoom, 1);
+}
+body,
+#root {
+  min-height: calc(100vh / var(--ui-zoom, 1));
 }

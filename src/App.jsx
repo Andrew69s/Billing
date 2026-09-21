@@ -2663,7 +2663,7 @@ function SmStoreSalary({ salon }) {
   const [armed, setArmed] = useState(false);
   const [preview, setPreview] = useState(null);
   const [shotsOpen, setShotsOpen] = useState(false);
-  const [fit, setFit] = useState({ s: 1, h: 0, phone: false }); // масштаб під екран
+  const [fit, setFit] = useState({ s: 1, w: 0, h: 0, phone: false }); // масштаб і логічна ширина під екран
   const fitRef = useRef(null);
   const innerRef = useRef(null);
   const saved = useRef({});      // empId → JSON останнього збереженого документа
@@ -2744,21 +2744,22 @@ function SmStoreSalary({ salon }) {
   }, [drafts]);
   useEffect(() => () => { if (touched.current) saveRef.current(); }, []);
 
-  // масштаб «під екран»: вся сторінка вміщується у вікно без прокруток (на телефоні — без масштабування)
+  // масштаб «під екран»: висота вікна задає масштаб, а ширину сторінки розтягуємо до країв —
+  // так вся сторінка вміщується без прокруток і не лишає порожніх смуг збоку (на телефоні — без масштабування)
   const stReady = !!drafts && emps.length > 0 && emps.every((e) => calcs[e.id]);
-  const W0 = Math.max(1180, 700 + emps.length * 168);
+  const W0 = Math.max(1150, Math.ceil((478 + emps.length * 168) / 0.72));
   useEffect(() => {
     const outer = fitRef.current, inner = innerRef.current;
     if (!outer || !inner) return undefined;
     const measure = () => {
       const availW = outer.clientWidth;
-      const docTop = outer.getBoundingClientRect().top + window.scrollY;
-      const availH = window.innerHeight - Math.min(docTop, 160) - 12;
+      const availH = window.innerHeight / (window.__uiZoom || 1) - 130; // мінус шапка кабінету над сторінкою
       const h0 = inner.offsetHeight;
-      if (availW < 760) { setFit((p) => (p.phone ? p : { s: 1, h: 0, phone: true })); return; }
-      const raw = Math.min(availW / W0, h0 > 0 ? availH / h0 : 1.5);
-      const sc = Math.max(0.6, Math.min(1.5, raw));
-      setFit((p) => (!p.phone && Math.abs(p.s - sc) < 0.004 && p.h === h0 ? p : { s: sc, h: h0, phone: false }));
+      if (availW < 760) { setFit((p) => (p.phone ? p : { s: 1, w: 0, h: 0, phone: true })); return; }
+      const sH = h0 > 0 ? availH / h0 : 1.5;
+      const sc = Math.round(Math.max(0.6, Math.min(1.5, sH, availW / W0)) * 100) / 100;
+      const w = Math.max(W0, Math.round(availW / sc / 8) * 8);
+      setFit((p) => (!p.phone && p.s === sc && Math.abs(p.w - w) < 16 && Math.abs(p.h - h0) < 3 ? p : { s: sc, w, h: h0, phone: false }));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -2883,8 +2884,8 @@ function SmStoreSalary({ salon }) {
 
   return (
     <div className="st-fit" ref={fitRef}>
-    <div className="st-fit-box" style={fit.phone ? undefined : { width: W0 * fit.s, height: fit.h * fit.s }}>
-    <div className="embedded st-page st-fit-in" ref={innerRef} style={fit.phone ? undefined : { width: W0, transform: `scale(${fit.s})` }}>
+    <div className="st-fit-box" style={fit.phone ? undefined : { width: (fit.w || W0) * fit.s, height: fit.h * fit.s }}>
+    <div className="embedded st-page st-fit-in" ref={innerRef} style={fit.phone ? undefined : { width: fit.w || W0, transform: `scale(${fit.s})` }}>
       <div className="month-picker">
         <select value={ym} onChange={(ev) => changeMonth(ev.target.value)}>
           {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
@@ -2953,7 +2954,7 @@ function SmStoreSalary({ salon }) {
 
           <div className="st-wrap">
             <table className="st">
-              <colgroup><col style={{ width: 92 }} /><col style={{ width: 176 }} /><col style={{ width: 210 }} /><col />{emps.map((e) => <col key={e.id} style={{ width: 168 }} />)}</colgroup>
+              <colgroup><col style={{ width: 92 }} /><col style={{ width: 176 }} /><col style={{ width: 210 }} /><col style={{ width: "28%" }} />{emps.map((e) => <col key={e.id} />)}</colgroup>
               <thead>
                 <tr>
                   <th />
@@ -10999,7 +11000,7 @@ const CSS = `
     radial-gradient(900px 520px at 8% 4%, rgba(120,150,200,.10), transparent 55%),
     linear-gradient(180deg, var(--bg-2), var(--bg));
   background-attachment:fixed;
-  min-height:100vh;
+  min-height:calc(100vh / var(--ui-zoom,1));
   overflow-x:clip;
   -webkit-font-smoothing:antialiased;
   text-rendering:optimizeLegibility;
@@ -11018,7 +11019,7 @@ input::placeholder,textarea::placeholder{color:var(--muted);opacity:.75;}
 select option{background:var(--surface);color:var(--ink);}
 
 /* ---------- role select & pin ---------- */
-.role-select{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px;}
+.role-select{display:flex;align-items:center;justify-content:center;min-height:calc(100vh / var(--ui-zoom,1));padding:32px;}
 .role-select-inner{max-width:440px;width:100%;text-align:center;}
 .role-eyebrow{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold-bright);margin-bottom:14px;padding:5px 12px;border:1px solid var(--line-dark);border-radius:999px;background:rgba(var(--sf),.03);}
 .role-select-inner h1{font-family:'Fraunces',serif;font-size:34px;line-height:1.1;color:var(--on-dark);margin:0 0 10px;font-weight:600;letter-spacing:-.015em;}
@@ -11800,6 +11801,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st tr.st-dim td:not(.st-g){opacity:.55;}
 .st-in{width:100%;box-sizing:border-box;height:24px;border-radius:6px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--ink);font:500 12.5px 'IBM Plex Mono',monospace;text-align:right;padding:0 8px;}
 .st-in:focus{outline:2px solid var(--gold);outline-offset:0;border-color:var(--gold);}
+.st-in-w{max-width:170px;display:block;margin-left:auto;}
 .st-in-m{width:78px;}.st-in-s{width:96px;}.st-in-xs{width:44px;}.st-in.off{opacity:.5;}
 .st-plan .st-in-w{width:120px;}
 .st-ck{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end;}
@@ -12283,8 +12285,8 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .planner-actions{display:flex;gap:8px;flex-shrink:0;}
 .planner-btn{display:inline-flex;align-items:center;gap:6px;background:rgba(var(--sf),.05);border:1px solid var(--line-dark);color:var(--on-dark-2);border-radius:999px;padding:7px 13px;font-size:12px;font-family:inherit;cursor:pointer;text-decoration:none;transition:border-color .15s var(--ease),color .15s var(--ease);}
 .planner-btn:hover{border-color:var(--gold);color:var(--gold-bright);}
-.planner-frame{width:100%;height:calc(100vh - 210px);min-height:520px;border:1px solid var(--line-dark);border-radius:var(--radius-md);background:var(--input-bg);box-shadow:var(--sh-2);}
-@media (max-width:720px){.planner-frame{height:calc(100vh - 260px);}}
+.planner-frame{width:100%;height:calc(100vh / var(--ui-zoom,1) - 210px);min-height:520px;border:1px solid var(--line-dark);border-radius:var(--radius-md);background:var(--input-bg);box-shadow:var(--sh-2);}
+@media (max-width:720px){.planner-frame{height:calc(100vh / var(--ui-zoom,1) - 260px);}}
 
 /* ---------- показники території ---------- */
 .tm-mod{animation:fadeIn .28s ease both;}
@@ -12321,7 +12323,7 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .tm-salon-chips .chip{font-size:11.5px;padding:6px 11px;border-radius:999px;border:1px solid var(--line-dark);background:rgba(var(--sf),.04);color:var(--on-dark-2);cursor:pointer;}
 .tm-salon-chips .chip.active{background:linear-gradient(180deg,var(--gold-bright),var(--gold));color:var(--gold-ink);border-color:transparent;font-weight:600;}
 .tm-grid-cap{font-size:12px;color:var(--on-dark-2);margin:0 0 8px;}
-.tm-grid-wrap{overflow:auto;max-height:calc(100vh - 340px);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
+.tm-grid-wrap{overflow:auto;max-height:calc(100vh / var(--ui-zoom,1) - 340px);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
 .tm-grid{width:100%;border-collapse:collapse;font-size:12.5px;}
 .tm-grid th{position:sticky;top:0;z-index:1;background:var(--surface-alt);color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:8px 8px;text-align:right;border-bottom:1px solid var(--line-strong);}
 .tm-grid th.tm-c-day{text-align:left;left:0;z-index:2;}
