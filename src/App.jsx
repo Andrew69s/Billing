@@ -29,7 +29,7 @@ import {
 import { emptySmData, SM_FIELD_LABELS } from "./smCalc.js";
 import { onUpdateReady, applyUpdate } from "./lib/pwaUpdate.js";
 import {
-  calcTm, calcTmBatch, calcSm, calcSmBatch, useTmCalc, useSmCalc,
+  calcTm, calcTmBatch, calcSmBatch, useTmCalc,
   subscribeCalcBusy, calcBusyNow, warmCalc,
 } from "./lib/calc.js";
 import {
@@ -2331,262 +2331,6 @@ function SelectField({ label, value, onChange, options, readOnly }) {
 /* =========================================================
    СМ · ФОРМА КРИТЕРІЇВ
 ========================================================= */
-function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRemoveShot, onPreview, readOnly, isQuarterEnd }) {
-  const shot = { screenshots: data.screenshots, onAddShot, onRemoveShot, onPreview, readOnly };
-  const catOptions = [
-    { value: "", label: `Авто${calc?.autoCategory ? ` (${calc.autoCategory})` : ""}` },
-    ...smCategoryOptions().map((c) => ({ value: c.key, label: `${c.key} · ${c.note}` })),
-  ];
-  const coefOptions = managerCoefOptions().map((c) => ({ value: c.key, label: c.label }));
-
-  return (
-    <div className="criteria-form">
-      <BlockHeader n="1" title="Основна частина за виконання плану" />
-      <SmItem num="1.1" title="Категорія та база" amount={showAmounts ? calc.baseAdjusted : undefined} screenshotKey="base" {...shot}>
-        <Field readOnly label="Середній ТО за 3 міс (авто, без ЕЗ)" suffix="грн" value={Math.round(calc?.avg3 || 0)} onChange={() => {}} />
-        <SelectField readOnly={readOnly} label="Категорія салону" value={data.base.categoryOverride} onChange={(v) => update(["base", "categoryOverride"], v)} options={catOptions} />
-        <Field readOnly label="План ТО на місяць (від ТМ)" suffix="грн" value={calc?.monthPlan || 0} onChange={() => {}} />
-        <Field readOnly={readOnly} label="Факт ТО за місяць" suffix="грн" value={data.base.monthFact} onChange={(v) => update(["base", "monthFact"], v)} />
-        <Field readOnly={readOnly} label="Чеки Віктора (фіктивні)" suffix="грн" value={data.base.viktorChecks} onChange={(v) => update(["base", "viktorChecks"], v)} />
-        <Field readOnly={readOnly} label="Низькорентабельні чеки" suffix="грн" value={data.base.lowMarginChecks} onChange={(v) => update(["base", "lowMarginChecks"], v)} />
-        <Field readOnly={readOnly} label="Вихідних за місяць (факт)" value={data.base.daysOff} onChange={(v) => update(["base", "daysOff"], v)} />
-        {showAmounts && (
-          <div className="ez-sub">
-            <span>Факт скоригований: {fmt(calc.factAdjusted)} (мінус Віктор, мінус 50% низькорентабельних)</span>
-            <span>% виконання плану ТО: {calc.planPercent.toFixed(1)}%</span>
-            <span>
-              Категорія: {calc.category}
-              {!calc.hasHistory && " (за самовведеним «Середній ТО» — історії ще нема)"}
-              {calc.hasHistory && calc.avg3Months < 3 && ` (середнє за ${calc.avg3Months} міс. — повна історія за 3 міс. накопичиться згодом)`}
-            </span>
-            <span>Брекет: {planBracketLabel(calc.bracket)}</span>
-            <span>База: {fmt(calc.baseRaw)}</span>
-            <span>Відпрац. коеф: {calc.factor.toFixed(2)} (норма вихідних {area === "місто" ? 10 : 9})</span>
-            {!calc.hasPlan && <span>План на цей місяць ще не внесено ТМ — використано власне значення.</span>}
-          </div>
-        )}
-      </SmItem>
-
-      <BlockHeader n="2" title="Мотивація керуючого" />
-      <SmItem num="2.1" title="Атестація співробітників ФМ" amount={showAmounts ? calc.mgr.attest : undefined} screenshotKey="attest" {...shot}>
-        <CheckField readOnly={readOnly} label="Атестація всіма співробітниками ≥ 98%" checked={data.manager.attestationAll} onChange={(v) => update(["manager", "attestationAll"], v)} />
-      </SmItem>
-      <SmItem num="2.2" title="Підтримання стандартів ФМ" amount={showAmounts ? calc.mgr.standards : undefined} screenshotKey="standards" {...shot}>
-        <CheckField readOnly={readOnly} label="Без зауважень (бонус 2 000)" checked={data.manager.noRemarks} onChange={(v) => update(["manager", "noRemarks"], v)} />
-        <Field readOnly={readOnly} label="Виявлені зауваження (−200)" value={data.manager.remarksFound} onChange={(v) => update(["manager", "remarksFound"], v)} />
-        <Field readOnly={readOnly} label="Невиправлені зауваження (−400)" value={data.manager.remarksUnfixed} onChange={(v) => update(["manager", "remarksUnfixed"], v)} />
-        <div className="hint">Штраф до −2 000 грн. Виявлене та виправлене зауваження не сумуються.</div>
-      </SmItem>
-      <SmItem num="2.3" title="Коефіцієнт керуючого" amount={showAmounts ? calc.mgr.coefBonus : undefined} screenshotKey="coef" {...shot}>
-        <SelectField readOnly={readOnly} label="Статус" value={String(data.manager.coef)} onChange={(v) => update(["manager", "coef"], v)} options={coefOptions} />
-        <div className="hint">Додатковий бонус = ставка за категорією ({fmt(calc.baseRaw)}) × (коеф − 1). Умова переходу на «Керуючий»: 2 з 3 планів по СМ.</div>
-      </SmItem>
-
-      <BlockHeader n="3" title="Бонусна частина" />
-      <SmItem num="3.1" title="Обіг з дзвінків" amount={showAmounts ? calc.bonus.calls : undefined} screenshotKey="calls" {...shot}>
-        <Field readOnly label="Загальний план ТО на місяць (від ТМ)" suffix="грн" value={calc?.monthPlan || 0} onChange={() => {}} />
-        <Field readOnly={readOnly} label="Факт. оборот з дзвінків" suffix="грн" value={data.bonus.callsRevenue} onChange={(v) => update(["bonus", "callsRevenue"], v)} />
-        {showAmounts && (
-          <div className="ez-sub">
-            <span>План по дзвінках (10% від плану ТО): {fmt(calc.bonus.callsPlanRevenue)} → ставка {calc.bonus.callsPct}%</span>
-            <span>{fmt(calc.bonus.callsTeam)} ÷ {calc.bonus.team} = {fmt(calc.bonus.calls)} кожному</span>
-          </div>
-        )}
-      </SmItem>
-      <SmItem num="3.2" title="Заміна на іншому магазині" amount={showAmounts ? calc.bonus.replacement : undefined} screenshotKey="replace" {...shot}>
-        <Field readOnly={readOnly} label="Днів заміни" value={data.bonus.replacementDays} onChange={(v) => update(["bonus", "replacementDays"], v)} />
-        {showAmounts && <div className="hint">Денна ставка на своєму магазині: {fmt(calc.dailyRate)} · +20% за день заміни</div>}
-      </SmItem>
-      <SmItem num="3.3" title="Середній чек" amount={showAmounts ? calc.bonus.avgCheck : undefined} screenshotKey="sc" {...shot}>
-        {data.bonus.avgCheckOk !== undefined ? (
-          <>
-            <Field readOnly={readOnly} label="Бонус за середній чек" suffix="грн" value={data.bonus.avgCheckSum || 0} onChange={(v) => update(["bonus", "avgCheckSum"], v)} />
-            <CheckField readOnly={readOnly} label="Зараховано" checked={!!data.bonus.avgCheckOk} onChange={(v) => update(["bonus", "avgCheckOk"], v)} />
-          </>
-        ) : (
-          <>
-            <Field readOnly={readOnly} label="Факт. середній чек" suffix="грн" value={data.bonus.avgCheckFact} onChange={(v) => update(["bonus", "avgCheckFact"], v)} />
-            <Field readOnly label="Поріг 1 → 700 грн" value={calc?.planThresholds?.scN1 || 0} onChange={() => {}} />
-            <Field readOnly label="Поріг 2 → 1 500 грн" value={calc?.planThresholds?.scN2 || 0} onChange={() => {}} />
-            <Field readOnly label="Поріг 3 → 2 000 грн" value={calc?.planThresholds?.scN3 || 0} onChange={() => {}} />
-            <div className="hint">Пороги на місяць задає ТМ.</div>
-          </>
-        )}
-      </SmItem>
-      <SmItem num="3.4" title="Довжина чека" amount={showAmounts ? calc.bonus.checkLen : undefined} screenshotKey="cl" {...shot}>
-        {data.bonus.checkLenOk !== undefined ? (
-          <>
-            <Field readOnly={readOnly} label="Бонус за довжину чека" suffix="грн" value={data.bonus.checkLenSum || 0} onChange={(v) => update(["bonus", "checkLenSum"], v)} />
-            <CheckField readOnly={readOnly} label="Зараховано" checked={!!data.bonus.checkLenOk} onChange={(v) => update(["bonus", "checkLenOk"], v)} />
-          </>
-        ) : (
-          <>
-            <Field readOnly={readOnly} label="Факт. довжина чека" value={data.bonus.checkLenFact} onChange={(v) => update(["bonus", "checkLenFact"], v)} />
-            <Field readOnly label="Поріг 1 → 700 грн" value={calc?.planThresholds?.clN1 || 0} onChange={() => {}} />
-            <Field readOnly label="Поріг 2 → 1 500 грн" value={calc?.planThresholds?.clN2 || 0} onChange={() => {}} />
-            <Field readOnly label="Поріг 3 → 2 000 грн" value={calc?.planThresholds?.clN3 || 0} onChange={() => {}} />
-            <div className="hint">Пороги на місяць задає ТМ.</div>
-          </>
-        )}
-      </SmItem>
-      <SmItem num="3.5" title="Атестація (курси)" amount={showAmounts ? calc.bonus.courses : undefined} screenshotKey="courses" {...shot}>
-        <CheckField readOnly={readOnly} label="≥ 95% середньо-місячних курсів, без перепризначення" checked={data.bonus.coursesOk} onChange={(v) => update(["bonus", "coursesOk"], v)} />
-      </SmItem>
-      <SmItem num="3.6" title="Продажі із сайту через НП" amount={showAmounts ? calc.bonus.siteNp : undefined} screenshotKey="np" {...shot}>
-        <Field readOnly={readOnly} label="Оборот продажів через НП" suffix="грн" value={data.bonus.siteNpRevenue} onChange={(v) => update(["bonus", "siteNpRevenue"], v)} />
-        <div className="hint">4% на команду{showAmounts ? ` · ${fmt(calc.bonus.siteNpTeam)} ÷ ${calc.bonus.team} = ${fmt(calc.bonus.siteNp)} кожному` : ""}</div>
-      </SmItem>
-      <SmItem num="3.7" title="Продаж по БН" amount={showAmounts ? calc.bonus.bn : undefined} screenshotKey="bn" {...shot}>
-        <Field readOnly={readOnly} label="Оборот по БН" suffix="грн" value={data.bonus.bnRevenue} onChange={(v) => update(["bonus", "bnRevenue"], v)} />
-        <div className="hint">4% на команду{showAmounts ? ` · ${fmt(calc.bonus.bnTeam)} ÷ ${calc.bonus.team} = ${fmt(calc.bonus.bn)} кожному` : ""}</div>
-      </SmItem>
-
-      <BlockHeader n="4" title="Додаткова мотивація за продаж PPI" />
-      <SmItem num="4.1" title="Продаж PPI" amount={showAmounts ? calc.ppi.bonus : undefined} screenshotKey="ppi" {...shot}>
-        <Field readOnly={readOnly} label="Оборот по категорії PPI" suffix="грн" value={data.ppi.ppiRevenue} onChange={(v) => update(["ppi", "ppiRevenue"], v)} />
-        <CheckField readOnly={readOnly} label="План PPI закрито" checked={data.ppi.planClosed} onChange={(v) => update(["ppi", "planClosed"], v)} />
-        {showAmounts && <div className="hint">{calc.ppi.pct}% від обороту PPI ({data.ppi.planClosed ? "план закрито" : "план не закрито"}) · {fmt(calc.ppi.teamBonus)} ÷ {calc.ppi.team} = {fmt(calc.ppi.bonus)} кожному</div>}
-      </SmItem>
-
-      <BlockHeader n="5" title="Рекорд, квартальна премія та бонуси" />
-      <SmItem num="5.1" title="Бонус за рекордні показники" amount={showAmounts ? calc.record.bonus : undefined} screenshotKey="record" {...shot}>
-        <Field readOnly={readOnly} label="Оборот ТО за місяць (команда)" suffix="грн" value={data.record.monthlyTo} onChange={(v) => update(["record", "monthlyTo"], v)} />
-        <Field readOnly={readOnly} label="Попередній рекорд ТО" suffix="грн" value={data.record.prevRecord} onChange={(v) => update(["record", "prevRecord"], v)} />
-        {showAmounts && (
-          <div className="hint">
-            Поточний поріг рекорду: {fmt(calc.record.threshold)} (мін. 1 млн, крок +10%). Бонус — 1% від ТО на команду.
-            {calc.record.beaten ? ` Рекорд перебито ✔ · ${fmt(calc.record.teamBonus)} ÷ ${calc.record.team} = ${fmt(calc.record.bonus)} кожному` : ""}
-          </div>
-        )}
-      </SmItem>
-      {isQuarterEnd && (
-        <SmItem num="5.2" title="Квартальна премія" amount={showAmounts ? calc.quarterly : undefined} screenshotKey="quarter" {...shot}>
-          <CheckField readOnly={readOnly} label="3/3 місяці план по обороту закрито" checked={data.quarterly.threeOfThree} onChange={(v) => update(["quarterly", "threeOfThree"], v)} />
-          <Field readOnly={readOnly} label="Сума 3 останніх ЗП" suffix="грн" value={data.quarterly.last3SalarySum} onChange={(v) => update(["quarterly", "last3SalarySum"], v)} />
-          <div className="hint">Премія — 10% від суми трьох останніх заробітних плат.</div>
-        </SmItem>
-      )}
-      <SmItem num="5.3" title="Бонус" amount={showAmounts ? (calc.bonusExtra || 0) : undefined} screenshotKey="bonusExtra" {...shot}>
-        <Field readOnly={readOnly} label="Сума" suffix="грн" value={data.bonusExtra?.amount || 0} onChange={(v) => update(["bonusExtra", "amount"], v)} />
-        <label className="over-field" style={{ maxWidth: "100%" }}><span>За що (необовʼязково)</span>
-          <input readOnly={readOnly} value={data.bonusExtra?.comment || ""} onChange={(e) => update(["bonusExtra", "comment"], e.target.value)} placeholder="напр. прибирання, додатковий обов'язок" />
-        </label>
-        <div className="hint">Будь-який додатковий бонус, який не входить в інші пункти — вносите самі, ТМ бачить і звіряє при перевірці.</div>
-      </SmItem>
-    </div>
-  );
-}
-
-/* =========================================================
-   СМ · ЗВЕДЕННЯ ЗП
-========================================================= */
-function SmSummary({ data, calc, expandedBlock, onToggle, editable, deductEditable, onAdjChange, onSaveAdj, savingAdj, onSetPaymentStatus, monthLbl }) {
-  const grand = calc.total;
-  const official = data.adj.official || 0;
-  const advance = data.adj.advance || 0;
-  const birthdays = data.adj.birthdays || 0;
-  const inventory = data.adj.inventory || 0;
-  const ownUse = data.adj.ownUse || 0;
-  const accrued = calc.grossTotal != null ? calc.grossTotal : grand + advance + official + birthdays + inventory + ownUse;
-  const deductFields = editable || deductEditable;
-
-  const baseItems = [
-    { label: `База (${calc.category} · ${planBracketLabel(calc.bracket)})`, amount: calc.baseRaw },
-    { label: `Коеф. відпрацьованих змін ×${calc.factor.toFixed(2)}`, amount: calc.baseAdjusted - calc.baseRaw },
-  ];
-  const mgrItems = [
-    { label: "Атестація співробітників", amount: calc.mgr.attest },
-    { label: "Стандарти ФМ", amount: calc.mgr.standards },
-    { label: "Коефіцієнт керуючого", amount: calc.mgr.coefBonus },
-  ];
-  const bonusItems = [
-    { label: `Обіг з дзвінків (${calc.bonus.callsPct}%)`, amount: calc.bonus.calls },
-    { label: "Заміна на іншому магазині", amount: calc.bonus.replacement },
-    { label: "Середній чек", amount: calc.bonus.avgCheck },
-    { label: "Довжина чека", amount: calc.bonus.checkLen },
-    { label: "Атестація (курси)", amount: calc.bonus.courses },
-    { label: "Сайт через НП (4%)", amount: calc.bonus.siteNp },
-    { label: "Продаж по БН (4%)", amount: calc.bonus.bn },
-  ];
-
-  return (
-    <div className="summary">
-      <SummaryBlock id="base" title="1 · Основна частина" total={calc.baseAdjusted} items={baseItems} expanded={expandedBlock === "base"} onToggle={onToggle} />
-      <SummaryBlock id="mgr" title="2 · Мотивація керуючого" total={calc.mgr.subtotal} items={mgrItems} expanded={expandedBlock === "mgr"} onToggle={onToggle} />
-      <SummaryBlock id="bonus" title="3 · Бонусна частина" total={calc.bonus.subtotal} items={bonusItems} expanded={expandedBlock === "bonus"} onToggle={onToggle} />
-
-      <div className="summary-row"><span>4 · Продаж PPI ({calc.ppi.pct}%)</span><b>{fmt(calc.ppi.bonus)}</b></div>
-      <div className="summary-row"><span>5 · Рекордний показник{calc.record.beaten ? " ✔" : ""}</span><b>{fmt(calc.record.bonus)}</b></div>
-      {calc.quarterly !== 0 && (
-        <div className="summary-row"><span>5 · Квартальна премія</span><b>{fmt(calc.quarterly)}</b></div>
-      )}
-      {(calc.bonusExtra || 0) !== 0 && (
-        <div className="summary-row"><span>5 · Бонус{data.bonusExtra?.comment ? ` (${data.bonusExtra.comment})` : ""}</span><b>{fmt(calc.bonusExtra)}</b></div>
-      )}
-
-      {editable ? (
-        <div className="adj-row">
-          <span>Додатково (ТМ)</span>
-          <input className="adj-comment" placeholder="коментар" value={data.adj.comment} onChange={(e) => onAdjChange({ ...data.adj, comment: e.target.value })} />
-          <NumInput className="adj-amount" value={data.adj.amount} onChange={(v) => onAdjChange({ ...data.adj, amount: v })} />
-          <span>грн</span>
-        </div>
-      ) : (data.adj.amount || 0) !== 0 && (
-        <div className="summary-row"><span>Додатково{data.adj.comment ? ` (${data.adj.comment})` : ""}</span><b>{fmt(data.adj.amount)}</b></div>
-      )}
-
-      <div className="summary-row total"><span>Загалом нараховано</span><b>{fmt(accrued)}</b></div>
-
-      {deductFields ? (
-        <>
-          <div className="adj-row"><span>Офіційно на картку</span>
-            <NumInput className="adj-amount" value={data.adj.official} onChange={(v) => onAdjChange({ ...data.adj, official: v })} /><span>грн</span>
-          </div>
-          <div className="adj-row"><span>Аванс готівка</span>
-            <NumInput className="adj-amount" value={data.adj.advance} onChange={(v) => onAdjChange({ ...data.adj, advance: v })} /><span>грн</span>
-          </div>
-          <div className="adj-row"><span>Дні народження</span>
-            <NumInput className="adj-amount" value={data.adj.birthdays} onChange={(v) => onAdjChange({ ...data.adj, birthdays: v })} /><span>грн</span>
-          </div>
-          <div className="adj-row"><span>Інвентаризація</span>
-            <NumInput className="adj-amount" value={data.adj.inventory} onChange={(v) => onAdjChange({ ...data.adj, inventory: v })} /><span>грн</span>
-          </div>
-          <div className="adj-row"><span>Товар для власних потреб</span>
-            <NumInput className="adj-amount" value={data.adj.ownUse} onChange={(v) => onAdjChange({ ...data.adj, ownUse: v })} /><span>грн</span>
-            {onSaveAdj && <button className="btn-secondary small" onClick={onSaveAdj} disabled={savingAdj}>{savingAdj ? "…" : "Зберегти"}</button>}
-          </div>
-        </>
-      ) : (
-        <>
-          {official !== 0 && <div className="summary-row"><span>Офіційно на картку</span><b>-{fmt(official)}</b></div>}
-          {advance !== 0 && <div className="summary-row"><span>Аванс готівка</span><b>-{fmt(advance)}</b></div>}
-          {birthdays !== 0 && <div className="summary-row"><span>Дні народження</span><b>-{fmt(birthdays)}</b></div>}
-          {inventory !== 0 && <div className="summary-row"><span>Інвентаризація</span><b>-{fmt(inventory)}</b></div>}
-          {ownUse !== 0 && <div className="summary-row"><span>Товар для власних потреб</span><b>-{fmt(ownUse)}</b></div>}
-        </>
-      )}
-
-      <div className="summary-row grand"><span>Загальна ЗП за {monthLbl}</span><b>{fmt(grand)}</b></div>
-
-      <div className="payment-row">
-        <span>Статус виплати:</span>
-        <span className={`badge ${data.paymentStatus === "paid" ? "badge-ok" : data.paymentStatus === "to_pay" ? "badge-warn" : "badge-off"}`}>
-          {data.paymentStatus === "paid" ? "Виплачено" : data.paymentStatus === "to_pay" ? "До виплати" : "Не підтверджено"}
-        </span>
-        {editable && data.paymentStatus !== "to_pay" && data.paymentStatus !== "paid" && (
-          <button className="btn-secondary small" onClick={() => onSetPaymentStatus("to_pay")}>Позначити «До виплати»</button>
-        )}
-        {editable && data.paymentStatus === "to_pay" && (
-          <button className="btn-secondary small" onClick={() => onSetPaymentStatus("paid")}>Позначити «Виплачено»</button>
-        )}
-        {editable && data.paymentStatus === "paid" && (
-          <button className="btn-secondary small" onClick={() => onSetPaymentStatus("to_pay")}>Повернути «До виплати»</button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /* =========================================================
    СМ · КОРЕКТИВИ ВІД ТМ (сторона СМ)
 ========================================================= */
@@ -2948,6 +2692,20 @@ function SmStoreSalary({ salon, review, ymProp }) {
     } catch (err) { pushToast({ title: "Не вдалося зберегти", body: String(err.message || err) }); }
     setSaving(false);
   };
+  // статус виплати (ТМ): пишемо лише його, не чіпаючи можливі незбережені правки
+  const setPayment = async (e, status) => {
+    try {
+      const at = new Date().toISOString();
+      const base = JSON.parse(saved.current[e.id] || "{}");
+      const nextSaved = { ...base, paymentStatus: status, paymentStatusAt: at };
+      await saveSmData(salon.key, e.id, ym, nextSaved);
+      saved.current[e.id] = JSON.stringify(nextSaved);
+      setDrafts((dd) => ({ ...dd, [e.id]: { ...dd[e.id], paymentStatus: status, paymentStatusAt: at } }));
+      const body = `${e.full_name} · ${monthLabel(ym)}`;
+      if (status === "to_pay") { notify({ recipient: salon.key, kind: "salary", title: "ЗП призначено до виплати", body, actor: "manager", link: "salary" }); pushToast({ title: "Призначено до виплати", body }); }
+      if (status === "paid") { notify({ recipient: salon.key, kind: "salary", title: "ЗП виплачено", body, actor: "manager", link: "salary" }); pushToast({ title: "Позначено як виплачено", body }); }
+    } catch (err) { pushToast({ title: "Не вдалося", body: String(err.message || err) }); }
+  };
   const cancelEdit = () => { touched.current = false; setEditMode(false); setTmComment(""); setLoadKey((k) => k + 1); };
   const approveAll = async () => {
     if (!armed) { setArmed(true); setTimeout(() => setArmed(false), 5000); return; }
@@ -3265,139 +3023,30 @@ function SmStoreSalary({ salon, review, ymProp }) {
               </div>
             )
           ) : null}
+
+          {isReview && canEditReview && (
+            <div className="st-pay-strip">
+              <div className="st-cap">Виплата</div>
+              {emps.map((e) => {
+                const ps = d(e).paymentStatus;
+                return (
+                  <div className="st-pay-row" key={e.id}>
+                    <span className="st-pay-nm">{e.full_name}</span>
+                    <span className={`badge ${ps === "paid" ? "badge-ok" : ps === "to_pay" ? "badge-warn" : "badge-off"}`}>{ps === "paid" ? "Виплачено" : ps === "to_pay" ? "До виплати" : "Не підтверджено"}</span>
+                    <span className="st-spacer" />
+                    {ps !== "to_pay" && ps !== "paid" && <button className="btn-secondary small" onClick={() => setPayment(e, "to_pay")}>Позначити «До виплати»</button>}
+                    {ps === "to_pay" && <button className="btn-secondary small" onClick={() => setPayment(e, "paid")}>Позначити «Виплачено»</button>}
+                    {ps === "paid" && <button className="btn-secondary small" onClick={() => setPayment(e, "to_pay")}>Повернути «До виплати»</button>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </>
       )}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
     </div>
     </div>
-    </div>
-  );
-}
-
-/* =========================================================
-   СМ · ДЕТАЛЬ ДЛЯ ТМ / КЕРІВНИКА (перегляд + корективи)
-========================================================= */
-function SalonDetail({ salon, emp, ym, reviewer, onBack }) {
-  const [data, setData] = useState(emptySmData());
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [preview, setPreview] = useState(null);
-  const [editMode, setEditMode] = useState(false);
-  const [comment, setComment] = useState("");
-  const [expandedBlock, setExpandedBlock] = useState(null);
-
-  const canEdit = reviewer === "tm"; // корективи вносить ТМ; керівник дивиться
-  const qMonths = quarterMonths(ymToQuarter(ym));
-  const isQuarterEnd = ym === qMonths[2];
-  const empId = emp?.id;
-  const notifBody = `${emp?.full_name || ""} · ${monthLabel(ym)}`;
-
-  useEffect(() => {
-    if (!empId) return undefined;
-    let active = true;
-    setLoading(true); setEditMode(false); setComment(""); setExpandedBlock(null);
-    loadSmData(salon.key, empId, ym).then((d) => { if (active) { setData(d); setLoading(false); } });
-    return () => { active = false; };
-  }, [salon.key, empId, ym]);
-
-  const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
-  const onAddShot = makeAddShot(setData);
-  const onRemoveShot = makeRemoveShot(setData);
-  const toggleBlock = (id) => setExpandedBlock((p) => (p === id ? null : id));
-
-  const { calc } = useSmCalc(data, salon.key, ym);
-
-  const saveAdjOnly = async () => {
-    setSaving(true);
-    try { await saveSmData(salon.key, empId, ym, data); pushToast({ title: "Коригування збережено" }); }
-    catch (e) { pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) }); }
-    setSaving(false);
-  };
-  const setPaymentStatus = async (status) => {
-    const next = { ...data, paymentStatus: status, paymentStatusAt: new Date().toISOString() };
-    setData(next);
-    await saveSmData(salon.key, empId, ym, next);
-    if (status === "to_pay") { notify({ recipient: salon.key, kind: "salary", title: "ЗП призначено до виплати", body: notifBody, actor: "manager", link: "salary" }); pushToast({ title: "Призначено до виплати" }); }
-    if (status === "paid") { notify({ recipient: salon.key, kind: "salary", title: "ЗП виплачено", body: notifBody, actor: "manager", link: "salary" }); pushToast({ title: "Позначено як виплачено" }); }
-  };
-  const cancelEdit = async () => {
-    const d = await loadSmData(salon.key, empId, ym);
-    setData(d); setComment(""); setEditMode(false);
-  };
-  const saveCorrections = async () => {
-    setSaving(true);
-    const diff = smBuildDiff(data.smSnapshot, data);
-    const next = { ...data, status: "corrected", correctedAt: new Date().toISOString(), tmComment: comment, correctionDiff: diff };
-    try {
-      await saveSmData(salon.key, empId, ym, next);
-      setData(next); setEditMode(false); setComment("");
-      notify({ recipient: salon.key, kind: "salary", title: "ТМ вніс корективи у ЗП", body: notifBody, actor: "tm", link: "salary" });
-      pushToast({ title: "Корективи збережено", body: "Салон отримає сповіщення" });
-    } catch (e) {
-      pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) });
-    }
-    setSaving(false);
-  };
-  const approveToManager = async () => {
-    if (!confirm(`Передати ЗП ${emp?.full_name || ""} за ${monthLabel(ym)} керівнику?`)) return;
-    const next = { ...data, tmApproved: true, tmApprovedAt: new Date().toISOString() };
-    setData(next);
-    try {
-      await saveSmData(salon.key, empId, ym, next);
-      pushToast({ title: "Передано керівнику", body: `${emp?.full_name || ""} · ${monthLabel(ym)}` });
-    } catch (e) {
-      pushToast({ title: "Не вдалося передати", body: String(e.message || e) });
-    }
-  };
-
-  return (
-    <div className="embedded">
-      <div className="detail-head">
-        <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> До списку співробітників</button>
-        <span className="detail-title">{emp?.full_name} <span className="detail-sub">· {salonLabel(salon)} · {EMP_ROLES[emp?.role]} · {monthLabel(ym)}</span></span>
-      </div>
-
-      {loading || !calc ? <div className="loading">Завантаження…</div> : (
-        <>
-          <div className="status-line">
-            Статус: {data.status === "submitted" ? "подано на погодження" : data.status === "corrected" ? "внесено корективи" : "не подано"}
-            {data.submittedAt && ` · подано ${fmtDate(data.submittedAt)}`}
-            {data.tmApproved && " · передано керівнику"}
-          </div>
-          {data.smReplyComment && <div className="reply-banner"><b>Коментар салону:</b> {data.smReplyComment}</div>}
-
-          {canEdit && (!editMode ? (
-            <div className="edit-toggle-bar">
-              <button className="btn-secondary" onClick={() => setEditMode(true)}><Pencil size={14} /> Внести корективи</button>
-              {!data.tmApproved && data.status !== "draft" && (
-                <button className="btn-secondary" onClick={approveToManager}><Check size={14} /> Передати керівнику</button>
-              )}
-            </div>
-          ) : (
-            <div className="correction-bar">
-              <label className="over-field" style={{ maxWidth: "100%" }}>
-                Коментар до корективи (побачить салон)
-                <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
-              </label>
-              <div className="correction-actions">
-                <button className="btn-secondary" onClick={cancelEdit}>Скасувати</button>
-                <button className="btn-primary" onClick={saveCorrections} disabled={saving}>{saving ? "Збереження…" : "Зберегти корективи"}</button>
-              </div>
-            </div>
-          ))}
-
-          <SmCriteriaForm
-            data={data} update={update} calc={calc} area={salon.area} showAmounts
-            onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={!editMode} isQuarterEnd={isQuarterEnd}
-          />
-          <SmSummary
-            data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock}
-            editable={canEdit} onAdjChange={(a) => setData((p) => ({ ...p, adj: a }))}
-            onSaveAdj={saveAdjOnly} savingAdj={saving} onSetPaymentStatus={setPaymentStatus} monthLbl={monthLabel(ym)}
-          />
-        </>
-      )}
-      {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
     </div>
   );
 }
@@ -3427,8 +3076,6 @@ function SalonReviewPanel({ tmKey, reviewer }) {
   const [employees, setEmployees] = useState(null);
   const [bySalon, setBySalon] = useState(null); // { salonKey: rows[] }
   const [openSalon, setOpenSalon] = useState(null);
-  const [openEmp, setOpenEmp] = useState(null);
-  const [reloadN, setReloadN] = useState(0);
 
   const months = useMemo(() => recentMonths(12), []);
 
@@ -3444,13 +3091,7 @@ function SalonReviewPanel({ tmKey, reviewer }) {
       if (active) setBySalon(out);
     })();
     return () => { active = false; };
-  }, [salons, ym, employees, reloadN, openEmp]);
-
-  if (openSalon && openEmp) {
-    const salon = salonByKey(openSalon);
-    const emp = (employees || []).find((e) => e.id === openEmp);
-    return <SalonDetail salon={salon} emp={emp} ym={ym} reviewer={reviewer} onBack={() => { setOpenEmp(null); setReloadN((n) => n + 1); }} />;
-  }
+  }, [salons, ym, employees]);
 
   if (!employees || !bySalon) return <div className="loading">Завантаження…</div>;
 
@@ -3484,24 +3125,7 @@ function SalonReviewPanel({ tmKey, reviewer }) {
           })}
         </div>
       ) : (
-        <>
-        <SmStoreSalary key={`${openSalon}:${ym}:${reloadN}`} salon={salonByKey(openSalon)} review={reviewer} ymProp={ym} />
-        <div className="salon-list" style={{ marginTop: 22 }}>
-          <div className="emp-group-head" style={{ borderRadius: "var(--radius-md)", marginBottom: 4 }}>Детально по співробітнику (скріни, оплата, покроковий огляд)</div>
-          {(bySalon[openSalon] || []).length === 0 && <div className="admin-empty">У магазині немає співробітників.</div>}
-          {(bySalon[openSalon] || []).map((r) => (
-            <button className="salon-row" key={r.emp.id} onClick={() => setOpenEmp(r.emp.id)}>
-              <span className="salon-row-main">
-                <span className="salon-row-name">{r.emp.full_name}</span>
-                <span className="salon-row-sub">{EMP_ROLES[r.emp.role]}</span>
-              </span>
-              {smStatusBadge(r.data.status)}
-              {r.data.tmApproved && <span className="badge badge-warn">керівнику</span>}
-              <b className="salon-row-total">{fmt(r.total)}</b>
-            </button>
-          ))}
-        </div>
-        </>
+        <SmStoreSalary key={`${openSalon}:${ym}`} salon={salonByKey(openSalon)} review={reviewer} ymProp={ym} />
       )}
     </div>
   );
@@ -12494,6 +12118,10 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-fs{border:0;padding:0;margin:0;min-width:0;}
 .st-fs:disabled .st-in,.st-fs:disabled .st-sel{opacity:1;color:var(--ink);-webkit-text-fill-color:var(--ink);cursor:default;}
 .st-fs:disabled .st-cb,.st-fs:disabled .st-cb input{cursor:default;}
+.st-pay-strip{margin-top:16px;padding:12px 16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);}
+.st-pay-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--line);}
+.st-pay-row:first-of-type{border-top:none;}
+.st-pay-nm{font-size:13px;font-weight:600;color:var(--ink);min-width:170px;}
 .st-review-bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:14px 0;}
 
 .inv-issuer{display:flex;gap:8px;}
