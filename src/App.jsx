@@ -8590,6 +8590,7 @@ function SupplyItemForm({ item, onClose, onSaved }) {
 /* --- Мій склад (салон) --- */
 function SupplySalonStock({ salonKey, items, stock, onOrderAll }) {
   const sm = stockMap(stock, salonKey);
+  const cs = stockMap(stock, CENTRAL); // залишок Основного складу — щоб бачити, чи є що замовляти
   const rows = items.map((i) => {
     const qty = sm[i.id] || 0;
     return { i, qty, need: Math.max(0, i.min_salon - qty), state: stockState(qty, i.min_salon), value: qty * i.unit_cost };
@@ -8605,11 +8606,12 @@ function SupplySalonStock({ salonKey, items, stock, onOrderAll }) {
       {need.length > 0 && <button className="btn-secondary small" style={{ margin: "4px 0 12px" }} onClick={() => onOrderAll(need.map((r) => ({ item_id: r.i.id, qty: String(r.need) })))}>Замовити все, що нижче мін</button>}
       <div className="wh-tw">
         <table className="wh-tbl">
-          <thead><tr><th>Позиція</th><th>Залишок</th><th>Мін</th><th>Замовити</th><th>Вартість</th></tr></thead>
+          <thead><tr><th>Позиція</th><th>Залишок Основного складу</th><th>Залишок</th><th>Мін</th><th>Замовити</th><th>Вартість</th></tr></thead>
           <tbody>
             {rows.map(({ i, qty, need: n, state, value }) => (
               <tr key={i.id} className={`st-${state}`}>
                 <td className="wh-nm">{i.name}<span className="wh-cat">{i.category}</span></td>
+                <td className="num wh-cs">{cs[i.id] || 0}</td>
                 <td className={`num ${qty < 0 ? "wh-neg" : ""}`}>{qty}</td>
                 <td className="num muted">{i.min_salon}</td>
                 <td className="num">{n > 0 ? <span className="wh-pill lo">{n}</span> : "—"}</td>
@@ -8626,6 +8628,7 @@ function SupplySalonStock({ salonKey, items, stock, onOrderAll }) {
 /* --- Замовити (будівник замовлення) --- */
 function SupplyOrderBuilder({ salonKey, items, stock, order, prefill, onDone }) {
   const sm = stockMap(stock, salonKey);
+  const cs = stockMap(stock, CENTRAL);
   const [qty, setQty] = useState(() => {
     const q = {};
     (order?.lines || []).forEach((l) => { q[l.item_id] = String(l.qty_req); });
@@ -8666,7 +8669,7 @@ function SupplyOrderBuilder({ salonKey, items, stock, order, prefill, onDone }) 
       <input className="wh-search" placeholder="Пошук позиції…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 10 }} />
       <div className="wh-tw">
         <table className="wh-tbl">
-          <thead><tr><th>Позиція</th><th>Залишок</th><th>Мін</th><th>Підказка</th><th>Замовити</th></tr></thead>
+          <thead><tr><th>Позиція</th><th>Залишок Основного складу</th><th>Залишок</th><th>Мін</th><th>Підказка</th><th>Замовити</th></tr></thead>
           <tbody>
             {shown.map((i) => {
               const s = sm[i.id] || 0;
@@ -8674,6 +8677,7 @@ function SupplyOrderBuilder({ salonKey, items, stock, order, prefill, onDone }) 
               return (
                 <tr key={i.id}>
                   <td className="wh-nm">{i.name}<span className="wh-cat">{i.category}</span></td>
+                  <td className="num wh-cs">{cs[i.id] || 0}</td>
                   <td className="num muted">{s}</td>
                   <td className="num muted">{i.min_salon}</td>
                   <td className="num">{sug > 0 ? <button className="wh-link" onClick={() => setQty((x) => ({ ...x, [i.id]: String(sug) }))}>+{sug}</button> : "—"}</td>
@@ -8704,6 +8708,7 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
   const [rcpt, setRcpt] = useState(null); // { orderId, prefill } — прихід під замовлення
   const [busyId, setBusyId] = useState("");
   const byId = Object.fromEntries((items || []).map((i) => [i.id, i]));
+  const centralStock = stockMap(stock, CENTRAL);
   const load = async () => {
     let list = [];
     if (scope === "mine") list = await listOrders({ salonKey });
@@ -8797,11 +8802,14 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
           <div className="wh-modal" onClick={(e) => e.stopPropagation()}>
             <div className="wh-modal-h"><span>{salonLabel(salonByKey(open.order.salon_key))} · {ORDER_ST[open.order.status]}</span><button className="modal-close" onClick={() => setOpen(null)}><X size={16} /></button></div>
             <div className="wh-modal-b">
-              <table className="wh-tbl"><tbody>
+              <table className="wh-tbl">
+                <thead><tr><th>Позиція</th><th>Залишок Основного складу</th><th>Замовлено</th><th>Відправлено</th></tr></thead>
+                <tbody>
                 {open.lines.map((l) => (
                   <tr key={l.item_id} className={lineMismatch(l) ? "wh-mismatch" : ""}><td className="wh-nm">{byId[l.item_id]?.name}</td>
-                    <td className="num">замовлено {l.qty_req}</td>
-                    <td className="num">{l.qty_shipped != null ? `відправлено ${l.qty_shipped}` : ""}</td></tr>
+                    <td className="num wh-cs">{centralStock[l.item_id] || 0}</td>
+                    <td className="num">{l.qty_req}</td>
+                    <td className="num">{l.qty_shipped != null ? l.qty_shipped : ""}</td></tr>
                 ))}
               </tbody></table>
               {open.lines.some(lineMismatch) && <p className="hint wh-mismatch-note"><AlertTriangle size={13} /> Червоним — позиції, відправлені не в тій кількості, що замовляли.</p>}
@@ -12972,6 +12980,7 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .wh-pick-opt.hi{background:rgba(190,138,46,.16);}
 .wh-pick-opt.cur{font-weight:700;color:var(--gold);}
 .wh-pick-none{padding:10px;font-size:12px;color:var(--muted);}
+.wh-tbl td.wh-cs{font-weight:700;color:var(--ink);}
 .wh-line-qty{width:72px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:7px 8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;text-align:right;background:var(--input-bg);color:var(--ink);}
 .wh-line-x{background:none;border:none;color:var(--faint);cursor:pointer;padding:4px;flex-shrink:0;}
 .wh-line-x:hover{color:var(--negative);}
