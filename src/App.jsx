@@ -3023,6 +3023,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
 /* =========================================================
    ТМ · ВКЛАДКА «ЗП САЛОНІВ» (лише свої салони)
 ========================================================= */
+const smStatusText = { draft: "чернетка", submitted: "подано", corrected: "корективи ТМ", approved: "погоджено" };
 const smStatusBadge = (st) => (
   <span className={`badge ${st === "submitted" ? "badge-ok" : st === "corrected" ? "badge-off" : "badge-warn"}`}>
     {st === "submitted" ? "подано" : st === "corrected" ? "корективи" : "чернетка"}
@@ -3074,25 +3075,53 @@ function SalonReviewPanel({ tmKey, reviewer }) {
       </div>
 
       {!openSalon ? (
-        <div className="salon-list">
-          <div className="salon-cat-legend">Категорія по сер. ТО за 3 міс.: <span className="cat-badge cat-Ap">A+</span> <span className="cat-badge cat-A">A</span> <span className="cat-badge cat-B">B</span> <span className="cat-badge cat-C">C</span></div>
-          {salons.map((s) => {
-            const rows = bySalon[s.key] || [];
+        (() => {
+          const cards = salons.map((sl) => {
+            const rows = bySalon[sl.key] || [];
             const total = rows.reduce((a, r) => a + r.total, 0);
             const done = rows.filter((r) => r.data.status === "submitted" || r.data.status === "corrected").length;
+            const approved = rows.filter((r) => r.data.tmApproved).length;
             const cat = (rows.find((r) => r.calc?.category)?.calc || {}).category;
-            return (
-              <button className="salon-row" key={s.key} onClick={() => setOpenSalon(s.key)}>
-                <span className="salon-row-main">
-                  <span className="salon-row-name">{salonLabel(s)}</span>
-                  <span className="salon-row-sub">{rows.length} співр. · подали {done}/{rows.length}</span>
-                </span>
-                {cat && <span className={`cat-badge cat-${cat.replace("+", "p")}`}>{cat}</span>}
-                <b className="salon-row-total">{fmt(total)}</b>
-              </button>
-            );
-          })}
-        </div>
+            const state = rows.length > 0 && done === rows.length ? "ok" : done === 0 ? "none" : "part";
+            return { sl, rows, total, done, approved, cat, state };
+          });
+          const terrTotal = cards.reduce((a, c) => a + c.total, 0);
+          const full = cards.filter((c) => c.state === "ok").length;
+          return (
+            <>
+              <div className="sr-summary">
+                <div><span className="st-cap">Разом по території</span><b className="sr-sum-v">{stNum(terrTotal)} ₴</b></div>
+                <div><span className="st-cap">Магазини подали ЗП</span><b className="sr-sum-v">{full}<small> з {cards.length}</small></b></div>
+                <div className="sr-legend"><span className="st-cap">Категорія за сер. ТО за 3 міс.</span>
+                  <span><span className="cat-badge cat-Ap">A+</span> <span className="cat-badge cat-A">A</span> <span className="cat-badge cat-B">B</span> <span className="cat-badge cat-C">C</span></span>
+                </div>
+              </div>
+              <div className="sr-grid">
+                {cards.map(({ sl, rows, total, done, approved, cat, state }) => (
+                  <button className={`sr-card ${state}`} key={sl.key} onClick={() => setOpenSalon(sl.key)}>
+                    <span className="sr-top">
+                      <span className="sr-nm">
+                        <span className="sr-name">{salonShortName(sl)}</span>
+                        <span className="sr-addr">{salonLabel(sl)}</span>
+                      </span>
+                      {cat && <span className={`cat-badge sr-cat cat-${cat.replace("+", "p")}`}>{cat}</span>}
+                    </span>
+                    <span className="sr-total">{stNum(total)}<small> ₴</small></span>
+                    <span className="sr-dots" aria-hidden="true">
+                      {rows.map((r) => <i key={r.emp.id} className={`sr-dot ${r.data.tmApproved ? "appr" : r.data.status}`} title={`${r.emp.full_name}: ${smStatusText[r.data.status] || r.data.status}`} />)}
+                    </span>
+                    <span className="sr-foot">
+                      <span className={`sr-state ${state}`}>
+                        {rows.length === 0 ? "Немає співробітників" : state === "ok" ? "Усі подали" : state === "none" ? "Ще ніхто не подав" : `Подали ${done} з ${rows.length}`}
+                      </span>
+                      {approved > 0 && <span className="sr-appr">передано керівнику {approved}</span>}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          );
+        })()
       ) : (
         <SmStoreSalary key={`${openSalon}:${ym}`} salon={salonByKey(openSalon)} review={reviewer} ymProp={ym} />
       )}
@@ -12174,6 +12203,40 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .trn-de-dt{font-size:11px;color:var(--muted);}
 
 .over-err input,.over-err select,.over-err textarea{border-color:var(--negative)!important;box-shadow:0 0 0 3px rgba(160,58,42,.22);}
+/* --- ЗП салонів (ТМ): картки магазинів --- */
+.sr-summary{display:flex;gap:36px;flex-wrap:wrap;align-items:flex-end;margin:6px 0 20px;}
+.sr-summary>div{display:flex;flex-direction:column;gap:6px;}
+.sr-sum-v{font-family:'IBM Plex Mono',monospace;font-size:30px;font-weight:600;color:var(--gold-bright);line-height:1;}
+.sr-sum-v small{font-size:16px;color:var(--on-dark-2);font-weight:500;}
+.sr-summary .st-cap{color:var(--on-dark-3);}
+.sr-legend{margin-left:auto;align-items:flex-end;}
+.sr-legend .cat-badge{font-size:12px;padding:3px 10px;}
+.sr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px;}
+.sr-card{display:flex;flex-direction:column;gap:14px;text-align:left;padding:20px 22px 18px;border:1px solid var(--line);border-radius:16px;background:var(--surface);color:var(--ink);font-family:inherit;cursor:pointer;transition:border-color .16s var(--ease),box-shadow .16s var(--ease),transform .16s var(--ease);}
+.sr-card:hover{border-color:var(--gold);box-shadow:var(--sh-2);transform:translateY(-2px);}
+.sr-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.sr-nm{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.sr-name{font-family:'Fraunces',serif;font-size:22px;font-weight:600;letter-spacing:-.01em;line-height:1.15;}
+.sr-addr{font-size:13px;color:var(--muted);}
+.sr-cat.cat-badge{font-size:16px;font-weight:700;min-width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:12px;flex-shrink:0;}
+.sr-total{font-family:'IBM Plex Mono',monospace;font-size:32px;font-weight:600;color:var(--gold);line-height:1;}
+:root[data-theme="dark"] .sr-total{color:var(--gold-bright);}
+.sr-total small{font-size:17px;color:var(--muted);font-weight:500;}
+.sr-dots{display:flex;gap:7px;flex-wrap:wrap;}
+.sr-dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--line-strong);box-sizing:border-box;}
+.sr-dot.submitted{background:var(--positive-bright);border-color:var(--positive-bright);}
+.sr-dot.corrected{background:var(--gold-bright);border-color:var(--gold-bright);}
+.sr-dot.appr{background:#8FB0E0;border-color:#8FB0E0;}
+.sr-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--line);font-size:13.5px;}
+.sr-state{font-weight:600;color:var(--muted);}
+.sr-state.ok{color:var(--positive);}
+:root[data-theme="dark"] .sr-state.ok{color:var(--positive-bright);}
+.sr-state.part{color:var(--gold);}
+:root[data-theme="dark"] .sr-state.part{color:var(--gold-bright);}
+.sr-state.none{color:var(--negative);}
+:root[data-theme="dark"] .sr-state.none{color:var(--negative-bright);}
+.sr-appr{font-size:12.5px;color:var(--muted);}
+
 /* --- Контроль видаткових накладних --- */
 .dc-list{display:flex;flex-direction:column;gap:10px;}
 .dc-row{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-radius:var(--radius-md);background:var(--surface);border:1px solid var(--line);}
