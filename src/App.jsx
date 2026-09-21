@@ -6504,6 +6504,17 @@ function ShiftCellMenu({ pos, field, current, homeSalon, onClose, onSet }) {
    назвою того магазину (без окремого рядка). Години бачить СМ магазину співробітника і ТМ. */
 function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today, seeAllHours, viewerSalon }) {
   const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
+  const wrapRef = React.useRef(null);
+  // рядок з числами липне під верхньою панеллю кабінету при прокрутці вниз
+  useEffect(() => {
+    const set = () => {
+      const tb = document.querySelector(".topbar");
+      wrapRef.current?.style.setProperty("--sched-top", `${tb ? tb.offsetHeight : 64}px`);
+    };
+    set();
+    window.addEventListener("resize", set);
+    return () => window.removeEventListener("resize", set);
+  }, []);
   const nDays = daysInMonth(ym);
   const modeAllowed = (k) => canEditSalon(k) && !(lockedFor && lockedFor(k));
 
@@ -6588,7 +6599,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
   })), [salons, employees]);
 
   return (
-    <div className="grid-scroll sched-wrap">
+    <div className="grid-scroll sched-wrap" ref={wrapRef}>
       <table className="sched">
         <thead>
           <tr>
@@ -12478,11 +12489,11 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
    стовпці днів рівномірно ділять залишок після колонки імені й підсумку (мал. екрани — медіа нижче) */
 .grid-scroll{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
 /* графік змін: окремі плитки з проміжком, як на макеті */
-.grid-scroll.sched-wrap{background:transparent;border:none;border-radius:0;overflow-x:auto;overflow-y:hidden;}
+.grid-scroll.sched-wrap{background:transparent;border:none;border-radius:0;overflow:visible;}
 table.sched{table-layout:fixed;width:100%;border-collapse:separate;border-spacing:2px;font-family:'IBM Plex Mono',monospace;font-size:11px;}
 table.sched th,table.sched td{border:none;text-align:center;padding:0;}
-table.sched thead th{background:transparent;color:var(--muted);font-weight:700;font-size:12.5px;padding:2px 0 6px;line-height:1.2;}
-table.sched thead th.we{background:transparent;color:var(--positive);}
+table.sched thead th{position:sticky;top:var(--sched-top,64px);z-index:6;background:var(--bg-2);box-shadow:0 0 0 1px var(--bg-2);color:var(--muted);font-weight:700;font-size:12.5px;padding:2px 0 6px;line-height:1.2;}
+table.sched thead th.we{color:var(--positive);}
 table.sched .wd{display:block;font-size:9.5px;font-weight:500;opacity:.8;}
 table.sched .rh{width:118px;text-align:left;padding:0 10px;background:transparent;font-family:'Inter',sans-serif;line-height:1.2;overflow:hidden;}
 table.sched .rh .nm{font-size:12.5px;font-weight:600;color:var(--ink);word-break:break-word;}
@@ -12502,7 +12513,7 @@ td.sh-fill-plan{background:linear-gradient(135deg,#0B0F14 0 46%,transparent 46%)
 td.sh-fill.sh-edit:hover{background:#26303B;filter:none;}
 td.sh-today{outline:2px solid var(--gold);outline-offset:-2px;}
 td.sh-sum,th.sh-sum-h{width:170px;background:var(--surface);font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);padding:0 12px;text-align:left;line-height:1.2;white-space:nowrap;}
-th.sh-sum-h{background:transparent;font-size:11px;letter-spacing:.06em;text-transform:uppercase;}
+th.sh-sum-h{font-size:11px;letter-spacing:.06em;text-transform:uppercase;}
 td.sh-sum b{color:var(--ink);font-weight:600;}
 .shift-legend{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;font-size:12px;color:var(--on-dark-2);}
 .shift-legend span{display:flex;align-items:center;gap:6px;}
@@ -12539,6 +12550,8 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .ssi-from{color:var(--muted);font-size:10.5px;flex-shrink:0;}
 .shift-search-empty{padding:10px;text-align:center;color:var(--muted);font-size:12px;}
 @media (max-width:640px){
+  .grid-scroll.sched-wrap{overflow-x:auto;}
+  table.sched thead th{position:static;}
   table.sched{font-size:8px;border-spacing:1px;min-width:720px;}
   table.sched .rh{width:74px;padding:0 4px;}
   table.sched .rh .nm{font-size:10px;}
