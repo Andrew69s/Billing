@@ -22,8 +22,9 @@ export async function createTasks({ title, description, assignees, due_at, prior
     due_at: due_at || null,
     batch_id,
   }));
-  const { error } = await supabase.from("tasks").insert(rows);
+  const { data, error } = await supabase.from("tasks").insert(rows).select("id, assignee");
   if (error) throw error;
+  return data || [];
 }
 
 /* згрупувати рядки задач по batch_id (задачі без пари лишаються окремими групами з 1 елементом) */

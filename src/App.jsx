@@ -5277,6 +5277,166 @@ function MedokPanel({ medok, cabKey }) {
   );
 }
 
+/* ---------- Контроль видаткових накладних (Юлія): «Пропечатано» → «Передано в офіс» ---------- */
+const docsStamp = (inv) => {
+  const h = [...(inv.history || [])].reverse().find((x) => x.status === "documented");
+  return h?.at || inv.updated_at || inv.created_at;
+};
+const docsDays = (inv) => Math.max(0, Math.floor((Date.now() - new Date(docsStamp(inv)).getTime()) / 86400000));
+const docsState = (inv) => (inv.docs_office_at ? "handed" : inv.docs_notified_at ? "notified" : "waiting");
+const daysWord = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "день" : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? "дні" : "днів"}`;
+
+function InvoiceDocsControl({ rows, cab, onChanged, onPreview }) {
+  const [tasks, setTasks] = useState([]);
+  const [f, setF] = useState("open"); // open | notified | handed | all
+  const [q, setQ] = useState("");
+  const [salonF, setSalonF] = useState("all");
+  const [busyId, setBusyId] = useState("");
+
+  useEffect(() => {
+    let a = true;
+    const load = () => listTasks().then((t) => { if (a) setTasks(t); }).catch(() => {});
+    load();
+    const un = subscribeTasks(load);
+    return () => { a = false; un(); };
+  }, []);
+  const taskById = useMemo(() => Object.fromEntries(tasks.map((t) => [t.id, t])), [tasks]);
+
+  const docs = rows.filter((r) => r.status === "documented");
+  const cnt = {
+    open: docs.filter((r) => docsState(r) !== "handed").length,
+    notified: docs.filter((r) => docsState(r) === "notified").length,
+    handed: docs.filter((r) => docsState(r) === "handed").length,
+    all: docs.length,
+  };
+  const salonKeys = [...new Set(docs.map((r) => r.created_by))].sort();
+  const ql = q.trim().toLowerCase();
+  const shown = docs
+    .filter((r) => {
+      if (salonF !== "all" && r.created_by !== salonF) return false;
+      if (f === "open" && docsState(r) === "handed") return false;
+      if (f === "notified" && docsState(r) !== "notified") return false;
+      if (f === "handed" && docsState(r) !== "handed") return false;
+      if (!ql) return true;
+      return [r.counterparty, r.invoice_no, String(r.amount), cabName(r.created_by)].filter(Boolean).join(" ").toLowerCase().includes(ql);
+    })
+    .sort((a, b) => (f === "handed" ? (a.docs_office_at < b.docs_office_at ? 1 : -1) : docsDays(b) - docsDays(a)));
+
+  const withHistory = (inv, note) => [...(inv.history || []), { status: inv.status, at: new Date().toISOString(), by: cab.key, note }];
+
+  const markOffice = async (inv, on) => {
+    setBusyId(inv.id);
+    try {
+      await updateInvoice(inv.id, {
+        docs_office_at: on ? new Date().toISOString() : null,
+        docs_office_by: on ? cab.key : "",
+        history: withHistory(inv, on ? "документи передано в офіс" : "передачу документів в офіс скасовано"),
+      });
+      // якщо СМ уже отримав задачу-нагадування — закриваємо її, щоб не висіла
+      if (on && inv.docs_task_id) setTaskStatus(inv.docs_task_id, "done", "Документи передано в офіс").catch(() => {});
+      pushToast({ title: on ? "Позначено: передано в офіс" : "Позначку знято", body: `${inv.counterparty || "рахунок"} · ${invMoney(inv.amount)}` });
+      onChanged();
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusyId("");
+  };
+
+  const notifySm = async (inv) => {
+    setBusyId(inv.id);
+    try {
+      // повторне нагадування: прибираємо попередню задачу, щоб у СМ не накопичувались дублі
+      if (inv.docs_task_id) await deleteTask(inv.docs_task_id).catch(() => {});
+      const created = await createTasks({
+        title: `Бухгалтер повідомляє вас про відсутність видаткових накладних за рахунком: ${inv.counterparty || "без назви"}, сума ${invMoney(inv.amount)}`,
+        description: "Знайдіть і передайте оригінали видаткових накладних в офіс.",
+        assignees: [inv.created_by], due_at: "", priority: false, created_by: cab.key,
+      });
+      await updateInvoice(inv.id, {
+        docs_notified_at: new Date().toISOString(),
+        docs_notify_count: (inv.docs_notify_count || 0) + 1,
+        docs_task_id: created[0]?.id || null,
+        history: withHistory(inv, "СМ повідомлено про відсутність видаткових накладних"),
+      });
+      pushToast({ title: "СМ повідомлено", body: cabName(inv.created_by) });
+      onChanged();
+    } catch (e) { pushToast({ title: "Не вдалося повідомити", body: String(e.message || e) }); }
+    setBusyId("");
+  };
+
+  return (
+    <div>
+      <p className="hint" style={{ marginBottom: 12 }}>
+        Тут усі рахунки, які магазини позначили «Пропечатано». Позначайте, коли оригінали документів дійшли до офісу.
+        Якщо їх немає — одним кліком нагадайте магазину.
+      </p>
+      <div className="inv-toolbar">
+        <div className="inv-search">
+          <Search size={14} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Компанія, сума або № рахунку" />
+          {q && <button className="inv-search-clear" onClick={() => setQ("")}><X size={13} /></button>}
+        </div>
+        <select value={salonF} onChange={(e) => setSalonF(e.target.value)}>
+          <option value="all">Усі салони</option>
+          {salonKeys.map((k) => <option key={k} value={k}>{cabName(k)}</option>)}
+        </select>
+      </div>
+      <div className="inv-filters">
+        {[["open", "Чекають документи"], ["notified", "СМ повідомлено"], ["handed", "Передано в офіс"], ["all", "Усі"]].map(([k, l]) => (
+          <button key={k} className={`inv-fchip ${f === k ? "on" : ""}`} onClick={() => setF(k)}>{l} · {cnt[k]}</button>
+        ))}
+      </div>
+
+      {shown.length === 0 ? (
+        <div className="admin-empty">{f === "open" ? "Усі документи в офісі — чекати нічого." : "Рахунків немає."}</div>
+      ) : (
+        <div className="dc-list">
+          {shown.map((inv) => {
+            const st = docsState(inv);
+            const days = docsDays(inv);
+            const t = inv.docs_task_id ? taskById[inv.docs_task_id] : null;
+            const ackTxt = t ? (t.status === "done" ? " · СМ позначив виконаним" : t.ack?.[inv.created_by] ? " · ознайомлений ✓" : " · ще не ознайомлений") : "";
+            const busy = busyId === inv.id;
+            return (
+              <div className={`dc-row ${st === "handed" ? "done" : ""}`} key={inv.id}>
+                <div className="dc-top">
+                  <div className="dc-main">
+                    <div className="dc-name">{inv.counterparty || "Без назви"}</div>
+                    <div className="dc-sub">
+                      {cabName(inv.created_by)}{inv.invoice_no ? ` · рахунок № ${inv.invoice_no}` : ""} · пропечатано {fmtDate(docsStamp(inv))}
+                      {inv.screenshot && <> · <button className="wh-link" onClick={() => onPreview(inv.screenshot)}>рахунок</button></>}
+                    </div>
+                  </div>
+                  <div className="dc-amt">{invMoney(inv.amount)}</div>
+                </div>
+                <div className="dc-bottom">
+                  {st === "handed" ? (
+                    <span className="dc-pill ok">Передано в офіс {fmtDate(inv.docs_office_at)} · {cabName(inv.docs_office_by)}</span>
+                  ) : (
+                    <>
+                      {st === "notified" && <span className="dc-pill info">СМ повідомлено {fmtDate(inv.docs_notified_at)}{ackTxt}</span>}
+                      <span className={`dc-pill ${days >= 10 ? "bad" : "warn"}`}>{st === "waiting" ? "Чекаємо документи · " : ""}{daysWord(days)}{st === "notified" ? " без документів" : ""}</span>
+                    </>
+                  )}
+                  <span className="dc-spacer" />
+                  {st === "handed" ? (
+                    <button className="wh-link" disabled={busy} onClick={() => markOffice(inv, false)}>скасувати</button>
+                  ) : (
+                    <>
+                      <button className="btn-primary small" disabled={busy} onClick={() => markOffice(inv, true)}>Передали на офіс</button>
+                      <button className={`btn-secondary small ${st === "waiting" ? "dc-warnbtn" : ""}`} disabled={busy} onClick={() => notifySm(inv)}>
+                        {st === "waiting" && <Bell size={13} />} {busy ? "…" : st === "notified" ? "Нагадати ще раз" : "Повідомити СМ про відсутність документів"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InvoicesModule({ cab }) {
   const [rows, reload] = useInvoices();
   const [showModal, setShowModal] = useState(false);
@@ -5298,8 +5458,10 @@ function InvoicesModule({ cab }) {
   const canCreate = cab.type === "sm";
   const canManage = cab.type === "accountant" || cab.type === "manager" || cab.type === "tm";
   const multiSalon = cab.type !== "sm";
+  const canControlDocs = cab.type === "accountant" || cab.type === "manager" || cab.key === ADMIN_KEY;
 
   if (rows === null) return <div className="loading">Завантаження…</div>;
+  const docsOpenCount = canControlDocs ? rows.filter((r) => r.status === "documented" && !r.docs_office_at).length : 0;
 
   const salonKeys = [...new Set(rows.map((r) => r.created_by))].sort();
   const counts = INVOICE_FLOW.reduce((a, s) => ({ ...a, [s]: rows.filter((r) => r.status === s).length }), {});
@@ -5348,11 +5510,14 @@ function InvoicesModule({ cab }) {
         <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}>Список</button>
         <button className={view === "board" ? "on" : ""} onClick={() => setView("board")}>Дошка</button>
         <button className={view === "analytics" ? "on" : ""} onClick={() => setView("analytics")}><BarChart3 size={13} /> Аналітика</button>
+        {canControlDocs && <button className={view === "docs" ? "on" : ""} onClick={() => setView("docs")}>Контроль документів{docsOpenCount > 0 ? ` · ${docsOpenCount}` : ""}</button>}
       </div>
 
       {isYulia && <MedokPanel medok={medok} cabKey={cab.key} />}
 
-      {view === "analytics" ? (
+      {view === "docs" && canControlDocs ? (
+        <InvoiceDocsControl rows={rows} cab={cab} onChanged={reload} onPreview={setPreview} />
+      ) : view === "analytics" ? (
         <InvoiceAnalytics rows={rows} cab={cab} />
       ) : view === "board" ? (
         <>
@@ -11251,6 +11416,24 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-process-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:12.5px;}
 .ez-sale-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:6px;}
 .ez-sale-row > span:nth-child(2){margin-left:auto;font-weight:600;}
+
+/* --- Контроль видаткових накладних --- */
+.dc-list{display:flex;flex-direction:column;gap:10px;}
+.dc-row{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-radius:var(--radius-md);background:var(--surface);border:1px solid var(--line);}
+.dc-row.done{opacity:.62;}
+.dc-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}
+.dc-main{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.dc-name{font-size:14.5px;font-weight:600;color:var(--ink);}
+.dc-sub{font-size:12px;color:var(--muted);}
+.dc-amt{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:16px;color:var(--ink);white-space:nowrap;}
+.dc-bottom{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.dc-spacer{flex-grow:1;}
+.dc-pill{padding:4px 10px;border-radius:999px;font-size:11.5px;font-weight:600;}
+.dc-pill.warn{background:rgba(220,169,74,.14);color:var(--gold-bright);}
+.dc-pill.bad{background:rgba(224,145,127,.14);color:var(--negative-bright);}
+.dc-pill.info{background:rgba(111,143,191,.16);color:#8FB0E0;}
+.dc-pill.ok{background:rgba(127,191,143,.16);color:var(--positive-bright);}
+.dc-warnbtn{border-color:rgba(224,145,127,.5)!important;color:var(--negative-bright)!important;}
 
 /* --- Тестування --- */
 .trn-tabs{display:inline-flex;gap:4px;}
