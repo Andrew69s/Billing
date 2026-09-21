@@ -10368,8 +10368,8 @@ function TrainingModule({ cab }) {
     const row = {
       training_id: t.id, employee_id: emp.id, salon_key: emp.salon_key,
       status, passed: status === "passed",
-      // «Не призначено» — бал не має сенсу, тож не зберігаємо
-      score: status === "not_assigned" ? null : (patch.score !== undefined ? patch.score : cur.score ?? null),
+      // «Не призначено» і «Не пройдено» — бал не має сенсу, тож не зберігаємо
+      score: status === "not_assigned" || status === "not_passed" ? null : (patch.score !== undefined ? patch.score : cur.score ?? null),
       passed_on: status === "passed" ? (cur.passed_on || todayISO()) : null,
       updated_by: cab.key,
     };
@@ -10434,11 +10434,12 @@ function TrainingModule({ cab }) {
                           <select className="trn-status-sel" value={status} onChange={(ev) => setResult(t, e, { status: ev.target.value })}>
                             <option value="not_assigned">Не призначено</option>
                             <option value="passed">Виконано</option>
+                            <option value="not_passed">Не пройдено</option>
                             <option value="failed">Провалено</option>
                           </select>
                         </td>
                         <td className="trn-score">
-                          {status !== "not_assigned" && (
+                          {status !== "not_assigned" && status !== "not_passed" && (
                             <NumInput value={r.score ?? ""} allowEmpty placeholder="бал" className="trn-score-in"
                               onChange={(v) => setResult(t, e, { score: v === "" || v == null ? null : Number(v) })} />
                           )}
