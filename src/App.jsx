@@ -2459,6 +2459,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
   const [shotsOpen, setShotsOpen] = useState(false);
   const [ez, setEz] = useState({ total: 0, confirmed: 0 }); // оборот ЕЗ за місяць з модуля «ЕЗ»
   const [subAuto, setSubAuto] = useState({}); // empId → днів заміни на іншому магазині за графіком
+  const [workAuto, setWorkAuto] = useState({}); // empId → відпрацьованих днів за графіком
   const saved = useRef({});      // empId → JSON останнього збереженого документа
   const touched = useRef(false); // були зміни від користувача
   const draftsRef = useRef(null);
@@ -2481,8 +2482,11 @@ function SmStoreSalary({ salon, review, ymProp }) {
       if (!alive) return;
       const next = {};
       const auto = {};
-      emps.forEach((e) => { auto[e.id] = monthTally(monthShifts, e.id, e.salon_key).substDays; });
+      const workDays = {};
+      emps.forEach((e) => { const t = monthTally(monthShifts, e.id, e.salon_key); auto[e.id] = t.substDays; workDays[e.id] = t.factDays; });
       setSubAuto(auto);
+      setWorkAuto(workDays);
+      const nD = daysInMonth(ym);
       emps.forEach((e, i) => {
         const d = _.cloneDeep(docs[i]);
         saved.current[e.id] = JSON.stringify(docs[i]);
@@ -2492,6 +2496,10 @@ function SmStoreSalary({ salon, review, ymProp }) {
           if (d.bonus.replacementManual === undefined && (d.bonus.replacementDays || 0) > 0 && d.bonus.replacementDays !== auto[e.id]) d.bonus.replacementManual = true;
           if (!d.bonus.replacementManual && (d.status === "draft" || d.status === "corrected")) d.bonus.replacementDays = auto[e.id];
           d.manager.attestPay = e.role === "manager" || e.role === "acting_manager" ? 1000 : 500; // атестація: 1 000 керуючому, 500 іншим
+          // робочі дні: автоматично з графіка (вихідних = днів у місяці − робочих), СМ може виправити
+          const wa = workDays[e.id] || 0;
+          if (d.base.daysManual === undefined && (d.base.daysOff || 0) > 0 && nD - d.base.daysOff !== wa) d.base.daysManual = true;
+          if (!d.base.daysManual && wa > 0 && (d.status === "draft" || d.status === "corrected")) d.base.daysOff = Math.max(0, nD - wa);
         }
         next[e.id] = d;
       });
@@ -2587,6 +2595,18 @@ function SmStoreSalary({ salon, review, ymProp }) {
       const y = _.cloneDeep(d[e.id]);
       y.bonus.replacementDays = v;
       y.bonus.replacementManual = v !== (subAuto[e.id] || 0);
+      return { ...d, [e.id]: y };
+    });
+  };
+  // робочі дні: у формі вводять робочі, у розрахунок іде «вихідних» = днів у місяці − робочих
+  const setWorkDays = (e, v) => {
+    const nD = daysInMonth(ym);
+    const work = Math.max(0, Math.min(nD, Number(v) || 0));
+    touch();
+    setDrafts((d) => {
+      const y = _.cloneDeep(d[e.id]);
+      y.base.daysOff = nD - work;
+      y.base.daysManual = !(workAuto[e.id] > 0 && work === workAuto[e.id]);
       return { ...d, [e.id]: y };
     });
   };
@@ -2851,7 +2871,19 @@ function SmStoreSalary({ salon, review, ymProp }) {
                       <div className="st-en">{e.full_name}</div>
                       <div className="st-er">{EMP_ROLES[e.role]} · {smStatusBadge(d(e).status)}</div>
                       <div className="st-er">
-                        вихідних <StIn v={d(e).base.daysOff} set={setEmp(e.id, ["base", "daysOff"])} label={`Вихідних — ${e.full_name}`} cls="st-in-xs" /> · коеф. {c(e).factor.toFixed(2).replace(".", ",")}
+                        {(() => {
+                          const nD = daysInMonth(ym);
+                          const work = Math.max(0, nD - (d(e).base.daysOff || 0));
+                          const wa = workAuto[e.id] || 0;
+                          return (
+                            <>
+                              {wa > 0 && work !== wa && (
+                                <button type="button" className="st-reset" title={`Повернути за графіком: ${wa}`} aria-label={`Повернути за графіком: ${wa}`} onClick={() => setWorkDays(e, wa)}><RefreshCw size={12} /></button>
+                              )}
+                              робочих днів <StIn v={work} set={(v) => setWorkDays(e, v)} label={`Робочих днів — ${e.full_name}`} cls="st-in-xs" />
+                            </>
+                          );
+                        })()}
                       </div>
                     </th>
                   ))}
