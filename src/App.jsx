@@ -10852,7 +10852,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
       <div className={`cab-layout ${pinned ? "pinned" : ""}`}>
         <nav className={`cab-side ${editNav ? "editing" : ""} ${navOpen ? "open" : ""} ${peek || editNav ? "peek" : ""}`} onMouseEnter={peekOn} onMouseLeave={peekOff}>
           <button className={`cab-pin ${pinned ? "on" : ""}`} onClick={togglePin} title={pinned ? "Відкріпити меню (ховатиметься)" : "Закріпити меню"} aria-label={pinned ? "Відкріпити меню" : "Закріпити меню"} aria-pressed={pinned}>
-            <Paperclip size={15} /><span>{pinned ? "Закріплено" : "Закріпити"}</span>
+            <Paperclip size={16} />
           </button>
           {navInner}
           <span className="cab-side-sep" />
@@ -11783,7 +11783,7 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 }
 .cab-pin{display:none;}
 @media (min-width:881px){
-  .cab-pin{display:flex;align-items:center;gap:6px;align-self:flex-end;margin:0 4px 6px;padding:5px 10px;border:1px solid var(--line-dark);border-radius:999px;background:none;color:var(--on-dark-3);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
+  .cab-pin{display:flex;align-items:center;justify-content:center;align-self:flex-end;margin:0 4px 6px;width:32px;height:32px;padding:0;border:1px solid var(--line-dark);border-radius:999px;background:none;color:var(--on-dark-3);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
   .cab-pin:hover{color:var(--on-dark);border-color:var(--gold);}
   .cab-pin.on{color:var(--gold-ink);background:linear-gradient(180deg,var(--gold-bright),var(--gold));border-color:var(--gold);}
   .cab-pin svg{transform:rotate(-45deg);}
