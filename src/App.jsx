@@ -5737,19 +5737,21 @@ function InvoiceManualModal({ cab, rows, onClose, onCreated }) {
   const [sugg, setSugg] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [errField, setErrField] = useState("");
+  const fail = (field, msg, id) => { setErr(msg); setErrField(field); if (id) setTimeout(() => document.getElementById(id)?.focus(), 30); return false; };
   useEffect(() => { listCounterparties().then(setSugg).catch(() => {}); }, []);
   const salons = useMemo(() => [...SALONS].sort((a, b) => salonLabel(a).localeCompare(salonLabel(b), "uk")), []);
 
   const submit = async () => {
-    setErr("");
-    if (!salonKey) return setErr("Оберіть магазин, якому призначити рахунок");
-    if (!counterparty.trim()) return setErr("Вкажіть компанію (покупця)");
-    if (!(amount > 0)) return setErr("Вкажіть суму рахунку");
-    if (!date) return setErr("Вкажіть дату рахунку");
-    if (date > today) return setErr("Дата рахунку не може бути в майбутньому");
+    setErr(""); setErrField("");
+    if (!salonKey) return fail("salon", "Оберіть магазин, якому призначити рахунок", "inv-m-salon");
+    if (!counterparty.trim()) return fail("company", "Вкажіть компанію (покупця)", "inv-m-company");
+    if (!(amount > 0)) return fail("amount", "Вкажіть суму рахунку", "inv-m-amount");
+    if (!date) return fail("date", "Вкажіть дату рахунку — вона потрібна, щоб порахувати, скільки днів немає документів", "inv-m-date");
+    if (date > today) return fail("date", "Дата рахунку не може бути в майбутньому", "inv-m-date");
     const no = invNo.trim().toLowerCase();
     if (no && rows.some((r) => r.created_by === salonKey && (r.invoice_no || "").trim().toLowerCase() === no && (r.counterparty || "").trim().toLowerCase() === counterparty.trim().toLowerCase())) {
-      return setErr("Такий рахунок цього магазину вже є в списку");
+      return fail("invNo", "Такий рахунок цього магазину вже є в списку", "inv-m-no");
     }
     setBusy(true);
     let created;
@@ -5777,25 +5779,25 @@ function InvoiceManualModal({ cab, rows, onClose, onCreated }) {
         </div>
         <div className="modal-body">
           <p className="hint">Для документів за старі періоди, яких магазин не виставляв. Рахунок одразу потрапить у «Чекають документи».</p>
-          <label className="over-field"><span>Магазин (СМ отримає повідомлення)</span>
-            <select value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
+          <label className={`over-field ${errField === "salon" ? "over-err" : ""}`}><span>Магазин (СМ отримає повідомлення)</span>
+            <select id="inv-m-salon" value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
               <option value="">Оберіть магазин…</option>
               {salons.map((s) => <option key={s.key} value={s.key}>{salonLabel(s)}</option>)}
             </select>
           </label>
-          <label className="over-field"><span>Компанія (покупець)</span>
-            <input list="inv-manual-companies" value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="Кому виставлено рахунок" />
+          <label className={`over-field ${errField === "company" ? "over-err" : ""}`}><span>Компанія (покупець)</span>
+            <input id="inv-m-company" list="inv-manual-companies" value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="Кому виставлено рахунок" />
             <datalist id="inv-manual-companies">{sugg.map((c) => <option key={c} value={c} />)}</datalist>
           </label>
           <div className="task-modal-row">
-            <label className="over-field"><span>№ рахунку</span>
-              <input value={invNo} onChange={(e) => setInvNo(e.target.value)} placeholder="—" />
+            <label className={`over-field ${errField === "invNo" ? "over-err" : ""}`}><span>№ рахунку</span>
+              <input id="inv-m-no" value={invNo} onChange={(e) => setInvNo(e.target.value)} placeholder="—" />
             </label>
-            <label className="over-field"><span>Дата рахунку</span>
-              <input type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)} />
+            <label className={`over-field ${errField === "date" ? "over-err" : ""}`}><span>Дата рахунку</span>
+              <input id="inv-m-date" type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)} />
             </label>
-            <label className="over-field"><span>Сума, грн</span>
-              <NumInput value={amount} onChange={setAmount} placeholder="0.00" />
+            <label className={`over-field ${errField === "amount" ? "over-err" : ""}`}><span>Сума, грн</span>
+              <NumInput id="inv-m-amount" value={amount} onChange={setAmount} placeholder="0.00" />
             </label>
           </div>
           <div className="over-field"><span>Постачальник</span>
@@ -5811,9 +5813,9 @@ function InvoiceManualModal({ cab, rows, onClose, onCreated }) {
             <input type="checkbox" checked={notifyNow} onChange={(e) => setNotifyNow(e.target.checked)} />
             Одразу повідомити СМ про відсутність документів
           </label>
-          {err && <p className="form-err">{err}</p>}
         </div>
         <div className="modal-foot">
+          {err && <p className="form-err" role="alert" style={{ flex: 1, margin: 0 }}>{err}</p>}
           <button className="btn-secondary" onClick={onClose} disabled={busy}>Скасувати</button>
           <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? "…" : "Додати рахунок"}</button>
         </div>
@@ -5981,7 +5983,7 @@ function InvoiceDocsControl({ rows, cab, onChanged, onPreview }) {
 }
 
 function InvoicesModule({ cab }) {
-  const [rows, reload] = useInvoices();
+  const [allRows, reload] = useInvoices();
   const [showModal, setShowModal] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [view, setView] = useState("list");     // list | analytics
@@ -6004,8 +6006,10 @@ function InvoicesModule({ cab }) {
   const multiSalon = cab.type !== "sm";
   const canControlDocs = cab.type === "accountant" || cab.type === "manager" || cab.key === ADMIN_KEY;
 
-  if (rows === null) return <div className="loading">Завантаження…</div>;
-  const docsOpenCount = canControlDocs ? rows.filter((r) => r.status === "documented" && !r.docs_office_at).length : 0;
+  if (allRows === null) return <div className="loading">Завантаження…</div>;
+  // рахунки, додані вручну бухгалтером, живуть лише в «Контролі документів» — у списку, дошці й аналітиці їх немає
+  const rows = allRows.filter((r) => !r.manual);
+  const docsOpenCount = canControlDocs ? allRows.filter((r) => r.status === "documented" && !r.docs_office_at).length : 0;
 
   const salonKeys = [...new Set(rows.map((r) => r.created_by))].sort();
   const counts = INVOICE_FLOW.reduce((a, s) => ({ ...a, [s]: rows.filter((r) => r.status === s).length }), {});
@@ -6063,7 +6067,7 @@ function InvoicesModule({ cab }) {
       {isYulia && <MedokPanel medok={medok} cabKey={cab.key} />}
 
       {view === "docs" && canControlDocs ? (
-        <InvoiceDocsControl rows={rows} cab={cab} onChanged={reload} onPreview={setPreview} />
+        <InvoiceDocsControl rows={allRows} cab={cab} onChanged={reload} onPreview={setPreview} />
       ) : view === "analytics" && !isYulia ? (
         <InvoiceAnalytics rows={rows} cab={cab} />
       ) : view === "board" ? (
@@ -6160,7 +6164,7 @@ function InvoicesModule({ cab }) {
       )}
 
       {showModal && <InvoiceCreateModal cab={cab} onClose={() => setShowModal(false)} onCreated={reload} />}
-      {showManual && <InvoiceManualModal cab={cab} rows={rows} onClose={() => setShowManual(false)} onCreated={() => { reload(); setView("docs"); }} />}
+      {showManual && <InvoiceManualModal cab={cab} rows={allRows} onClose={() => setShowManual(false)} onCreated={() => { reload(); setView("docs"); }} />}
       {editInv && <InvoiceCreateModal cab={cab} inv={editInv} onClose={() => setEditInv(null)} onCreated={reload} />}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
     </div>
@@ -12381,6 +12385,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .trn-de-sc{font-family:'IBM Plex Mono',monospace;font-weight:600;}
 .trn-de-dt{font-size:11px;color:var(--muted);}
 
+.over-err input,.over-err select,.over-err textarea{border-color:var(--negative)!important;box-shadow:0 0 0 3px rgba(160,58,42,.22);}
 /* --- Контроль видаткових накладних --- */
 .dc-list{display:flex;flex-direction:column;gap:10px;}
 .dc-row{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-radius:var(--radius-md);background:var(--surface);border:1px solid var(--line);}
