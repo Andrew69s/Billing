@@ -11768,11 +11768,11 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
   .cab-edge::after{content:"";position:absolute;left:0;top:50%;width:4px;height:72px;transform:translateY(-50%);border-radius:0 4px 4px 0;background:var(--gold);opacity:.55;transition:opacity .2s var(--ease);}
   .cab-edge:hover::after{opacity:1;}
   .cab-shell .cab-side{
-    position:fixed;top:var(--tb-h,64px);left:0;bottom:0;z-index:70;width:280px;overflow-y:auto;
+    position:fixed;top:0;left:0;bottom:0;z-index:70;width:280px;overflow-y:auto;
     border-radius:0;border:none;border-right:1px solid var(--line-dark);
     background:linear-gradient(180deg,var(--bg-2),var(--bg));
     box-shadow:0 0 60px rgba(0,0,0,.5);
-    padding:12px 10px 16px;
+    padding:18px 10px 16px;
     transform:translateX(-102%);
     transition:transform .22s var(--ease);
   }
