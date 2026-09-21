@@ -2878,7 +2878,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
           <StInfoCtx.Provider value={setInfoGroup}>
           <div className="st-wrap">
             <table className="st">
-              <colgroup><col style={{ width: 122 }} /><col style={{ width: 200 }} /><col style={{ width: 250 }} />{emps.map((e) => <col key={e.id} style={{ width: 190 }} />)}</colgroup>
+              <colgroup><col style={{ width: 122 }} /><col style={{ width: 200 }} /><col />{emps.map((e) => <col key={e.id} style={{ width: 210 }} />)}</colgroup>
               <thead>
                 <tr>
                   <th />
@@ -12167,9 +12167,14 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-in-w{max-width:170px;display:block;margin-left:auto;}
 .st-in-m{width:96px;}.st-in-s{width:110px;}.st-in-xs{width:56px;}.st-in.off{opacity:.5;}
 .st-plan .st-in-w{width:112px;}
-.st-ck{display:grid;grid-template-columns:36px 1fr;align-items:center;column-gap:8px;width:100%;}
-.st-ck>:last-child{justify-self:end;text-align:right;}
-.st-ck.st-ck-flex{display:inline-flex;justify-content:flex-end;width:auto;}
+.st-ck{display:inline-flex;align-items:center;justify-content:flex-end;gap:8px;width:100%;}
+.st-ck>:last-child{flex:none;width:96px;text-align:right;}
+.st-ck.st-ck-flex{width:auto;}
+.st-ck.st-ck-flex>:last-child{width:auto;}
+.st-inp .st-in{max-width:300px;}
+.st-inp .st-two{max-width:440px;}
+/* тонка вертикальна лінія між співробітниками */
+.st td.st-num,.st th.st-he{border-left:1px solid var(--line-strong);}
 .st-cb{position:relative;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;cursor:pointer;flex-shrink:0;user-select:none;}
 .st-cb.txt{width:auto;padding:0 10px 0 4px;gap:8px;}
 .st-cb input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;}
