@@ -5509,7 +5509,7 @@ function InvoicesModule({ cab }) {
       <div className="inv-viewtabs">
         <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}>Список</button>
         <button className={view === "board" ? "on" : ""} onClick={() => setView("board")}>Дошка</button>
-        <button className={view === "analytics" ? "on" : ""} onClick={() => setView("analytics")}><BarChart3 size={13} /> Аналітика</button>
+        {!isYulia && <button className={view === "analytics" ? "on" : ""} onClick={() => setView("analytics")}><BarChart3 size={13} /> Аналітика</button>}
         {canControlDocs && <button className={view === "docs" ? "on" : ""} onClick={() => setView("docs")}>Контроль документів{docsOpenCount > 0 ? ` · ${docsOpenCount}` : ""}</button>}
       </div>
 
@@ -5517,7 +5517,7 @@ function InvoicesModule({ cab }) {
 
       {view === "docs" && canControlDocs ? (
         <InvoiceDocsControl rows={rows} cab={cab} onChanged={reload} onPreview={setPreview} />
-      ) : view === "analytics" ? (
+      ) : view === "analytics" && !isYulia ? (
         <InvoiceAnalytics rows={rows} cab={cab} />
       ) : view === "board" ? (
         <>
