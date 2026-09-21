@@ -2694,9 +2694,16 @@ function StTotalRow({ label, hint, cells, cls }) {
   );
 }
 
-function SmStoreSalary({ salon }) {
+function SmStoreSalary({ salon, review, ymProp }) {
+  // review = "tm" | "manager" — та сама таблиця для ТМ/керівника: перегляд, а в режимі корективів (лише ТМ) — правки
+  const isReview = !!review;
+  const canEditReview = review === "tm";
+  const [editMode, setEditMode] = useState(false);
+  const [tmComment, setTmComment] = useState("");
+  const [loadKey, setLoadKey] = useState(0);
   const [employees, setEmployees] = useState(null);
-  const [ym, setYm] = useState(salaryYm());
+  const [ymState, setYm] = useState(salaryYm());
+  const ym = ymProp || ymState;
   const [tab, setTab] = useState("calc");
   const [drafts, setDrafts] = useState(null);
   const [calcs, setCalcs] = useState({});
@@ -2738,26 +2745,31 @@ function SmStoreSalary({ salon }) {
       emps.forEach((e, i) => {
         const d = _.cloneDeep(docs[i]);
         saved.current[e.id] = JSON.stringify(docs[i]);
-        if (d.status === "draft") d.manager.coef = ST_ROLE_COEF[e.role] || "1.0"; // коеф. керуючого за замовчуванням = роль
-        // дні заміни: автоматично з графіка, але СМ може виправити (тоді значення вважається ручним)
-        if (d.bonus.replacementManual === undefined && (d.bonus.replacementDays || 0) > 0 && d.bonus.replacementDays !== auto[e.id]) d.bonus.replacementManual = true;
-        if (!d.bonus.replacementManual && (d.status === "draft" || d.status === "corrected")) d.bonus.replacementDays = auto[e.id];
-        d.manager.attestPay = e.role === "manager" || e.role === "acting_manager" ? 1000 : 500; // атестація: 1 000 керуючому, 500 іншим
+        if (!isReview) { // для ТМ/керівника показуємо документи як подані — без автопідстановок
+          if (d.status === "draft") d.manager.coef = ST_ROLE_COEF[e.role] || "1.0"; // коеф. керуючого за замовчуванням = роль
+          // дні заміни: автоматично з графіка, але СМ може виправити (тоді значення вважається ручним)
+          if (d.bonus.replacementManual === undefined && (d.bonus.replacementDays || 0) > 0 && d.bonus.replacementDays !== auto[e.id]) d.bonus.replacementManual = true;
+          if (!d.bonus.replacementManual && (d.status === "draft" || d.status === "corrected")) d.bonus.replacementDays = auto[e.id];
+          d.manager.attestPay = e.role === "manager" || e.role === "acting_manager" ? 1000 : 500; // атестація: 1 000 керуючому, 500 іншим
+        }
         next[e.id] = d;
       });
-      // спільні цифри магазину: беремо перше заповнене значення, щоб усі документи збігалися
-      ST_SHARED.forEach((path) => {
-        const src = docs.map((d) => _.get(d, path)).find((v) => v) ?? _.get(docs[0], path);
-        if (src !== undefined) emps.forEach((e) => { _.set(next[e.id], path, src); });
-      });
-      ST_SHOTS.forEach(([key]) => {
-        const src = docs.map((d) => shotList(d.screenshots?.[key])).find((l) => l.length);
-        if (src) emps.forEach((e) => { _.set(next[e.id], ["screenshots", key], src); });
-      });
+      if (!isReview) {
+        // спільні цифри магазину: беремо перше заповнене значення, щоб усі документи збігалися
+        ST_SHARED.forEach((path) => {
+          const src = docs.map((d) => _.get(d, path)).find((v) => v) ?? _.get(docs[0], path);
+          if (src !== undefined) emps.forEach((e) => { _.set(next[e.id], path, src); });
+        });
+        ST_SHOTS.forEach(([key]) => {
+          const src = docs.map((d) => shotList(d.screenshots?.[key])).find((l) => l.length);
+          if (src) emps.forEach((e) => { _.set(next[e.id], ["screenshots", key], src); });
+        });
+      }
       setDrafts(next);
     });
     return () => { alive = false; };
-  }, [employees, emps, salon.key, ym]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees, emps, salon.key, ym, loadKey]);
 
   useEffect(() => { draftsRef.current = drafts; }, [drafts]);
 
@@ -2803,11 +2815,11 @@ function SmStoreSalary({ salon }) {
 
   // автозбереження через 2,5 с після останньої зміни; і при виході з вкладки
   useEffect(() => {
-    if (!touched.current || !drafts) return undefined;
+    if (isReview || !touched.current || !drafts) return undefined; // ТМ зберігає лише кнопкою «Зберегти корективи»
     const t = setTimeout(() => { saveRef.current(); }, 2500);
     return () => clearTimeout(t);
   }, [drafts]);
-  useEffect(() => () => { if (touched.current) saveRef.current(); }, []);
+  useEffect(() => () => { if (touched.current && !isReview) saveRef.current(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // масштаб «під екран»: висота вікна задає масштаб, а ширину сторінки розтягуємо до країв —
   // так вся сторінка вміщується без прокруток і не лишає порожніх смуг збоку (на телефоні — без масштабування)
@@ -2914,6 +2926,42 @@ function SmStoreSalary({ salon }) {
     }
     setSaving(false);
   };
+  // ---- ТМ: корективи та передача керівнику ----
+  const saveCorrections = async () => {
+    setSaving(true);
+    try {
+      const now = new Date().toISOString();
+      const next = { ...drafts };
+      let n = 0;
+      for (const e of emps) {
+        const cur = drafts[e.id];
+        if (JSON.stringify(cur) === saved.current[e.id]) continue;
+        n += 1;
+        next[e.id] = { ...cur, status: "corrected", correctedAt: now, tmComment, correctionDiff: smBuildDiff(cur.smSnapshot, cur) };
+      }
+      if (!n) { pushToast({ title: "Змін немає", body: "Виправте потрібні цифри в таблиці" }); setSaving(false); return; }
+      await saveAll(next);
+      touched.current = false;
+      setDrafts(next); setEditMode(false); setTmComment("");
+      notify({ recipient: salon.key, kind: "salary", title: "ТМ вніс корективи у ЗП", body: `${salonLabel(salon)} · ${monthLabel(ym)}`, actor: "tm", link: "salary" });
+      pushToast({ title: "Корективи збережено", body: "Салон отримає сповіщення" });
+    } catch (err) { pushToast({ title: "Не вдалося зберегти", body: String(err.message || err) }); }
+    setSaving(false);
+  };
+  const cancelEdit = () => { touched.current = false; setEditMode(false); setTmComment(""); setLoadKey((k) => k + 1); };
+  const approveAll = async () => {
+    if (!armed) { setArmed(true); setTimeout(() => setArmed(false), 5000); return; }
+    setArmed(false); setSaving(true);
+    try {
+      const now = new Date().toISOString();
+      const next = { ...drafts };
+      emps.forEach((e) => { const cur = drafts[e.id]; if (cur.status !== "draft" && !cur.tmApproved) next[e.id] = { ...cur, tmApproved: true, tmApprovedAt: now }; });
+      await saveAll(next);
+      setDrafts(next);
+      pushToast({ title: "Передано керівнику", body: `${salonLabel(salon)} · ${monthLabel(ym)}` });
+    } catch (err) { pushToast({ title: "Не вдалося передати", body: String(err.message || err) }); }
+    setSaving(false);
+  };
   const askSubmit = () => {
     if (armed) { submit(); return; }
     setArmed(true);
@@ -2949,7 +2997,7 @@ function SmStoreSalary({ salon }) {
   const showBanner = !dl.future && anyPending;
   const corrEmps = emps.filter((e) => d(e).tmComment || (d(e).correctionDiff && d(e).correctionDiff.length > 0));
   const corrDot = corrEmps.some((e) => !d(e).smRepliedAt);
-  const showTmAdj = emps.some((e) => (c(e).adj || 0) !== 0);
+  const showTmAdj = emps.some((e) => (c(e).adj || 0) !== 0) || (isReview && canEditReview && editMode);
   const totalNet = _.sumBy(emps, (e) => c(e).total);
   const totalGross = _.sumBy(emps, (e) => c(e).grossTotal);
   const shotCount = ST_SHOTS.reduce((s, [k]) => s + shotsFor(k).length, 0);
@@ -2962,27 +3010,50 @@ function SmStoreSalary({ salon }) {
     <div className="st-fit" ref={fitRef}>
     <div className="st-fit-box" style={fit.phone ? undefined : { width: (fit.w || W0) * fit.s, height: fit.h * fit.s }}>
     <div className="embedded st-page st-fit-in" ref={innerRef} style={fit.phone ? undefined : { width: fit.w || W0, transform: `scale(${fit.s})` }}>
-      <div className="month-picker">
-        <select value={ym} onChange={(ev) => changeMonth(ev.target.value)}>
-          {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
-        </select>
-        <span className="st-title">{salonLabel(salon)}</span>
-        {emps.every((e) => d(e).status === "submitted") && <span className="badge-ok"><Check size={13} /> На розгляді в ТМ</span>}
-        {emps.some((e) => d(e).status === "corrected") && <span className="badge-off">ТМ вніс корективи</span>}
-        {emps.some((e) => d(e).tmApproved) && <span className="badge-warn">Передано керівнику</span>}
+      <div className="st-head">
+        <h1 className="st-h1">{isReview ? "ЗП" : "Розрахунок ЗП"} · {salonLabel(salon)}</h1>
+        {ymProp
+          ? <span className="st-monthchip">{monthLabel(ym)}</span>
+          : (
+            <div className="month-picker" style={{ margin: 0 }}>
+              <select value={ym} onChange={(ev) => changeMonth(ev.target.value)}>
+                {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
+              </select>
+            </div>
+          )}
+        {emps.every((e) => d(e).status === "submitted" || d(e).status === "corrected") ? null : <span className="st-status warn">Чернетка</span>}
+        {emps.every((e) => d(e).status === "submitted") && <span className="st-status ok"><Check size={13} /> На розгляді в ТМ</span>}
+        {emps.some((e) => d(e).status === "corrected") && <span className="st-status warn">ТМ вніс корективи</span>}
+        {emps.some((e) => d(e).tmApproved) && <span className="st-status info">Передано керівнику</span>}
+        <span className="st-spacer" />
+        {!isReview && (
+          <>
+            <button className="btn-secondary" disabled={saving} onClick={async () => { setSaving(true); await saveAll(); setSaving(false); pushToast({ title: "Чернетку збережено", body: monthLabel(ym) }); }}>Зберегти чернетку</button>
+            <button className={armed ? "btn-primary st-armed" : "btn-primary"} onClick={askSubmit} disabled={saving}>
+              {saving ? "Надсилання…" : armed ? "Точно подати? Натисніть ще раз" : "Подати на погодження ТМ"}
+            </button>
+          </>
+        )}
       </div>
-      {showBanner && (
+      {!isReview && showBanner && (
         <div className={`banner ${dl.overdue ? "banner-late" : "banner-warn"}`}>
           <AlertTriangle size={16} />
           {dl.overdue ? `Термін подачі ЗП за ${monthLabel(ym)} минув (був до ${dl.dueLabel}).` : `Подайте ЗП за ${monthLabel(ym)} до ${dl.dueLabel}.`}
         </div>
       )}
-      <div className="inner-tabs">
-        <button className={tab === "calc" ? "active" : ""} onClick={() => setTab("calc")}>Розрахунок</button>
-        <button className={tab === "corrections" ? "active" : ""} onClick={() => setTab("corrections")}>Корективи від ТМ{corrDot ? " •" : ""}</button>
-      </div>
+      {isReview && emps.some((e) => d(e).smReplyComment) && (
+        <div className="reply-banner">
+          {emps.filter((e) => d(e).smReplyComment).map((e) => <div key={e.id}><b>Відповідь салону ({e.full_name}):</b> {d(e).smReplyComment}</div>)}
+        </div>
+      )}
+      {!isReview && (
+        <div className="inner-tabs">
+          <button className={tab === "calc" ? "active" : ""} onClick={() => setTab("calc")}>Розрахунок</button>
+          <button className={tab === "corrections" ? "active" : ""} onClick={() => setTab("corrections")}>Корективи від ТМ{corrDot ? " •" : ""}</button>
+        </div>
+      )}
 
-      {tab === "corrections" ? (
+      {!isReview && tab === "corrections" ? (
         corrEmps.length === 0
           ? <div className="admin-empty">Корективів від ТМ поки немає.</div>
           : corrEmps.map((e) => (
@@ -2993,6 +3064,7 @@ function SmStoreSalary({ salon }) {
           ))
       ) : (
         <>
+          <fieldset className="st-fs" disabled={isReview && !editMode}>
           <div className="st-strip">
             <div className="st-cell">
               <div className="st-cap">План · факт · виконання</div>
@@ -3028,6 +3100,10 @@ function SmStoreSalary({ salon }) {
               <div className="st-cap">Ставка ЗП</div>
               <div className="st-rate">{stNum(c0.baseRaw)} ₴</div>
             </div>
+            <div className="st-cell st-legend">
+              <div><span className="st-lg-box" />поле для внесення</div>
+              <div><span className="st-lg-num">870</span>рахується само</div>
+            </div>
             <div className="st-cell st-total">
               <div className="st-cap">До виплати по магазину</div>
               <div className="st-rate">{stNum(totalNet)} ₴</div>
@@ -3044,7 +3120,7 @@ function SmStoreSalary({ salon }) {
                   <th />
                   <th className="st-hl">Стаття</th>
                   <th className="st-hl">Вхідні дані магазину</th>
-                  <th className="st-hl">Правило</th>
+                  <th className="st-hl">Правило з таблиці</th>
                   {emps.map((e) => (
                     <th key={e.id} className="st-he">
                       <div className="st-en">{e.full_name}</div>
@@ -3124,7 +3200,8 @@ function SmStoreSalary({ salon }) {
                 <StRow label="ЕЗ" inp={<span className="st-hint">з модуля «ЕЗ»</span>} rule={`20% від прибутку ЕЗ · ÷ ${team}`} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
                 <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>} rule="будь-який додатковий бонус, ТМ бачить і звіряє"
                   cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
-                {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>} rule="" cells={each((e) => stMoney(c(e).adj))} />}
+                {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>} rule=""
+                  cells={each((e) => (isReview && editMode ? <StIn v={d(e).adj.amount} set={setEmp(e.id, ["adj", "amount"])} label={`Додатково від ТМ — ${e.full_name}`} cls="st-in-w" /> : stMoney(c(e).adj)))} />}
                 <StTotalRow cls="st-sub" label="Всього нараховано" hint="включно з ЕЗ" cells={each((e) => stNum(c(e).grossTotal))} />
                 {[["official", "Офіційно на картку"], ["advance", "Аванс готівка"], ["birthdays", "Дні народження"], ["inventory", "Інвентаризація"], ["ownUse", "Товар для власних потреб"]].map(([k, title], i) => (
                   <StRow key={k} g={i === 0 ? "Мінус" : null} gs={5} label={title} inp={<span className="st-hint">вноситься по кожному →</span>} rule=""
@@ -3157,15 +3234,37 @@ function SmStoreSalary({ salon }) {
             )}
           </div>
 
-          <div className="save-bar">
-            <span className="save-hint">
-              {saving ? "Зберігаю…" : savedAt ? `Збережено о ${savedAt.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}` : "Зміни зберігаються автоматично"}
-            </span>
-            <button className="btn-secondary" disabled={saving} onClick={async () => { setSaving(true); await saveAll(); setSaving(false); pushToast({ title: "Чернетку збережено", body: monthLabel(ym) }); }}>Зберегти</button>
-            <button className={armed ? "btn-primary st-armed" : "btn-primary"} onClick={askSubmit} disabled={saving}>
-              {saving ? "Надсилання…" : armed ? "Точно подати? Натисніть ще раз" : "Подати ТМ на погодження"}
-            </button>
-          </div>
+          </fieldset>
+
+          {!isReview ? (
+            <div className="save-bar">
+              <span className="save-hint">
+                {saving ? "Зберігаю…" : savedAt ? `Збережено о ${savedAt.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}` : "Зміни зберігаються автоматично"}
+              </span>
+            </div>
+          ) : canEditReview ? (
+            editMode ? (
+              <div className="st-review-bar">
+                <label className="over-field" style={{ maxWidth: "100%", flex: 1 }}>
+                  <span>Коментар до корективи (побачить салон)</span>
+                  <textarea rows={2} value={tmComment} onChange={(ev) => setTmComment(ev.target.value)} />
+                </label>
+                <div className="correction-actions">
+                  <button className="btn-secondary" onClick={cancelEdit} disabled={saving}>Скасувати</button>
+                  <button className="btn-primary" onClick={saveCorrections} disabled={saving}>{saving ? "Збереження…" : "Зберегти корективи"}</button>
+                </div>
+              </div>
+            ) : (
+              <div className="st-review-bar">
+                <button className="btn-secondary" onClick={() => setEditMode(true)}><Pencil size={14} /> Внести корективи</button>
+                {emps.some((e) => d(e).status !== "draft" && !d(e).tmApproved) && (
+                  <button className={armed ? "btn-primary st-armed" : "btn-secondary"} onClick={approveAll} disabled={saving}>
+                    <Check size={14} /> {armed ? "Точно передати? Натисніть ще раз" : "Передати керівнику"}
+                  </button>
+                )}
+              </div>
+            )
+          ) : null}
         </>
       )}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
@@ -3385,8 +3484,10 @@ function SalonReviewPanel({ tmKey, reviewer }) {
           })}
         </div>
       ) : (
-        <div className="salon-list">
-          <div className="emp-group-head" style={{ borderRadius: "var(--radius-md)", marginBottom: 4 }}>{salonLabel(salonByKey(openSalon))}</div>
+        <>
+        <SmStoreSalary key={`${openSalon}:${ym}:${reloadN}`} salon={salonByKey(openSalon)} review={reviewer} ymProp={ym} />
+        <div className="salon-list" style={{ marginTop: 22 }}>
+          <div className="emp-group-head" style={{ borderRadius: "var(--radius-md)", marginBottom: 4 }}>Детально по співробітнику (скріни, оплата, покроковий огляд)</div>
           {(bySalon[openSalon] || []).length === 0 && <div className="admin-empty">У магазині немає співробітників.</div>}
           {(bySalon[openSalon] || []).map((r) => (
             <button className="salon-row" key={r.emp.id} onClick={() => setOpenEmp(r.emp.id)}>
@@ -3400,6 +3501,7 @@ function SalonReviewPanel({ tmKey, reviewer }) {
             </button>
           ))}
         </div>
+        </>
       )}
     </div>
   );
@@ -11278,7 +11380,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
   const modules = [
     { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
     { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
-    { key: "salons", label: "ЗП салонів", group: "Головне", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
+    { key: "salons", wide: true, label: "ЗП салонів", group: "Головне", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
     { key: "plans", label: "План показників", group: "Головне", icon: <TrendingUp size={16} />, render: () => <SmPlanPanel tmKey={tmKey} /> },
     { key: "analytics", label: "Аналітика", group: "Головне", icon: <TrendingUp size={16} />, render: () => <AnalyticsPanel cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
@@ -12303,25 +12405,25 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-fit-box{max-width:100%;}
 .st-fit-in{transform-origin:top left;}
 .st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
-.st-strip{display:flex;flex-wrap:wrap;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
-.st-cell{padding:12px 18px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
+.st-strip{padding:14px 0;display:flex;flex-wrap:wrap;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
+.st-cell{padding:0 24px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
 .st-cell.st-total{border-right:none;margin-left:auto;align-items:flex-end;text-align:right;}
-.st-cap{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);}
+.st-cap{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);}
 .st-plan{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace;color:var(--ink);}
 .st-plan em,.st-adjs em{font-style:normal;font-family:'Inter',sans-serif;font-size:11px;color:var(--muted);margin-right:5px;}
 .st-plan b{font-size:16px;font-weight:600;}
 .st-plan label,.st-adjs label{display:inline-flex;align-items:center;}
-.st-pct{font-size:22px;font-weight:600;color:var(--negative);}
-.st-pct.ok{color:var(--positive);}
+.st-pct{font-size:22px;font-weight:600;color:var(--st-neg);}
+.st-pct.ok{color:var(--st-pos);}
 .st-adjs{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
-.st-rate{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;color:var(--gold);}
-.st-hint{font-size:11.5px;color:var(--muted);font-weight:400;font-family:'Inter',sans-serif;}
-.st-warn{color:var(--negative);}
+.st-rate{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;color:var(--st-gold);}
+.st-hint{font-size:11.5px;color:var(--st-hint);font-weight:400;font-family:'Inter',sans-serif;}
+.st-warn{color:var(--st-neg);}
 .st-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow-x:auto;}
 .st{width:100%;min-width:900px;border-collapse:collapse;table-layout:fixed;font-size:12.5px;color:var(--ink);}
-.st td,.st th{padding:0 10px;height:28px;border-bottom:1px solid var(--line);vertical-align:middle;}
+.st td,.st th{padding:0 10px;height:30px;border-bottom:1px solid var(--line);vertical-align:middle;}
 .st th{height:auto;padding:9px 10px 10px;text-align:left;font-weight:500;border-bottom:1px solid var(--line-strong);}
-.st-hl{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);vertical-align:bottom;}
+.st-hl{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);vertical-align:bottom;}
 .st-he{text-align:right !important;}
 .st-en{font-size:13px;font-weight:600;color:var(--ink);}
 .st-er{font-size:11px;color:var(--muted);margin-top:3px;display:flex;justify-content:flex-end;align-items:center;gap:5px;flex-wrap:wrap;}
@@ -12331,10 +12433,10 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-rule{color:var(--muted);font-size:11.5px;line-height:1.3;}
 .st-num{text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:500;font-variant-numeric:tabular-nums;}
 .st-mute{color:var(--faint);}
-.st-neg{color:var(--negative);}
+.st-neg{color:var(--st-neg);}
 .st tr.st-dim td:not(.st-g){opacity:.55;}
 .st-in{width:100%;box-sizing:border-box;height:24px;border-radius:6px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--ink);font:500 12.5px 'IBM Plex Mono',monospace;text-align:right;padding:0 8px;}
-.st-in:focus{outline:2px solid var(--gold);outline-offset:0;border-color:var(--gold);}
+.st-in:focus{outline:2px solid var(--st-gold);outline-offset:0;border-color:var(--st-gold);}
 .st-in-w{max-width:170px;display:block;margin-left:auto;}
 .st-in-m{width:78px;}.st-in-s{width:96px;}.st-in-xs{width:44px;}.st-in.off{opacity:.5;}
 .st-plan .st-in-w{width:120px;}
@@ -12343,17 +12445,17 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-cb.txt{width:auto;padding:0 10px 0 4px;gap:8px;}
 .st-cb input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;}
 .st-cb-box{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line-strong);background:var(--input-bg);display:flex;align-items:center;justify-content:center;color:transparent;transition:background .14s var(--ease),border-color .14s var(--ease),box-shadow .14s var(--ease),transform .14s var(--ease);pointer-events:none;flex-shrink:0;}
-.st-cb:hover .st-cb-box{border-color:var(--gold);box-shadow:0 0 0 3px rgba(190,138,46,.18);}
+.st-cb:hover .st-cb-box{border-color:var(--st-gold);box-shadow:0 0 0 3px rgba(190,138,46,.18);}
 .st-cb:active .st-cb-box{transform:scale(.92);}
-.st-cb.on .st-cb-box{background:linear-gradient(180deg,var(--gold-bright),var(--gold));border-color:var(--gold);color:var(--gold-ink);}
-.st-cb input:focus-visible + .st-cb-box{outline:2px solid var(--gold);outline-offset:2px;}
+.st-cb.on .st-cb-box{background:linear-gradient(180deg,var(--st-gold),var(--st-gold));border-color:var(--st-gold);color:var(--gold-ink);}
+.st-cb input:focus-visible + .st-cb-box{outline:2px solid var(--st-gold);outline-offset:2px;}
 .st-cb-t{font-size:12px;color:var(--ink);white-space:nowrap;pointer-events:none;}
-.st-reset{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid var(--line-strong);border-radius:6px;background:var(--input-bg);color:var(--gold);cursor:pointer;padding:0;}
-.st-reset:hover{border-color:var(--gold);}
+.st-reset{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid var(--line-strong);border-radius:6px;background:var(--input-bg);color:var(--st-gold);cursor:pointer;padding:0;}
+.st-reset:hover{border-color:var(--st-gold);}
 .st-ezv{font-family:'IBM Plex Mono',monospace;font-size:14px;}
 .st-ez-sum{color:var(--ink);}
-.st-pct-sm{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:var(--negative);}
-.st-pct-sm.ok{color:var(--positive);}
+.st-pct-sm{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:var(--st-neg);}
+.st-pct-sm.ok{color:var(--st-pos);}
 .st tr.st-gross td{background:var(--surface-alt);border-top:1px solid var(--line-strong);}
 .st-lbl{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink);white-space:nowrap;}
 .st-two{display:flex;gap:6px;align-items:center;}
@@ -12362,19 +12464,37 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-seg{display:inline-flex;gap:3px;vertical-align:middle;margin-right:6px;flex-wrap:wrap;}
 .st-seg i,.st-seg button{font-style:normal;font:inherit;font-size:11px;padding:1px 7px;border-radius:6px;border:1px solid var(--line-strong);color:var(--muted);background:none;}
 .st-seg button{cursor:pointer;}
-.st-seg .on{border-color:var(--gold);background:rgba(190,138,46,.16);color:var(--gold);font-weight:600;}
-.st-pill{display:inline-block;padding:2px 9px;border-radius:999px;background:rgba(190,138,46,.16);color:var(--gold);font-size:11.5px;font-weight:600;}
+.st-seg .on{border-color:var(--st-gold);background:rgba(190,138,46,.16);color:var(--st-gold);font-weight:600;}
+.st-pill{display:inline-block;padding:2px 9px;border-radius:999px;background:rgba(190,138,46,.16);color:var(--st-gold);font-size:11.5px;font-weight:600;}
 .st-sel{width:100%;height:24px;border-radius:6px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--ink);font-size:12px;padding:0 6px;}
-.st tr.st-sub td{background:var(--surface-alt);font-weight:600;height:34px;}
-.st tr.st-pay td{background:var(--surface-sink);height:46px;border-bottom:none;font-weight:600;font-size:14px;}
-.st-payv{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:var(--gold);}
+.st tr.st-sub td{background:color-mix(in srgb,var(--surface) 65%,var(--surface-alt));font-weight:600;height:36px;}
+.st tr.st-pay td{background:var(--surface-alt);height:46px;border-bottom:none;font-weight:600;font-size:14px;}
+.st-payv{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:var(--st-gold);}
 .st-shots{margin:12px 0;}
 .st-shots-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:10px;}
 .st-shot{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px;}
 .st-shot-t{font-size:12px;font-weight:600;color:var(--ink);margin-bottom:6px;}
 .st-corr{margin-bottom:18px;}
 .st-corr h4{color:var(--on-dark);margin:0 0 8px;font-size:14px;}
-.btn-primary.st-armed{background:var(--negative);color:#fff;}
+.btn-primary.st-armed{background:var(--st-neg);color:#fff;}
+.st-page{--st-gold:var(--gold);--st-pos:var(--positive);--st-neg:var(--negative);--st-cap:var(--muted);--st-hint:var(--muted);}
+:root[data-theme="dark"] .st-page{--st-gold:var(--gold-bright);--st-pos:var(--positive-bright);--st-neg:var(--negative-bright);--st-cap:#A79F8A;--st-hint:#7C8794;}
+.st-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;}
+.st-h1{margin:0;font-family:'Fraunces',serif;font-weight:600;font-size:24px;letter-spacing:-.01em;color:var(--on-dark);}
+.st-spacer{flex:1;}
+.st-monthchip{padding:7px 12px;border-radius:10px;background:var(--surface-alt);border:1px solid var(--line);font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink);}
+.st-status{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border-radius:999px;font-size:11.5px;font-weight:600;}
+.st-status.ok{background:rgba(127,191,143,.16);color:var(--st-pos);}
+.st-status.warn{background:rgba(220,169,74,.14);color:var(--st-gold);}
+.st-status.info{background:rgba(111,143,191,.16);color:#8FB0E0;}
+.st-legend{justify-content:center;gap:5px;font-size:11.5px;color:var(--st-hint);}
+.st-legend>div{display:flex;align-items:center;gap:8px;}
+.st-lg-box{display:inline-block;width:22px;height:14px;border-radius:4px;border:1px solid var(--line-strong);background:var(--input-bg);}
+.st-lg-num{display:inline-block;width:22px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink);}
+.st-fs{border:0;padding:0;margin:0;min-width:0;}
+.st-fs:disabled .st-in,.st-fs:disabled .st-sel{opacity:1;color:var(--ink);-webkit-text-fill-color:var(--ink);cursor:default;}
+.st-fs:disabled .st-cb,.st-fs:disabled .st-cb input{cursor:default;}
+.st-review-bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:14px 0;}
 
 .inv-issuer{display:flex;gap:8px;}
 .inv-issuer button{flex:1;padding:10px 12px;border-radius:10px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--ink-soft);font-size:13px;font-family:inherit;cursor:pointer;}
