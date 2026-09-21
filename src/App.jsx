@@ -10330,6 +10330,79 @@ function TrainingCreateModal({ cabKey, onClose, onDone }) {
   );
 }
 
+const TRN_STATUS = {
+  passed: ["Виконано", "ok"], failed: ["Провалено", "bad"], not_passed: ["Не пройдено", "warn"], not_assigned: ["Не призначено", ""],
+};
+
+/* Тестування: картка відкривається вікном зі статусом проходження по магазинах і співробітниках */
+function TrainingDetail({ t, info, resKey, activeEmps, manage, onClose, onDelete, onPhoto }) {
+  const [zoom, setZoom] = useState(null);
+  const [delArmed, setDelArmed] = useState(false);
+  const fileRef = React.useRef(null);
+  const { dleft, srows, totT, passT, pctT } = info;
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="trn-detail" onClick={(e) => e.stopPropagation()}>
+        <div className="trn-card-h">
+          <b>{t.title}</b>
+          <button className="modal-close" onClick={onClose} aria-label="Закрити"><X size={16} /></button>
+        </div>
+        <div className="trn-card-meta">
+          {t.assigned_on && <span className="trn-pill">призначено {fmtDeadline(t.assigned_on)}</span>}
+          <span className="trn-pill">{t.deadline ? `дедлайн ${fmtDeadline(t.deadline)}` : "без дедлайну"}</span>
+          {dleft != null && (
+            <span className={`trn-pill ${dleft < 0 ? "bad" : dleft <= 3 ? "warn" : "ok"}`}>
+              {dleft < 0 ? `прострочено ${-dleft} дн.` : dleft === 0 ? "дедлайн сьогодні" : `${dleft} дн. лишилось`}
+            </span>
+          )}
+        </div>
+        {t.screenshot && <button className="trn-detail-shot" onClick={() => setZoom(t.screenshot)}><img src={t.screenshot} alt="" /></button>}
+        <div className="trn-terr">
+          <span className="trn-terr-lab">Пройшло</span>
+          <b className="trn-terr-num">{passT}/{totT}</b>
+          <div className="trn-terr-bar"><i className={pctT === 100 ? "full" : ""} style={{ width: `${pctT}%` }} /></div>
+          <span className="trn-terr-pct">{pctT}%</span>
+        </div>
+        <div className="trn-dlist">
+          {srows.map(({ s: sl, emps, passed }) => (
+            <div className="trn-dsalon" key={sl.key}>
+              <div className="trn-dsalon-h">
+                <span>{sl.city}, {shortAddr(sl.addr)}</span>
+                <b className={passed.length === emps.length ? "ok" : ""}>{passed.length}/{emps.length}</b>
+              </div>
+              {emps.map((e) => {
+                const r = resKey(t.id, e.id) || {};
+                const [label, tone] = TRN_STATUS[r.status || "not_assigned"] || TRN_STATUS.not_assigned;
+                return (
+                  <div className="trn-de" key={e.id}>
+                    <span className="trn-de-nm">{e.full_name}<span className="trn-role">{empRoleShort[e.role]}</span></span>
+                    {r.score != null && r.status !== "not_assigned" && r.status !== "not_passed" && <span className="trn-de-sc">{r.score}</span>}
+                    {r.passed && r.passed_on && <span className="trn-de-dt">{fmtDeadline(r.passed_on)}</span>}
+                    <span className={`trn-pill ${tone}`}>{label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          {srows.length === 0 && <p className="hint">немає активних співробітників</p>}
+        </div>
+        {manage && (
+          <div className="trn-modal-f">
+            <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) onPhoto(f); e.target.value = ""; }} />
+            <button className="btn-secondary small" onClick={() => fileRef.current?.click()}><Camera size={13} /> {t.screenshot ? "Змінити фото" : "Додати фото"}</button>
+            <span style={{ flex: 1 }} />
+            <button className="btn-secondary small" onClick={() => { if (!delArmed) { setDelArmed(true); setTimeout(() => setDelArmed(false), 4000); } else onDelete(); }}>
+              <Trash2 size={13} /> {delArmed ? "Точно видалити?" : "Видалити"}
+            </button>
+          </div>
+        )}
+      </div>
+      {zoom && <ImageModal src={zoom} onClose={() => setZoom(null)} />}
+    </div>,
+    document.body,
+  );
+}
+
 function TrainingModule({ cab }) {
   const isSm = cab.type === "sm";
   const manage = cab.type === "tm" || cab.type === "manager";
@@ -10346,6 +10419,7 @@ function TrainingModule({ cab }) {
   const [tab, setTab] = useState("active");
   const [ym, setYm] = useState(nowYm());
   const [add, setAdd] = useState(false);
+  const [openId, setOpenId] = useState(null);
   const months = useMemo(() => recentMonths(12), []);
 
   const reload = React.useCallback(async () => {
@@ -10385,8 +10459,82 @@ function TrainingModule({ cab }) {
     </div>
   ) : null;
 
-  // ---- активні / режим редагування ----
-  if (isSm || tab === "active") {
+  const trainingInfo = (t) => {
+    const dleft = daysToDeadline(t.deadline);
+    const srows = scopeSalons.map((sl) => {
+      const emps = activeEmps.filter((e) => e.salon_key === sl.key);
+      const passed = emps.filter((e) => resKey(t.id, e.id)?.passed);
+      return { s: sl, emps, passed, miss: emps.filter((e) => !resKey(t.id, e.id)?.passed) };
+    }).filter((r) => r.emps.length);
+    const totT = srows.reduce((a, r) => a + r.emps.length, 0);
+    const passT = srows.reduce((a, r) => a + r.passed.length, 0);
+    return { dleft, srows, totT, passT, pctT: totT ? Math.round((passT / totT) * 100) : 0 };
+  };
+
+  // ---- ТМ / керівник: дошка тестувань (як «Безнальні рахунки → Дошка») ----
+  if (!isSm && tab === "active") {
+    const cols = [["over", "Прострочено"], ["run", "У процесі"], ["done", "Пройдено всіма"]];
+    const by = { over: [], run: [], done: [] };
+    activeTrainings.forEach((t) => {
+      const i = trainingInfo(t);
+      by[i.totT > 0 && i.passT === i.totT ? "done" : i.dleft != null && i.dleft < 0 ? "over" : "run"].push({ t, i });
+    });
+    const opened = openId ? activeTrainings.find((x) => x.id === openId) : null;
+    return (
+      <div className="tasks-mod trn-mod">
+        <div className="tasks-head">
+          <h3 className="ov-h">Проходження тестувань</h3>
+          {tabs}{addBtn}
+        </div>
+        {activeTrainings.length === 0 && <p className="hint">активних тестувань немає</p>}
+        <div className="inv-board">
+          {cols.map(([k, title]) => (
+            <div className="inv-col" key={k}>
+              <div className="inv-col-h"><span>{title}</span><span className="mono">{by[k].length}</span></div>
+              <div className="inv-col-body">
+                {by[k].length === 0 ? <p className="inv-col-empty">—</p> : by[k].map(({ t, i }) => (
+                  <button key={t.id} className={`trn-bcard ${k}`} onClick={() => setOpenId(t.id)}>
+                    {t.screenshot && <img className="trn-bcover" src={t.screenshot} alt="" loading="lazy" />}
+                    <span className="trn-bcard-b">
+                      <span className="trn-bcard-t">{t.title}</span>
+                      <span className="trn-card-meta" style={{ margin: 0 }}>
+                        <span className="trn-pill">{t.deadline ? `дедлайн ${fmtDeadline(t.deadline)}` : "без дедлайну"}</span>
+                        {i.dleft != null && k !== "done" && (
+                          <span className={`trn-pill ${i.dleft < 0 ? "bad" : i.dleft <= 3 ? "warn" : "ok"}`}>
+                            {i.dleft < 0 ? `прострочено ${-i.dleft} дн.` : i.dleft === 0 ? "сьогодні" : `${i.dleft} дн.`}
+                          </span>
+                        )}
+                      </span>
+                      <span className="trn-terr" style={{ margin: 0, padding: "6px 9px" }}>
+                        <b className="trn-terr-num">{i.passT}/{i.totT}</b>
+                        <span className="trn-terr-bar"><i className={i.pctT === 100 ? "full" : ""} style={{ width: `${i.pctT}%` }} /></span>
+                        <span className="trn-terr-pct">{i.pctT}%</span>
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {opened && (
+          <TrainingDetail
+            t={opened} info={trainingInfo(opened)} resKey={resKey} activeEmps={activeEmps} manage={manage}
+            onClose={() => setOpenId(null)}
+            onDelete={() => { deleteTraining(opened.id).then(() => { setOpenId(null); reload(); pushToast({ title: "Тестування видалено" }); }).catch((e) => pushToast({ title: "Не вдалося видалити", body: String(e.message || e) })); }}
+            onPhoto={async (f) => {
+              try { const url = await resizeImage(f); await updateTraining(opened.id, { screenshot: url }); reload(); pushToast({ title: "Фото оновлено" }); }
+              catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+            }}
+          />
+        )}
+        {add && <TrainingCreateModal cabKey={cab.key} onClose={() => setAdd(false)} onDone={() => { setAdd(false); reload(); }} />}
+      </div>
+    );
+  }
+
+  // ---- СМ: свої співробітники зі статусами ----
+  if (isSm) {
     return (
       <div className="tasks-mod trn-mod">
         <div className="tasks-head">
@@ -12212,6 +12360,27 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .inv-issuer{display:flex;gap:8px;}
 .inv-issuer button{flex:1;padding:10px 12px;border-radius:10px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--ink-soft);font-size:13px;font-family:inherit;cursor:pointer;}
 .inv-issuer button.on{border-color:var(--gold);background:rgba(190,138,46,.14);color:var(--gold);font-weight:600;}
+/* --- Тестування: дошка --- */
+.trn-bcard{display:flex;flex-direction:column;width:100%;text-align:left;padding:0;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--ink);cursor:pointer;overflow:hidden;font-family:inherit;transition:border-color .15s var(--ease),box-shadow .15s var(--ease);}
+.trn-bcard:hover{border-color:var(--gold);box-shadow:var(--sh-2);}
+.trn-bcard.over{border-left:3px solid var(--negative-bright);}
+.trn-bcard.done{opacity:.8;}
+.trn-bcover{width:100%;height:96px;object-fit:cover;object-position:top;display:block;background:var(--surface-alt);}
+.trn-bcard-b{display:flex;flex-direction:column;gap:8px;padding:10px 12px 12px;}
+.trn-bcard-t{font-family:'Fraunces',serif;font-size:14px;font-weight:600;line-height:1.28;letter-spacing:-.01em;}
+.trn-detail{background:var(--surface);color:var(--ink);border-radius:var(--radius);width:min(660px,94vw);max-height:90vh;overflow:auto;padding:18px 20px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--sh-3);}
+.trn-detail-shot{padding:0;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface-alt);cursor:zoom-in;overflow:hidden;}
+.trn-detail-shot img{display:block;width:100%;max-height:220px;object-fit:cover;object-position:top;}
+.trn-dlist{display:flex;flex-direction:column;gap:10px;}
+.trn-dsalon{border:1px solid var(--line);border-radius:var(--radius-md);padding:8px 12px;}
+.trn-dsalon-h{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;font-weight:600;padding-bottom:6px;border-bottom:1px solid var(--line);margin-bottom:4px;}
+.trn-dsalon-h b{font-variant-numeric:tabular-nums;color:var(--muted);}
+.trn-dsalon-h b.ok{color:var(--positive);}
+.trn-de{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:12.5px;}
+.trn-de-nm{flex:1;min-width:0;}
+.trn-de-sc{font-family:'IBM Plex Mono',monospace;font-weight:600;}
+.trn-de-dt{font-size:11px;color:var(--muted);}
+
 /* --- Контроль видаткових накладних --- */
 .dc-list{display:flex;flex-direction:column;gap:10px;}
 .dc-row{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-radius:var(--radius-md);background:var(--surface);border:1px solid var(--line);}
