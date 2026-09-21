@@ -12,7 +12,7 @@ import {
   Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
   Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
   Wrench, MessageSquare, Send, Banknote, Menu,
-  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search, Lock,
+  Warehouse, Paperclip, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search, Lock,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -10694,6 +10694,19 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
     return nativeModules[0].key;
   });
   const [navOpen, setNavOpen] = useState(false); // мобільна шухляда
+  const [peek, setPeek] = useState(false);          // на комп'ютері меню ховається ліворуч і виїжджає при наведенні на лівий край
+  const peekTimer = useRef(null);
+  const peekOn = () => { clearTimeout(peekTimer.current); setPeek(true); };
+  const peekOff = () => { clearTimeout(peekTimer.current); peekTimer.current = setTimeout(() => setPeek(false), 3000); }; // закривається не одразу
+  const [pinned, setPinned] = useState(() => { try { return localStorage.getItem("dnipro-nav-pinned") === "1"; } catch { return false; } });
+  const togglePin = () => setPinned((v) => { const n = !v; try { localStorage.setItem("dnipro-nav-pinned", n ? "1" : "0"); } catch { /* ignore */ } return n; });
+  // висота верхньої панелі — щоб меню виїжджало під нею
+  useEffect(() => {
+    const set = () => document.documentElement.style.setProperty("--tb-h", `${document.querySelector(".topbar")?.offsetHeight || 64}px`);
+    set();
+    window.addEventListener("resize", set);
+    return () => window.removeEventListener("resize", set);
+  }, []);
 
   // клік по сповіщенню → відкрити відповідний модуль
   useEffect(() => {
@@ -10711,7 +10724,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   // запамʼятовуємо активну вкладку — щоб оновлення сторінки не викидало на «Огляд»
   useEffect(() => { try { sessionStorage.setItem(TAB_KEY, active); } catch { /* ignore */ } }, [active, TAB_KEY]);
   const mod = byKey[active] || visibleItems[0] || items[0];
-  const pick = (key) => { setActive(key); setNavOpen(false); };
+  const pick = (key) => { setActive(key); setNavOpen(false); setPeek(false); };
 
   // --- бейджі: непрочитані сповіщення по вкладках ---
   const [notifs, setNotifs] = useState([]);
@@ -10835,8 +10848,12 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
       <TopBar title={title} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
       <div className={`cab-scrim ${navOpen ? "on" : ""}`} onClick={() => setNavOpen(false)} />
       {banner}
-      <div className="cab-layout">
-        <nav className={`cab-side ${editNav ? "editing" : ""} ${navOpen ? "open" : ""}`}>
+      {!pinned && <div className="cab-edge" onMouseEnter={peekOn} onClick={peekOn} aria-hidden="true" />}
+      <div className={`cab-layout ${pinned ? "pinned" : ""}`}>
+        <nav className={`cab-side ${editNav ? "editing" : ""} ${navOpen ? "open" : ""} ${peek || editNav ? "peek" : ""}`} onMouseEnter={peekOn} onMouseLeave={peekOff}>
+          <button className={`cab-pin ${pinned ? "on" : ""}`} onClick={togglePin} title={pinned ? "Відкріпити меню (ховатиметься)" : "Закріпити меню"} aria-label={pinned ? "Відкріпити меню" : "Закріпити меню"} aria-pressed={pinned}>
+            <Paperclip size={15} /><span>{pinned ? "Закріплено" : "Закріпити"}</span>
+          </button>
           {navInner}
           <span className="cab-side-sep" />
           <button className="cab-side-cfg" onClick={() => setEditNav((v) => !v)}>
@@ -11741,6 +11758,35 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
   }
   .cab-shell .cab-side.open{transform:translateX(0);}
   .cab-side-item{white-space:normal;}
+}
+
+/* комп'ютер: меню ховається ліворуч і виїжджає, коли навести мишу на лівий край екрана */
+.cab-edge{display:none;}
+@media (min-width:881px){
+  .cab-shell .cab-layout{grid-template-columns:1fr;gap:0;}
+  .cab-edge{display:block;position:fixed;left:0;top:0;bottom:0;width:12px;z-index:69;}
+  .cab-edge::after{content:"";position:absolute;left:0;top:50%;width:4px;height:72px;transform:translateY(-50%);border-radius:0 4px 4px 0;background:var(--gold);opacity:.55;transition:opacity .2s var(--ease);}
+  .cab-edge:hover::after{opacity:1;}
+  .cab-shell .cab-side{
+    position:fixed;top:var(--tb-h,64px);left:0;bottom:0;z-index:70;width:280px;overflow-y:auto;
+    border-radius:0;border:none;border-right:1px solid var(--line-dark);
+    background:linear-gradient(180deg,var(--bg-2),var(--bg));
+    box-shadow:0 0 60px rgba(0,0,0,.5);
+    padding:12px 10px 16px;
+    transform:translateX(-102%);
+    transition:transform .22s var(--ease);
+  }
+  .cab-shell .cab-side.peek{transform:translateX(0);}
+  /* закріплене меню — як раніше: постійна колонка ліворуч */
+  .cab-shell .cab-layout.pinned{grid-template-columns:232px 1fr;gap:22px;}
+  .cab-shell .cab-layout.pinned .cab-side{position:sticky;top:78px;bottom:auto;z-index:auto;width:auto;overflow:visible;border-radius:var(--radius-md);border:1px solid var(--line-dark);background:rgba(var(--sf),.03);box-shadow:none;padding:8px;transform:none;}
+}
+.cab-pin{display:none;}
+@media (min-width:881px){
+  .cab-pin{display:flex;align-items:center;gap:6px;align-self:flex-end;margin:0 4px 6px;padding:5px 10px;border:1px solid var(--line-dark);border-radius:999px;background:none;color:var(--on-dark-3);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
+  .cab-pin:hover{color:var(--on-dark);border-color:var(--gold);}
+  .cab-pin.on{color:var(--gold-ink);background:linear-gradient(180deg,var(--gold-bright),var(--gold));border-color:var(--gold);}
+  .cab-pin svg{transform:rotate(-45deg);}
 }
 
 /* ---------- вхід ---------- */
