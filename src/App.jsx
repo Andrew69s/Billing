@@ -2758,7 +2758,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
   const pctNoEz = c0.monthPlan > 0 ? ((c0.factAdjusted - ez.total) / c0.monthPlan) * 100 : 0;
 
   return (
-    <div className="embedded st-page">
+    <div className="embedded st-page" style={{ "--st-n": emps.length }}>
       <div className="st-head">
         <h1 className="st-h1">{isReview ? "ЗП" : "Розрахунок ЗП"} · {salonLabel(salon)}</h1>
         {ymProp
@@ -2859,7 +2859,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
 
           <div className="st-wrap">
             <table className="st">
-              <colgroup><col style={{ width: 104 }} /><col style={{ width: 200 }} /><col style={{ width: 230 }} /><col style={{ width: "26%" }} />{emps.map((e) => <col key={e.id} />)}</colgroup>
+              <colgroup><col style={{ width: 104 }} /><col style={{ width: 200 }} /><col style={{ width: 230 }} /><col style={{ width: 260 }} />{emps.map((e) => <col key={e.id} style={{ width: 190 }} />)}</colgroup>
               <thead>
                 <tr>
                   <th />
@@ -12103,7 +12103,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-sale-row > span:nth-child(2){margin-left:auto;font-weight:600;}
 
 /* --- СМ: розрахунок ЗП магазину (одна таблиця) --- */
-.st-page{max-width:1560px;margin:0 auto;}
+.st-page{max-width:calc(800px + var(--st-n,3) * 190px);margin:0 auto;}
 .st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
 .st-strip{padding:14px 0;display:flex;flex-wrap:nowrap;align-items:stretch;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
 .st-cell{flex:0 0 auto;padding:0 22px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
@@ -12122,7 +12122,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-hint{font-size:12.5px;color:var(--st-hint);font-weight:400;font-family:'Inter',sans-serif;}
 .st-warn{color:var(--st-neg);}
 .st-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow-x:auto;}
-.st{width:100%;min-width:1000px;border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
+.st{width:100%;min-width:calc(794px + var(--st-n,3) * 190px);border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
 .st td,.st th{padding:0 14px;height:40px;border-bottom:1px solid var(--line);vertical-align:middle;}
 .st th{height:auto;padding:14px 14px 14px;text-align:left;font-weight:500;border-bottom:1px solid var(--line-strong);}
 .st-hl{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);vertical-align:bottom;}
