@@ -6446,7 +6446,7 @@ function ShiftSubstSearch({ pos, candidates, onPick, onClose }) {
 
 /* Одна незалежна таблиця — «План» або «Факт» (field визначає, яке поле редагує клік).
    Обидві рендеряться поруч у ShiftGrid, нічого не накладається одне на одне. */
-function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today }) {
+function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today, seeAllHours, viewerSalon }) {
   const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
   const [substMenu, setSubstMenu] = useState(null); // { salonKey, day, pos }
   const nDays = daysInMonth(ym);
@@ -6526,13 +6526,24 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
     }
     const hVal = field === "plan" ? s.plan_h : s.fact_h;
     if (hVal == null) return { txt: "", cls: "" };
-    const hTxt = Number(hVal) !== 1 ? String(hVal).replace(/\.0$/, "") : "";
+    // години бачить лише СМ магазину, де їх внесли; ТМ і керівник — по всіх
+    const showH = seeAllHours || s.salon_key === viewerSalon;
+    const hTxt = Number(hVal) !== 1 && showH ? String(hVal).replace(/\.0$/, "") : "";
     const subst = s.salon_key !== homeSalon;
     if (subst) {
       const sn = salonByKey(s.salon_key);
       return { txt: hTxt, cls: "sh-subst", title: `Заміна: ${sn ? salonLabel(sn) : "?"}${hTxt ? ` · ${hTxt} год` : ""}` };
     }
     return { txt: hTxt, cls: field === "fact" ? "sh-fill" : "sh-fill-plan" };
+  };
+
+  // сума годин співробітника саме в цьому магазині (1 = «відпрацював» без вказаних годин)
+  const hoursAt = (empId, salonKey) => {
+    const h = shifts.reduce((a, sh) => (
+      sh.employee_id === empId && sh.salon_key === salonKey && sh.state === "work" && sh.fact_h != null && Number(sh.fact_h) !== 1
+        ? a + Number(sh.fact_h) : a
+    ), 0);
+    return Math.round(h * 10) / 10;
   };
 
   const groups = useMemo(() => salons.map((s) => {
@@ -6598,7 +6609,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
                       <td className="rh sh-sum">
                         {field === "plan"
                           ? <><b>{t.planDays}</b> дн{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</>
-                          : <><b>{t.factDays}</b> дн{t.substDays ? ` · зам. ${t.substDays}` : ""}{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</>}
+                          : <><b>{t.factDays}</b> дн{(seeAllHours || salon.key === viewerSalon) && hoursAt(e.id, salon.key) > 0 ? <> · <b>{String(hoursAt(e.id, salon.key)).replace(".", ",")}</b> год</> : ""}{t.substDays ? ` · зам. ${t.substDays}` : ""}{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</>}
                       </td>
                     </tr>
                   );
@@ -6633,7 +6644,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
   );
 }
 
-function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, lockedFor }) {
+function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onChange, cabKey, lockedFor, seeAllHours, viewerSalon }) {
   const today = todayISO();
   const shiftMap = useMemo(() => {
     const m = {};
@@ -6646,7 +6657,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
     return m;
   }, [storeDays]);
 
-  const tableProps = { ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today };
+  const tableProps = { ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today, seeAllHours, viewerSalon };
 
   return (
     <div className="shift-grid-wrap">
@@ -6736,8 +6747,16 @@ function ShiftScheduleModule({ cab }) {
   const reloadLocks = React.useCallback(() => { listScheduleLocks().then(setLocks).catch(() => setLocks([])); }, []);
   useEffect(() => { reloadLocks(); return subscribeScheduleLocks(reloadLocks); }, [reloadLocks]);
 
-  // графік показуємо по всіх 8 магазинах усім (ТМ, керівник, СМ) — для підмін і координації
-  const salons = SALONS;
+  // СМ за замовчуванням бачить лише свій магазин; кнопка «Переглянути графік території» розгортає всі.
+  // ТМ і керівник бачать усі магазини. Години — лише СМ магазину, де їх внесли (ТМ і керівник — по всіх).
+  const isSm = cab.type === "sm";
+  const [territory, setTerritory] = useState(false);
+  const seeAllHours = cab.type === "tm" || cab.type === "manager" || cab.key === ADMIN_KEY;
+  const salons = useMemo(() => {
+    if (!isSm) return SALONS;
+    const mine = SALONS.filter((s) => s.key === cab.key);
+    return territory ? [...mine, ...SALONS.filter((s) => s.key !== cab.key)] : mine;
+  }, [isSm, territory, cab.key]);
   // редагувати графік свого магазину може лише сам СМ — ТМ і керівник тільки переглядають
   // і порівнюють план/факт (за проханням: «ніхто крім СМ не може редагувати свій графік»)
   const canEditSalon = useMemo(() => {
@@ -6770,6 +6789,11 @@ function ShiftScheduleModule({ cab }) {
             {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
           </select>
         )}
+        {view === "grid" && isSm && (
+          <button className="btn-secondary small" onClick={() => setTerritory((v) => !v)}>
+            {territory ? "Показати лише мій магазин" : "Переглянути графік території"}
+          </button>
+        )}
       </div>
 
       {view === "openings" && <StoreOpeningLog cab={cab} />}
@@ -6796,7 +6820,7 @@ function ShiftScheduleModule({ cab }) {
         <ShiftGrid
           ym={ym} salons={salons} employees={employees} shifts={shifts} storeDays={storeDays}
           canEditSalon={canEditSalon} onChange={reload} cabKey={cab.key}
-          lockedFor={lockedFor}
+          lockedFor={lockedFor} seeAllHours={seeAllHours} viewerSalon={isSm ? cab.key : ""}
         />
       )}
     </div>
