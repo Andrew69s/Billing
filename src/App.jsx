@@ -10334,6 +10334,9 @@ function TrainingCreateModal({ cabKey, onClose, onDone }) {
   );
 }
 
+/* «Не призначено» — це відповідь СМ (тест цьому співробітнику не потрібен), тож зараховується як опрацьоване, разом із «Виконано».
+   Немає запису взагалі — відповіді ще не було. */
+const trnCounted = (r) => !!r && (!!r.passed || r.status === "not_assigned");
 const TRN_STATUS = {
   passed: ["Виконано", "ok"], failed: ["Провалено", "bad"], not_passed: ["Не пройдено", "warn"], not_assigned: ["Не призначено", ""],
 };
@@ -10376,7 +10379,7 @@ function TrainingDetail({ t, info, resKey, activeEmps, manage, onClose, onDelete
               </div>
               {emps.map((e) => {
                 const r = resKey(t.id, e.id) || {};
-                const [label, tone] = TRN_STATUS[r.status || "not_assigned"] || TRN_STATUS.not_assigned;
+                const [label, tone] = r.status ? (TRN_STATUS[r.status] || TRN_STATUS.not_assigned) : ["Немає відповіді", "bad"];
                 return (
                   <div className="trn-de" key={e.id}>
                     <span className="trn-de-nm">{e.full_name}<span className="trn-role">{empRoleShort[e.role]}</span></span>
@@ -10467,8 +10470,8 @@ function TrainingModule({ cab }) {
     const dleft = daysToDeadline(t.deadline);
     const srows = scopeSalons.map((sl) => {
       const emps = activeEmps.filter((e) => e.salon_key === sl.key);
-      const passed = emps.filter((e) => resKey(t.id, e.id)?.passed);
-      return { s: sl, emps, passed, miss: emps.filter((e) => !resKey(t.id, e.id)?.passed) };
+      const passed = emps.filter((e) => trnCounted(resKey(t.id, e.id)));
+      return { s: sl, emps, passed, miss: emps.filter((e) => !trnCounted(resKey(t.id, e.id))) };
     }).filter((r) => r.emps.length);
     const totT = srows.reduce((a, r) => a + r.emps.length, 0);
     const passT = srows.reduce((a, r) => a + r.passed.length, 0);
@@ -10550,8 +10553,8 @@ function TrainingModule({ cab }) {
           const dleft = daysToDeadline(t.deadline);
           const srows = scopeSalons.map((s) => {
             const emps = activeEmps.filter((e) => e.salon_key === s.key);
-            const passed = emps.filter((e) => resKey(t.id, e.id)?.passed);
-            const miss = emps.filter((e) => !resKey(t.id, e.id)?.passed);
+            const passed = emps.filter((e) => trnCounted(resKey(t.id, e.id)));
+            const miss = emps.filter((e) => !trnCounted(resKey(t.id, e.id)));
             return { s, emps, passed, miss };
           }).filter((r) => r.emps.length);
           const totT = srows.reduce((a, r) => a + r.emps.length, 0);
@@ -10578,12 +10581,13 @@ function TrainingModule({ cab }) {
                   {activeEmps.length === 0 && <tr><td className="hint">немає активних співробітників</td></tr>}
                   {activeEmps.map((e) => {
                     const r = resKey(t.id, e.id) || {};
-                    const status = r.status || "not_assigned";
+                    const status = r.status || "";
                     return (
-                      <tr key={e.id} className={r.passed ? "done" : ""}>
+                      <tr key={e.id} className={trnCounted(r) ? "done" : ""}>
                         <td>{e.full_name}<span className="trn-role">{empRoleShort[e.role]}</span></td>
                         <td className="trn-status">
                           <select className="trn-status-sel" value={status} onChange={(ev) => setResult(t, e, { status: ev.target.value })}>
+                            {!status && <option value="" disabled>— оберіть —</option>}
                             <option value="not_assigned">Не призначено</option>
                             <option value="passed">Виконано</option>
                             <option value="not_passed">Не пройдено</option>
@@ -10591,7 +10595,7 @@ function TrainingModule({ cab }) {
                           </select>
                         </td>
                         <td className="trn-score">
-                          {status !== "not_assigned" && status !== "not_passed" && (
+                          {(status === "passed" || status === "failed") && (
                             <NumInput value={r.score ?? ""} allowEmpty placeholder="бал" className="trn-score-in"
                               onChange={(v) => setResult(t, e, { score: v === "" || v == null ? null : Number(v) })} />
                           )}
@@ -10616,7 +10620,7 @@ function TrainingModule({ cab }) {
                         <div className={`trn-srow ${state}`} key={s.key}>
                           <span className="trn-srow-nm">{s.city}, {shortAddr(s.addr)}</span>
                           <span className="trn-dots">
-                            {emps.slice(0, 12).map((e, i) => <i key={i} className={`trn-dot ${resKey(t.id, e.id)?.passed ? "on" : ""}`} />)}
+                            {emps.slice(0, 12).map((e, i) => <i key={i} className={`trn-dot ${trnCounted(resKey(t.id, e.id)) ? "on" : ""}`} />)}
                           </span>
                           <span className="trn-srow-n">{passed.length}/{emps.length}</span>
                           {miss.length === 0
@@ -10671,7 +10675,7 @@ function TrainingModule({ cab }) {
           <div className="trn-salon-grid">
             {scopeSalons.map((s) => {
               const rs = results.filter((r) => r.training_id === t.id && r.salon_key === s.key);
-              const pass = rs.filter((r) => r.passed).length;
+              const pass = rs.filter(trnCounted).length;
               const scored = rs.filter((r) => r.passed && r.score != null).map((r) => Number(r.score));
               const avg = scored.length ? scored.reduce((a, b) => a + b, 0) / scored.length : null;
               const tot = Math.max(employees.filter((e) => e.salon_key === s.key && e.status === "active").length, rs.length);
