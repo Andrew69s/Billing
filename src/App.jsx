@@ -12,7 +12,7 @@ import {
   Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
   Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
   Wrench, MessageSquare, Send, Banknote, Menu,
-  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search,
+  Warehouse, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search, Lock,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -62,7 +62,7 @@ import {
   TM_METRICS, SALON_MONTH_PLAN, daysInYm, dateOf,
   listMetrics, listMetricsRange, daysBetween, listPlans, planOf, effective, saveManual, resetManual, syncFromPlanner, subscribeMetrics, monthAgg, planAgg,
 } from "./lib/territory.js";
-import { getMaintenance, setMaintenance, subscribeFlags } from "./lib/appFlags.js";
+import { getMaintenance, setMaintenance, getSmSalaryLock, setSmSalaryLock, subscribeFlags } from "./lib/appFlags.js";
 import { submitFeedback, listFeedback, setFeedbackStatus, resolveFeedback, deleteFeedback, subscribeFeedback } from "./lib/feedback.js";
 import {
   bDaysInYm, bDateOf, bonusNet, listBonusYear, saveBonusDay, subscribeBonus, bonusYearAgg,
@@ -3657,6 +3657,43 @@ function AdminMaintenance() {
           Оновити текст
         </button>
       )}
+      <SmSalaryLockSwitch />
+    </div>
+  );
+}
+
+function SmSalaryLockSwitch() {
+  const [locked, setLocked] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let a = true;
+    const load = () => getSmSalaryLock().then((v) => { if (a) setLocked(v); });
+    load();
+    const off = subscribeFlags(load);
+    return () => { a = false; off(); };
+  }, []);
+  if (locked === null) return null;
+  const toggle = async (on) => {
+    setBusy(true);
+    try {
+      await setSmSalaryLock(on, ADMIN_KEY);
+      setLocked(on);
+      pushToast({ title: on ? "Розрахунок ЗП закрито для СМ" : "Розрахунок ЗП відкрито для СМ" });
+    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ marginTop: 22, paddingTop: 18, borderTop: "1px solid var(--line)" }}>
+      <h3>Розрахунок ЗП у кабінеті СМ</h3>
+      <p className="hint" style={{ marginBottom: 14 }}>
+        Поки замок увімкнено, СМ замість розрахунку ЗП бачать «Вибачте, це вікно на доопрацюванні», а нагадування «Подайте ЗП» не показується.
+        Розрахунок ЗП у кабінеті ТМ і «ЗП салонів» працюють як зазвичай.
+      </p>
+      <label className={`maint-toggle ${locked ? "on" : ""}`}>
+        <input type="checkbox" checked={locked} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
+        <span className="maint-switch" />
+        <span className="maint-label">{locked ? "Розрахунок ЗП для СМ ЗАКРИТО" : "Розрахунок ЗП для СМ відкрито"}</span>
+      </label>
     </div>
   );
 }
@@ -10364,6 +10401,7 @@ function SalaryDeadlineBanner({ role, tmKey, salonKey }) {
           const pending = d.status === "draft" || d.status === "corrected";
           if (active) setState({ pending, overdue: dl.overdue, dl, ym });
         } else {
+          if (await getSmSalaryLock()) { if (active) setState(null); return; }
           const emps = await listEmployees().catch(() => []);
           const rows = await salonSalaryRows(salonKey, ym, emps);
           const pending = rows.length === 0 || rows.some((r) => r.data.status !== "submitted" && r.data.status !== "corrected" && r.data.status !== "approved");
@@ -10491,6 +10529,29 @@ function AccountantCabinet({ onExit, onLogout }) {
 const checkinFlag = (salonKey) => `dnipro-m-checkin:${salonKey}:${todayISO()}`;
 const markCheckedInLocal = (salonKey) => { try { localStorage.setItem(checkinFlag(salonKey), "1"); } catch { /* ignore */ } };
 
+/* «Розрахунок ЗП» у кабінеті СМ під замком, поки адмін не відкриє (Адміністрування → Технічна перерва) */
+function SmSalaryGate({ salon }) {
+  const [locked, setLocked] = useState(null);
+  useEffect(() => {
+    let a = true;
+    const load = () => getSmSalaryLock().then((v) => { if (a) setLocked(v); });
+    load();
+    const off = subscribeFlags(load);
+    return () => { a = false; off(); };
+  }, []);
+  if (locked === null) return <div className="loading">Завантаження…</div>;
+  if (locked) {
+    return (
+      <div className="office-stub">
+        <span className="office-stub-ic"><Lock size={26} /></span>
+        <h3>Розрахунок ЗП</h3>
+        <p>Вибачте, це вікно на доопрацюванні.</p>
+      </div>
+    );
+  }
+  return <SmView salon={salon} embedded />;
+}
+
 function SmCabinet({ salonKey, onExit, onLogout }) {
   const salon = salonByKey(salonKey);
   useEffect(() => { warmCalc(); }, []); // прогрів Edge-функції розрахунку ЗП
@@ -10520,7 +10581,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
 
   const modules = [
     { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
-    { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <SmView salon={salon} embedded /> },
+    { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <SmSalaryGate salon={salon} /> },
     { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <CashModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "kpi", label: "Показники магазину", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "ez", label: "ЕЗ", group: "Щоденне", icon: <BadgePercent size={16} />, render: () => <EzSalesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },

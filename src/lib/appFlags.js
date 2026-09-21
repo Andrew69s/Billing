@@ -26,3 +26,7 @@ export function subscribeFlags(onChange) {
 export const getMaintenance = () => getFlag("maintenance").catch(() => null);
 export const setMaintenance = (on, message, by) =>
   setFlag("maintenance", { on: !!on, message: message || "", since: on ? new Date().toISOString() : null }, by);
+
+/* замок «Розрахунок ЗП» у кабінеті СМ: немає запису → замкнено (безпечне значення за замовчуванням) */
+export const getSmSalaryLock = () => getFlag("sm_salary_lock").then((f) => (f ? !!f.on : true)).catch(() => true);
+export const setSmSalaryLock = (on, by) => setFlag("sm_salary_lock", { on: !!on }, by);
