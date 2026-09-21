@@ -2878,7 +2878,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
           <StInfoCtx.Provider value={setInfoGroup}>
           <div className="st-wrap">
             <table className="st">
-              <colgroup><col style={{ width: 104 }} /><col style={{ width: 200 }} /><col style={{ width: 250 }} />{emps.map((e) => <col key={e.id} style={{ width: 190 }} />)}</colgroup>
+              <colgroup><col style={{ width: 136 }} /><col style={{ width: 200 }} /><col style={{ width: 250 }} />{emps.map((e) => <col key={e.id} style={{ width: 190 }} />)}</colgroup>
               <thead>
                 <tr>
                   <th />
@@ -12122,26 +12122,27 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-sale-row > span:nth-child(2){margin-left:auto;font-weight:600;}
 
 /* --- СМ: розрахунок ЗП магазину (одна таблиця) --- */
-.st-page{max-width:calc(560px + var(--st-n,3) * 190px);margin:0 auto;}
+.st-page{max-width:max(1400px,calc(592px + var(--st-n,3) * 190px));margin:0 auto;}
 .st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
 .st-strip{padding:14px 0;display:flex;flex-wrap:nowrap;align-items:stretch;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
-.st-cell{flex:0 0 auto;padding:0 22px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
-.st-cell:first-child{flex:1 1 auto;min-width:0;padding-left:24px;}
+.st-cell{flex:0 0 auto;padding:0 18px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
+.st-cell:first-child{flex:1 1 470px;min-width:470px;padding-left:24px;}
+.st-plan,.st-plan label,.st-adjs label,.st-adjs span{white-space:nowrap;}
 .st-cell.st-total{border-right:none;margin-left:auto;align-items:flex-end;text-align:right;justify-content:center;}
 @media (max-width:1150px){.st-strip{flex-wrap:wrap;row-gap:14px;}.st-cell:first-child{flex:1 1 100%;}}
 .st-cap{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);}
 .st-plan{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace;color:var(--ink);}
 .st-plan em,.st-adjs em{font-style:normal;font-family:'Inter',sans-serif;font-size:11px;color:var(--muted);margin-right:5px;}
-.st-plan b{font-size:20px;font-weight:600;}
+.st-plan b{font-size:18px;font-weight:600;}
 .st-plan label,.st-adjs label{display:inline-flex;align-items:center;}
-.st-pct{font-size:26px;font-weight:600;color:var(--st-neg);}
+.st-pct{font-size:24px;font-weight:600;color:var(--st-neg);}
 .st-pct.ok{color:var(--st-pos);}
 .st-adjs{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
-.st-rate{font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:600;color:var(--st-gold);}
+.st-rate{font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:600;color:var(--st-gold);}
 .st-hint{font-size:12.5px;color:var(--st-hint);font-weight:400;font-family:'Inter',sans-serif;}
 .st-warn{color:var(--st-neg);}
 .st-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow-x:auto;}
-.st{width:100%;min-width:calc(554px + var(--st-n,3) * 190px);border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
+.st{width:100%;min-width:calc(586px + var(--st-n,3) * 190px);border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
 .st td,.st th{padding:0 14px;height:40px;border-bottom:1px solid var(--line);vertical-align:middle;}
 .st th{height:auto;padding:14px 14px 14px;text-align:left;font-weight:500;border-bottom:1px solid var(--line-strong);}
 .st-hl{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);vertical-align:bottom;}
@@ -12149,7 +12150,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-en{font-size:15.5px;font-weight:600;color:var(--ink);}
 .st-er{font-size:12.5px;color:var(--muted);margin-top:3px;display:flex;justify-content:flex-end;align-items:center;gap:5px;flex-wrap:wrap;}
 .st tr.st-gt td{border-top:1px solid var(--line-strong);}
-.st-g-in{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.st-g-in{display:flex;align-items:center;gap:7px;flex-wrap:nowrap;white-space:nowrap;}
 .st-info{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--st-cap);color:var(--st-cap);cursor:pointer;flex-shrink:0;text-transform:none;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
 .st-info:hover,.st-info:focus-visible{color:var(--st-gold);border-color:var(--st-gold);background:rgba(190,138,46,.12);outline:none;}
 .cond-h{margin:16px 0 6px;font-family:'Fraunces',serif;font-size:14.5px;font-weight:600;color:var(--ink);}
@@ -12164,7 +12165,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-in:focus{outline:2px solid var(--st-gold);outline-offset:0;border-color:var(--st-gold);}
 .st-in-w{max-width:170px;display:block;margin-left:auto;}
 .st-in-m{width:96px;}.st-in-s{width:110px;}.st-in-xs{width:56px;}.st-in.off{opacity:.5;}
-.st-plan .st-in-w{width:120px;}
+.st-plan .st-in-w{width:112px;}
 .st-ck{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end;}
 .st-cb{position:relative;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;cursor:pointer;flex-shrink:0;user-select:none;}
 .st-cb.txt{width:auto;padding:0 10px 0 4px;gap:8px;}
