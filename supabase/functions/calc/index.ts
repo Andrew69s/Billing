@@ -237,8 +237,15 @@ function calcBonusBlock(b: any, dailyRate: number, teamSize = 1) {
   const callsTeam = Math.round((b.callsRevenue || 0) * (callsPct / 100));
   const calls = Math.round(callsTeam / team);
   const replacement = Math.round((b.replacementDays || 0) * 0.2 * (dailyRate || 0));
-  const avgCheck = tierBonus(b.avgCheckFact, [b.scN1, b.scN2, b.scN3], [700, 1500, 2000]);
-  const checkLen = tierBonus(b.checkLenFact, [b.clN1, b.clN2, b.clN3], [700, 1500, 2000]);
+  // KPI: якщо СМ вніс суму й поставив/зняв галочку (avgCheckOk / checkLenOk задані) — зараховуємо
+  // вписану суму. Старі місяці (без цих полів) рахуються за порогами, як раніше.
+  const manualKpi = (ok: any, sum: any) => (ok ? Math.max(0, Math.round(Number(sum) || 0)) : 0);
+  const avgCheck = b.avgCheckOk !== undefined
+    ? manualKpi(b.avgCheckOk, b.avgCheckSum)
+    : tierBonus(b.avgCheckFact, [b.scN1, b.scN2, b.scN3], [700, 1500, 2000]);
+  const checkLen = b.checkLenOk !== undefined
+    ? manualKpi(b.checkLenOk, b.checkLenSum)
+    : tierBonus(b.checkLenFact, [b.clN1, b.clN2, b.clN3], [700, 1500, 2000]);
   const courses = b.coursesOk ? 500 : 0;
   // 3.6 НП і 3.7 БН — командні: 4% від обороту ділиться на всю команду салону
   const siteNpTeam = Math.round((b.siteNpRevenue || 0) * 0.04);

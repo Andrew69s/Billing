@@ -2361,18 +2361,36 @@ function SmCriteriaForm({ data, update, calc, area, showAmounts, onAddShot, onRe
         {showAmounts && <div className="hint">Денна ставка на своєму магазині: {fmt(calc.dailyRate)} · +20% за день заміни</div>}
       </SmItem>
       <SmItem num="3.3" title="Середній чек" amount={showAmounts ? calc.bonus.avgCheck : undefined} screenshotKey="sc" {...shot}>
-        <Field readOnly={readOnly} label="Факт. середній чек" suffix="грн" value={data.bonus.avgCheckFact} onChange={(v) => update(["bonus", "avgCheckFact"], v)} />
-        <Field readOnly label="Поріг 1 → 700 грн" value={calc?.planThresholds?.scN1 || 0} onChange={() => {}} />
-        <Field readOnly label="Поріг 2 → 1 500 грн" value={calc?.planThresholds?.scN2 || 0} onChange={() => {}} />
-        <Field readOnly label="Поріг 3 → 2 000 грн" value={calc?.planThresholds?.scN3 || 0} onChange={() => {}} />
-        <div className="hint">Пороги на місяць задає ТМ.</div>
+        {data.bonus.avgCheckOk !== undefined ? (
+          <>
+            <Field readOnly={readOnly} label="Бонус за середній чек" suffix="грн" value={data.bonus.avgCheckSum || 0} onChange={(v) => update(["bonus", "avgCheckSum"], v)} />
+            <CheckField readOnly={readOnly} label="Зараховано" checked={!!data.bonus.avgCheckOk} onChange={(v) => update(["bonus", "avgCheckOk"], v)} />
+          </>
+        ) : (
+          <>
+            <Field readOnly={readOnly} label="Факт. середній чек" suffix="грн" value={data.bonus.avgCheckFact} onChange={(v) => update(["bonus", "avgCheckFact"], v)} />
+            <Field readOnly label="Поріг 1 → 700 грн" value={calc?.planThresholds?.scN1 || 0} onChange={() => {}} />
+            <Field readOnly label="Поріг 2 → 1 500 грн" value={calc?.planThresholds?.scN2 || 0} onChange={() => {}} />
+            <Field readOnly label="Поріг 3 → 2 000 грн" value={calc?.planThresholds?.scN3 || 0} onChange={() => {}} />
+            <div className="hint">Пороги на місяць задає ТМ.</div>
+          </>
+        )}
       </SmItem>
       <SmItem num="3.4" title="Довжина чека" amount={showAmounts ? calc.bonus.checkLen : undefined} screenshotKey="cl" {...shot}>
-        <Field readOnly={readOnly} label="Факт. довжина чека" value={data.bonus.checkLenFact} onChange={(v) => update(["bonus", "checkLenFact"], v)} />
-        <Field readOnly label="Поріг 1 → 700 грн" value={calc?.planThresholds?.clN1 || 0} onChange={() => {}} />
-        <Field readOnly label="Поріг 2 → 1 500 грн" value={calc?.planThresholds?.clN2 || 0} onChange={() => {}} />
-        <Field readOnly label="Поріг 3 → 2 000 грн" value={calc?.planThresholds?.clN3 || 0} onChange={() => {}} />
-        <div className="hint">Пороги на місяць задає ТМ.</div>
+        {data.bonus.checkLenOk !== undefined ? (
+          <>
+            <Field readOnly={readOnly} label="Бонус за довжину чека" suffix="грн" value={data.bonus.checkLenSum || 0} onChange={(v) => update(["bonus", "checkLenSum"], v)} />
+            <CheckField readOnly={readOnly} label="Зараховано" checked={!!data.bonus.checkLenOk} onChange={(v) => update(["bonus", "checkLenOk"], v)} />
+          </>
+        ) : (
+          <>
+            <Field readOnly={readOnly} label="Факт. довжина чека" value={data.bonus.checkLenFact} onChange={(v) => update(["bonus", "checkLenFact"], v)} />
+            <Field readOnly label="Поріг 1 → 700 грн" value={calc?.planThresholds?.clN1 || 0} onChange={() => {}} />
+            <Field readOnly label="Поріг 2 → 1 500 грн" value={calc?.planThresholds?.clN2 || 0} onChange={() => {}} />
+            <Field readOnly label="Поріг 3 → 2 000 грн" value={calc?.planThresholds?.clN3 || 0} onChange={() => {}} />
+            <div className="hint">Пороги на місяць задає ТМ.</div>
+          </>
+        )}
       </SmItem>
       <SmItem num="3.5" title="Атестація (курси)" amount={showAmounts ? calc.bonus.courses : undefined} screenshotKey="courses" {...shot}>
         <CheckField readOnly={readOnly} label="≥ 95% середньо-місячних курсів, без перепризначення" checked={data.bonus.coursesOk} onChange={(v) => update(["bonus", "coursesOk"], v)} />
@@ -2584,226 +2602,447 @@ function smBuildDiff(snapshot, current) {
 /* =========================================================
    СМ · КАБІНЕТ (вкладка «Розрахунок ЗП»)
 ========================================================= */
-const smStatusText = { draft: "чернетка", submitted: "подано", corrected: "корективи ТМ", approved: "погоджено" };
-function SmEmployeePicker({ salon, employees, ym, onPick }) {
-  const emps = useMemo(() => employees
-    .filter((e) => e.salon_key === salon.key && e.status === "active")
-    .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)), [employees, salon.key]);
-  const [info, setInfo] = useState({}); // empId → { status, total }
-
-  useEffect(() => {
-    let active = true;
-    if (!emps.length) return undefined;
-    salonSalaryRows(salon.key, ym, employees).then((rows) => {
-      if (!active) return;
-      const m = {};
-      rows.forEach((r) => { m[r.emp.id] = { status: r.data.status, total: r.total }; });
-      setInfo(m);
-    });
-    return () => { active = false; };
-  }, [salon.key, ym, emps.length]); // eslint-disable-line
-
+/* =========================================================
+   СМ · РОЗРАХУНОК ЗП МАГАЗИНУ — одна таблиця на всіх співробітників
+   Дані лишаються по співробітниках (smdata:<салон>:<співробітник>:<місяць>),
+   спільні цифри магазину (ТО, дзвінки, сайт, БН, PPI, рекорд, скріни) пишуться в усі документи.
+========================================================= */
+const ST_SHARED = [
+  ["base", "monthFact"], ["base", "viktorChecks"], ["base", "lowMarginChecks"], ["base", "categoryOverride"],
+  ["bonus", "callsRevenue"], ["bonus", "siteNpRevenue"], ["bonus", "bnRevenue"],
+  ["ppi", "ppiRevenue"], ["ppi", "planClosed"],
+  ["record", "monthlyTo"], ["record", "prevRecord"],
+];
+const ST_SHOTS = [
+  ["base", "Категорія та база"], ["attest", "Атестація"], ["standards", "Стандарти"], ["coef", "Коефіцієнт керуючого"],
+  ["calls", "Обіг з дзвінків"], ["replace", "Заміна"], ["sc", "Середній чек"], ["cl", "Довжина чека"],
+  ["courses", "Курси"], ["np", "Сайт через НП"], ["bn", "Продаж по БН"], ["ppi", "PPI"],
+  ["record", "Рекорд"], ["quarter", "Квартальна премія"], ["bonusExtra", "Бонус"],
+];
+const ST_ROLE_COEF = { manager: "1.2", acting_manager: "1.1", seller: "1.0", intern: "1.0" };
+const stNum = (n) => Math.round(n || 0).toLocaleString("uk-UA");
+const stMoney = (v) => (v ? <span className={v < 0 ? "st-neg" : ""}>{stNum(v)}</span> : <span className="st-mute">—</span>);
+const StIn = ({ v, set, label, cls }) => <NumInput className={`st-in ${cls || ""}`} value={v} onChange={set} aria-label={label} />;
+const StChk = ({ on, set, label }) => <input type="checkbox" className="st-chk" checked={!!on} onChange={(ev) => set(ev.target.checked)} aria-label={label} />;
+const StSeg = ({ items }) => (
+  <span className="st-seg">{items.map(([t, on, click]) => (
+    click
+      ? <button key={t} type="button" className={on ? "on" : ""} onClick={click}>{t}</button>
+      : <i key={t} className={on ? "on" : ""}>{t}</i>
+  ))}</span>
+);
+function StRow({ g, gs, label, inp, rule, cells, cls }) {
   return (
-    <div className="sm-emp-pick">
-      <h3 className="ov-h">Оберіть співробітника</h3>
-      <p className="ov-sub">ЗП рахується окремо для кожного · {salonLabel(salon)} · {monthLabel(ym)}</p>
-      {emps.length === 0 ? (
-        <div className="admin-empty">У цьому магазині ще немає співробітників. Додайте їх у модулі «Команда» (кабінет ТМ).</div>
-      ) : (
-        <div className="sm-emp-grid">
-          {emps.map((e) => {
-            const it = info[e.id];
-            const submitted = it && it.status !== "draft";
-            return (
-              <button className="sm-emp-card" key={e.id} onClick={() => onPick(e)}>
-                <span className="sm-emp-name">{e.full_name}</span>
-                <span className={`badge ${empRoleTone[e.role]}`}>{EMP_ROLES[e.role]}</span>
-                {it && (
-                  <span className="sm-emp-status">
-                    <span className={`badge ${it.status === "submitted" || it.status === "approved" ? "badge-ok" : it.status === "corrected" ? "badge-off" : "badge-warn"}`}>
-                      {smStatusText[it.status] || "—"}
-                    </span>
-                    {submitted && <b>{fmt(it.total)}</b>}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    <tr className={`${g ? "st-gt " : ""}${cls || ""}`}>
+      {g && <td className="st-g" rowSpan={gs}>{g}</td>}
+      <td className="st-lab">{label}</td>
+      <td className="st-inp">{inp}</td>
+      <td className="st-rule">{rule}</td>
+      {cells.map((x, i) => <td key={i} className="st-num">{x}</td>)}
+    </tr>
+  );
+}
+function StTotalRow({ label, hint, cells, cls }) {
+  return (
+    <tr className={`st-gt ${cls}`}>
+      <td colSpan={4} className="st-lab">{label} {hint && <span className="st-hint">{hint}</span>}</td>
+      {cells.map((x, i) => <td key={i} className="st-num">{x}</td>)}
+    </tr>
   );
 }
 
-function SmView({ salon, embedded }) {
+function SmStoreSalary({ salon }) {
   const [employees, setEmployees] = useState(null);
-  const [emp, setEmp] = useState(null);
   const [ym, setYm] = useState(salaryYm());
-  const [data, setData] = useState(emptySmData());
-  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("calc");
+  const [drafts, setDrafts] = useState(null);
+  const [calcs, setCalcs] = useState({});
+  const [calcErr, setCalcErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
+  const [armed, setArmed] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [tab, setTab] = useState("form");
-  const [expandedBlock, setExpandedBlock] = useState(null);
-  const skipSave = React.useRef(true);
-
+  const [shotsOpen, setShotsOpen] = useState(false);
+  const saved = useRef({});      // empId → JSON останнього збереженого документа
+  const touched = useRef(false); // були зміни від користувача
+  const draftsRef = useRef(null);
+  const months = useMemo(() => recentMonths(12), []);
   const qMonths = quarterMonths(ymToQuarter(ym));
   const isQuarterEnd = ym === qMonths[2];
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
+  const emps = useMemo(() => (employees || [])
+    .filter((e) => e.salon_key === salon.key && e.status === "active")
+    .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
+  [employees, salon.key]);
 
+  // завантаження документів усіх співробітників за місяць
   useEffect(() => {
-    if (!emp) return undefined;
-    let active = true;
-    setLoading(true);
-    setTab("form");
-    skipSave.current = true;
-    loadSmData(salon.key, emp.id, ym).then((d) => {
-      if (!active) return;
-      // коефіцієнт керуючого за замовчуванням = роль співробітника
-      const roleCoef = { manager: "1.2", acting_manager: "1.1", seller: "1.0", intern: "1.0" }[emp.role] || "1.0";
-      setData(d.status === "draft" ? { ...d, manager: { ...d.manager, coef: roleCoef } } : d);
-      setLoading(false);
+    if (!employees) return undefined;
+    let alive = true;
+    setDrafts(null); setCalcs({}); touched.current = false;
+    Promise.all(emps.map((e) => loadSmData(salon.key, e.id, ym))).then((docs) => {
+      if (!alive) return;
+      const next = {};
+      emps.forEach((e, i) => {
+        const d = _.cloneDeep(docs[i]);
+        saved.current[e.id] = JSON.stringify(docs[i]);
+        if (d.status === "draft") d.manager.coef = ST_ROLE_COEF[e.role] || "1.0"; // коеф. керуючого за замовчуванням = роль
+        next[e.id] = d;
+      });
+      // спільні цифри магазину: беремо перше заповнене значення, щоб усі документи збігалися
+      ST_SHARED.forEach((path) => {
+        const src = docs.map((d) => _.get(d, path)).find((v) => v) ?? _.get(docs[0], path);
+        if (src !== undefined) emps.forEach((e) => { _.set(next[e.id], path, src); });
+      });
+      ST_SHOTS.forEach(([key]) => {
+        const src = docs.map((d) => shotList(d.screenshots?.[key])).find((l) => l.length);
+        if (src) emps.forEach((e) => { _.set(next[e.id], ["screenshots", key], src); });
+      });
+      setDrafts(next);
     });
-    return () => { active = false; };
-  }, [salon.key, emp, ym]);
+    return () => { alive = false; };
+  }, [employees, emps, salon.key, ym]);
 
-  const update = (path, value) => setData((prev) => _.set(_.cloneDeep(prev), path, value));
-  const onAddShot = makeAddShot(setData);
-  const onRemoveShot = makeRemoveShot(setData);
-  const toggleBlock = (id) => setExpandedBlock((p) => (p === id ? null : id));
+  useEffect(() => { draftsRef.current = drafts; }, [drafts]);
 
-  const saveDraft = async () => {
-    setSaving(true);
-    try {
-      await saveSmData(salon.key, emp.id, ym, data);
-      setSavedAt(new Date());
-      pushToast({ title: "Чернетку збережено", body: `${emp.full_name} · ${monthLabel(ym)}` });
-    } catch (e) {
-      pushToast({ title: "Не вдалося зберегти", body: String(e.message || e) });
-    }
-    setSaving(false);
-  };
+  // розрахунок на сервері (debounce на введення)
   useEffect(() => {
-    if (loading || !emp) return undefined;
-    if (skipSave.current) { skipSave.current = false; return undefined; }
-    const t = setTimeout(async () => { await saveSmData(salon.key, emp.id, ym, data); setSavedAt(new Date()); }, 2500);
+    if (!drafts || !emps.length) return undefined;
+    let alive = true;
+    const first = !Object.keys(calcs).length;
+    const t = setTimeout(() => {
+      calcSmBatch(emps.map((e) => ({ data: drafts[e.id], salonKey: salon.key, ym })))
+        .then((cs) => { if (alive) { setCalcs(Object.fromEntries(emps.map((e, i) => [e.id, cs[i]]))); setCalcErr(""); } })
+        .catch((err) => { if (alive) setCalcErr(String(err.message || err)); });
+    }, first ? 0 : 350);
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts]);
+
+  const saveAll = async (src = draftsRef.current) => {
+    if (!src) return;
+    const changed = emps.filter((e) => src[e.id] && JSON.stringify(src[e.id]) !== saved.current[e.id]);
+    if (!changed.length) return;
+    await Promise.all(changed.map(async (e) => {
+      await saveSmData(salon.key, e.id, ym, src[e.id]);
+      saved.current[e.id] = JSON.stringify(src[e.id]);
+    }));
+    setSavedAt(new Date());
+  };
+  const saveRef = useRef(saveAll);
+  saveRef.current = saveAll;
+
+  // автозбереження через 2,5 с після останньої зміни; і при виході з вкладки
+  useEffect(() => {
+    if (!touched.current || !drafts) return undefined;
+    const t = setTimeout(() => { saveRef.current(); }, 2500);
     return () => clearTimeout(t);
-  }, [data, loading, salon.key, emp, ym]);
+  }, [drafts]);
+  useEffect(() => () => { if (touched.current) saveRef.current(); }, []);
 
-  const { calc, error: calcError } = useSmCalc(data, salon.key, ym);
+  const changeMonth = async (v) => {
+    if (touched.current) await saveAll();
+    setYm(v);
+  };
 
-  const months = useMemo(() => recentMonths(12), []);
+  const touch = () => { touched.current = true; };
+  const setShared = (path) => (v) => { touch(); setDrafts((d) => _.mapValues(d, (x) => _.set(_.cloneDeep(x), path, v))); };
+  const setEmp = (id, path) => (v) => { touch(); setDrafts((d) => ({ ...d, [id]: _.set(_.cloneDeep(d[id]), path, v) })); };
+  const setFact = (v) => {
+    touch();
+    setDrafts((d) => _.mapValues(d, (x) => {
+      const y = _.cloneDeep(x);
+      const old = y.base.monthFact || 0;
+      if (!y.record.monthlyTo || y.record.monthlyTo === old) y.record.monthlyTo = v; // оборот для рекорду = факт, поки не змінено вручну
+      y.base.monthFact = v;
+      return y;
+    }));
+  };
+  // KPI: сума + галочка. Старі документи (за порогами) при першій правці переходять на ручний режим із поточних значень
+  const kpi = (e, kind) => {
+    const b = drafts[e.id].bonus;
+    if (b[`${kind}Ok`] !== undefined) return { sum: b[`${kind}Sum`] || 0, ok: !!b[`${kind}Ok`] };
+    const cur = calcs[e.id]?.bonus?.[kind] || 0;
+    return { sum: cur, ok: cur > 0 };
+  };
+  const setKpi = (e, kind, patch) => {
+    const cur = kpi(e, kind);
+    const v = { ...cur, ...patch };
+    touch();
+    setDrafts((d) => {
+      const y = _.cloneDeep(d[e.id]);
+      y.bonus[`${kind}Sum`] = v.sum;
+      y.bonus[`${kind}Ok`] = v.ok;
+      return { ...d, [e.id]: y };
+    });
+  };
+  const shotsFor = (key) => {
+    const d = emps.map((e) => drafts[e.id]).find((x) => shotList(x?.screenshots?.[key]).length);
+    return d ? shotList(d.screenshots[key]) : [];
+  };
+  const addShot = (key, url) => setShared(["screenshots", key])([...shotsFor(key), url].slice(0, 5));
+  const removeShot = (key, i) => setShared(["screenshots", key])(shotsFor(key).filter((_x, j) => j !== i));
 
   const submit = async () => {
-    if (!confirm(`Подати ЗП ${emp.full_name} за ${monthLabel(ym)} на погодження ТМ?`)) return;
+    setArmed(false);
+    const fact = drafts[emps[0].id].base.monthFact;
+    if (!(fact > 0)) { pushToast({ title: "Вкажіть факт ТО за місяць" }); return; }
     setSaving(true);
-    const snap = _.cloneDeep({
-      base: data.base, manager: data.manager, bonus: data.bonus,
-      ppi: data.ppi, record: data.record, quarterly: data.quarterly,
-    });
-    const next = {
-      ...data, status: "submitted", submittedAt: new Date().toISOString(), smSnapshot: snap,
-      tmComment: "", correctionDiff: [], correctedAt: null, smReplyComment: "", smRepliedAt: null,
-      tmApproved: false, tmApprovedAt: null,
-    };
     try {
-      await saveSmData(salon.key, emp.id, ym, next);
-      setData(next);
-      pushToast({ title: "Подано на погодження", body: `${emp.full_name} → ТМ` });
-    } catch (e) {
-      pushToast({ title: "Не вдалося подати", body: String(e.message || e) });
+      const now = new Date().toISOString();
+      const next = { ...drafts };
+      for (const e of emps) {
+        const d = drafts[e.id];
+        const changed = JSON.stringify(d) !== saved.current[e.id];
+        if (d.status === "submitted" && !changed) continue; // вже подано й не змінювалось
+        const snap = _.cloneDeep({ base: d.base, manager: d.manager, bonus: d.bonus, ppi: d.ppi, record: d.record, quarterly: d.quarterly });
+        next[e.id] = {
+          ...d, status: "submitted", submittedAt: now, smSnapshot: snap,
+          tmComment: "", correctionDiff: [], correctedAt: null, smReplyComment: "", smRepliedAt: null,
+          tmApproved: false, tmApprovedAt: null,
+        };
+      }
+      await saveAll(next);
+      touched.current = false;
+      setDrafts(next);
+      pushToast({ title: "Подано на погодження", body: `${salonLabel(salon)} → ТМ` });
+    } catch (err) {
+      pushToast({ title: "Не вдалося подати", body: String(err.message || err) });
     }
     setSaving(false);
   };
-  const onReply = async (comment) => {
-    const next = { ...data, smReplyComment: comment, smRepliedAt: new Date().toISOString() };
-    await saveSmData(salon.key, emp.id, ym, next);
-    setData(next);
-    pushToast({ title: "Відповідь надіслано ТМ" });
+  const askSubmit = () => {
+    if (armed) { submit(); return; }
+    setArmed(true);
+    setTimeout(() => setArmed(false), 5000);
+  };
+  const onReply = async (e, comment) => {
+    const next = { ...drafts[e.id], smReplyComment: comment, smRepliedAt: new Date().toISOString() };
+    await saveSmData(salon.key, e.id, ym, next);
+    saved.current[e.id] = JSON.stringify(next);
+    setDrafts((d) => ({ ...d, [e.id]: next }));
+    pushToast({ title: "Відповідь надіслано ТМ", body: e.full_name });
   };
 
-  if (employees === null) return <div className="loading">Завантаження…</div>;
-  if (!emp) {
+  if (employees === null || (emps.length > 0 && (!drafts || emps.some((e) => !calcs[e.id])))) {
     return (
-      <div className={embedded ? "embedded" : "view"}>
-        {!embedded && <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={() => {}} />}
-        <div className="month-picker">
-          <select value={ym} onChange={(e) => setYm(e.target.value)}>
-            {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
-          </select>
-        </div>
-        <SmEmployeePicker salon={salon} employees={employees} ym={ym} onPick={setEmp} />
+      <div className="embedded">
+        {calcErr ? <div className="banner banner-late"><AlertTriangle size={16} /> Не вдалося порахувати: {calcErr}</div> : <div className="loading">Завантаження…</div>}
       </div>
     );
   }
+  if (!emps.length) {
+    return <div className="embedded"><div className="admin-empty">У цьому магазині ще немає співробітників. Додайте їх у модулі «Команда».</div></div>;
+  }
 
+  const c = (e) => calcs[e.id];
+  const d = (e) => drafts[e.id];
+  const c0 = c(emps[0]);
+  const d0 = d(emps[0]);
+  const team = c0.bonus.team;
+  const mgrEmp = emps.find((e) => e.role === "manager") || emps.find((e) => e.role === "acting_manager") || null;
   const dl = deadlineInfo(ym);
-  const showBanner = !dl.future && (data.status === "draft" || data.status === "corrected");
-  const hasCorr = !!data.tmComment || (data.correctionDiff && data.correctionDiff.length > 0);
+  const anyPending = emps.some((e) => d(e).status === "draft" || d(e).status === "corrected");
+  const showBanner = !dl.future && anyPending;
+  const corrEmps = emps.filter((e) => d(e).tmComment || (d(e).correctionDiff && d(e).correctionDiff.length > 0));
+  const corrDot = corrEmps.some((e) => !d(e).smRepliedAt);
+  const showTmAdj = emps.some((e) => (c(e).adj || 0) !== 0);
+  const totalNet = _.sumBy(emps, (e) => c(e).total);
+  const totalGross = _.sumBy(emps, (e) => c(e).grossTotal);
+  const shotCount = ST_SHOTS.reduce((s, [k]) => s + shotsFor(k).length, 0);
+  const catOpts = smCategoryOptions();
+  const onCat = (key) => setShared(["base", "categoryOverride"])(key === c0.autoCategory || key === d0.base.categoryOverride ? "" : key);
+  const each = (fn) => emps.map(fn);
 
   return (
-    <div className={embedded ? "embedded" : "view"}>
-      {!embedded && <TopBar title={`Салон · ${salonLabel(salon)}`} onBack={() => {}} />}
-      <div className="sm-emp-bar">
-        <button className="topbar-back" onClick={() => setEmp(null)}><ChevronLeft size={15} /> інший співробітник</button>
-        <span className="sm-emp-cur">{emp.full_name}</span>
-        <span className={`badge ${empRoleTone[emp.role]}`}>{EMP_ROLES[emp.role]}</span>
-      </div>
+    <div className="embedded st-page">
       <div className="month-picker">
-        <select value={ym} onChange={(e) => setYm(e.target.value)}>
+        <select value={ym} onChange={(ev) => changeMonth(ev.target.value)}>
           {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
         </select>
-        {data.status === "submitted" && <span className="badge-ok"><Check size={13} /> На розгляді в ТМ</span>}
-        {data.status === "corrected" && <span className="badge-off">ТМ вніс корективи</span>}
-        {data.tmApproved && <span className="badge-warn">Передано керівнику</span>}
+        <span className="st-title">{salonLabel(salon)}</span>
+        {emps.every((e) => d(e).status === "submitted") && <span className="badge-ok"><Check size={13} /> На розгляді в ТМ</span>}
+        {emps.some((e) => d(e).status === "corrected") && <span className="badge-off">ТМ вніс корективи</span>}
+        {emps.some((e) => d(e).tmApproved) && <span className="badge-warn">Передано керівнику</span>}
       </div>
       {showBanner && (
         <div className={`banner ${dl.overdue ? "banner-late" : "banner-warn"}`}>
           <AlertTriangle size={16} />
-          {dl.overdue
-            ? `Термін подачі ЗП за ${monthLabel(ym)} минув (був до ${dl.dueLabel}).`
-            : `Подайте ЗП за ${monthLabel(ym)} до ${dl.dueLabel}.`}
+          {dl.overdue ? `Термін подачі ЗП за ${monthLabel(ym)} минув (був до ${dl.dueLabel}).` : `Подайте ЗП за ${monthLabel(ym)} до ${dl.dueLabel}.`}
         </div>
       )}
-
       <div className="inner-tabs">
-        <button className={tab === "form" ? "active" : ""} onClick={() => setTab("form")}>Форма</button>
-        <button className={tab === "corrections" ? "active" : ""} onClick={() => setTab("corrections")}>
-          Корективи від ТМ{hasCorr && !data.smRepliedAt ? " •" : ""}
-        </button>
+        <button className={tab === "calc" ? "active" : ""} onClick={() => setTab("calc")}>Розрахунок</button>
+        <button className={tab === "corrections" ? "active" : ""} onClick={() => setTab("corrections")}>Корективи від ТМ{corrDot ? " •" : ""}</button>
       </div>
 
-      {!loading && !calc && calcError ? (
-        <div className="loading" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <span>Не вдалося порахувати ЗП: {String(calcError)}</span>
-          <button className="btn-secondary small" onClick={() => window.location.reload()}>Спробувати ще раз</button>
-        </div>
-      ) : loading || !calc ? <div className="loading">Завантаження…</div> : tab === "form" ? (
+      {tab === "corrections" ? (
+        corrEmps.length === 0
+          ? <div className="admin-empty">Корективів від ТМ поки немає.</div>
+          : corrEmps.map((e) => (
+            <div key={e.id} className="st-corr">
+              <h4>{e.full_name}</h4>
+              <SmCorrectionsTab data={d(e)} onReply={(comment) => onReply(e, comment)} />
+            </div>
+          ))
+      ) : (
         <>
-          <SalaryStickyBar
-            grand={calc.total}
-            accrued={calc.grossTotal != null ? calc.grossTotal : calc.total}
-            status={data.status}
-          />
-          <SmCriteriaForm
-            data={data} update={update} calc={calc} area={salon.area} showAmounts
-            onAddShot={onAddShot} onRemoveShot={onRemoveShot} onPreview={setPreview} readOnly={false} isQuarterEnd={isQuarterEnd}
-          />
-          <SmSummary data={data} calc={calc} expandedBlock={expandedBlock} onToggle={toggleBlock} editable={false} deductEditable onAdjChange={(a) => setData((p) => ({ ...p, adj: a }))} monthLbl={monthLabel(ym)} />
+          <div className="st-strip">
+            <div className="st-cell">
+              <div className="st-cap">План · факт · виконання</div>
+              <div className="st-plan">
+                <span><em>План</em> <b>{stNum(c0.monthPlan)}</b></span>
+                <label><em>Факт</em> <StIn v={d0.base.monthFact} set={setFact} label="Факт ТО за місяць" cls="st-in-w" /></label>
+                <span className={`st-pct ${c0.planPercent >= 100 ? "ok" : ""}`}>{c0.planPercent.toFixed(0)}%</span>
+              </div>
+              <div className="st-adjs">
+                <label><em>Чеки Віктора</em> <StIn v={d0.base.viktorChecks} set={setShared(["base", "viktorChecks"])} label="Чеки Віктора" cls="st-in-s" /></label>
+                <label><em>Низькорентабельні</em> <StIn v={d0.base.lowMarginChecks} set={setShared(["base", "lowMarginChecks"])} label="Низькорентабельні чеки" cls="st-in-s" /></label>
+                <span className="st-hint">скориг. факт {stNum(c0.factAdjusted)}</span>
+              </div>
+              <StSeg items={[0, 1, 2, 3, 4].map((i) => [planBracketLabel(i), c0.bracket === i])} />
+            </div>
+            <div className="st-cell">
+              <div className="st-cap">Категорія · {d0.base.categoryOverride ? "вручну" : "авто"}</div>
+              <StSeg items={catOpts.map((o) => [o.key, c0.category === o.key, () => onCat(o.key)])} />
+              <div className="st-hint">
+                {!c0.hasHistory ? "історії обороту ще нема — за самовведеним" : c0.avg3Months < 3 ? `середнє за ${c0.avg3Months} міс.` : "за оборотом без ЕЗ за 3 міс."}
+              </div>
+              {!c0.hasPlan && <div className="st-hint st-warn">План на місяць ще не внесено ТМ</div>}
+            </div>
+            <div className="st-cell">
+              <div className="st-cap">Ставка ЗП</div>
+              <div className="st-rate">{stNum(c0.baseRaw)} ₴</div>
+            </div>
+            <div className="st-cell st-total">
+              <div className="st-cap">До виплати по магазину</div>
+              <div className="st-rate">{stNum(totalNet)} ₴</div>
+              <div className="st-hint">нараховано {stNum(totalGross)} · мінус {stNum(totalGross - totalNet)}</div>
+            </div>
+          </div>
+          {calcErr && <div className="banner banner-late"><AlertTriangle size={16} /> Не вдалося перерахувати: {calcErr}. Показано попередні цифри.</div>}
+
+          <div className="st-wrap">
+            <table className="st">
+              <colgroup><col style={{ width: 92 }} /><col style={{ width: 176 }} /><col style={{ width: 210 }} /><col />{emps.map((e) => <col key={e.id} style={{ width: 168 }} />)}</colgroup>
+              <thead>
+                <tr>
+                  <th />
+                  <th className="st-hl">Стаття</th>
+                  <th className="st-hl">Вхідні дані магазину</th>
+                  <th className="st-hl">Правило</th>
+                  {emps.map((e) => (
+                    <th key={e.id} className="st-he">
+                      <div className="st-en">{e.full_name}</div>
+                      <div className="st-er">{EMP_ROLES[e.role]} · {smStatusBadge(d(e).status)}</div>
+                      <div className="st-er">
+                        вихідних <StIn v={d(e).base.daysOff} set={setEmp(e.id, ["base", "daysOff"])} label={`Вихідних — ${e.full_name}`} cls="st-in-xs" /> · коеф. {c(e).factor.toFixed(2).replace(".", ",")}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <StRow g="Основа" gs={1} label="Ставка ЗП" inp={<span className="st-pill">{c0.category} · {planBracketLabel(c0.bracket)}</span>} rule="за категорією та % виконання" cells={each((e) => stMoney(c(e).baseAdjusted))} />
+                <StRow g="Дзвінки" gs={1} label="Обіг з дзвінків"
+                  inp={<StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" />}
+                  rule={<><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /> ≥ {stNum(c0.bonus.callsPlanRevenue)} → 5% · ÷ {team}</>}
+                  cells={each((e) => stMoney(c(e).bonus.calls))} />
+                <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>} rule="1 000 за атестацію"
+                  cells={each((e) => <span className="st-ck"><StChk on={d(e).manager.attestationAll} set={setEmp(e.id, ["manager", "attestationAll"])} label={`Атестація — ${e.full_name}`} /> {stMoney(c(e).mgr.attest)}</span>)} />
+                {[["avgCheck", "Середній чек"], ["checkLen", "Довжина чека"]].map(([kind, title], i) => (
+                  <StRow key={kind} g={i === 0 ? "KPI" : null} gs={2} label={title} inp={<span className="st-hint">сума й галочка →</span>} rule="зараховується сума з поля, якщо стоїть галочка"
+                    cells={each((e) => {
+                      const k = kpi(e, kind);
+                      return <span className="st-ck"><StIn v={k.sum} set={(v) => setKpi(e, kind, { sum: v })} label={`${title} — ${e.full_name}, сума`} cls={`st-in-m ${k.ok ? "" : "off"}`} /><StChk on={k.ok} set={(v) => setKpi(e, kind, { ok: v })} label={`${title} — ${e.full_name}, зарахувати`} /></span>;
+                    })} />
+                ))}
+                <StRow g="Сайт і БН" gs={2} label="Продажі із сайту (НП)" inp={<StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" />} rule={`4% від суми · ÷ ${team}`} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
+                <StRow label="Продажі по БН" inp={<StIn v={d0.bonus.bnRevenue} set={setShared(["bonus", "bnRevenue"])} label="Продажі по БН" />} rule={`4% від суми · ÷ ${team}`} cells={each((e) => stMoney(c(e).bonus.bn))} />
+                <StRow g="PPI" gs={1} label="Оборот PPI" inp={<StIn v={d0.ppi.ppiRevenue} set={setShared(["ppi", "ppiRevenue"])} label="Оборот PPI" />}
+                  rule={<><StSeg items={[["3%", !!d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(true)], ["1%", !d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(false)]]} /> план закрито → 3% · ÷ {team}</>}
+                  cells={each((e) => stMoney(c(e).ppi.bonus))} />
+                <StRow g="Премії" gs={2} cls={isQuarterEnd ? "" : "st-dim"} label="Квартальна премія"
+                  inp={<span className="st-hint">{isQuarterEnd ? "сума 3 ЗП і «3/3 плани» →" : "—"}</span>}
+                  rule={isQuarterEnd ? "10% від суми трьох останніх ЗП" : `лише в кінці кварталу (${monthLabel(qMonths[2])})`}
+                  cells={each((e) => (isQuarterEnd
+                    ? <span className="st-ck"><StIn v={d(e).quarterly.last3SalarySum} set={setEmp(e.id, ["quarterly", "last3SalarySum"])} label={`Сума 3 останніх ЗП — ${e.full_name}`} cls="st-in-m" /><StChk on={d(e).quarterly.threeOfThree} set={setEmp(e.id, ["quarterly", "threeOfThree"])} label={`3/3 плани — ${e.full_name}`} /></span>
+                    : stMoney(0)))} />
+                <StRow label="Рекордний показник"
+                  inp={<span className="st-two"><StIn v={d0.record.monthlyTo} set={setShared(["record", "monthlyTo"])} label="Оборот ТО за місяць (команда)" /><StIn v={d0.record.prevRecord} set={setShared(["record", "prevRecord"])} label="Попередній рекорд ТО" /></span>}
+                  rule={<>ліворуч оборот, праворуч попередній рекорд · 1% від обороту, якщо ≥ {stNum(c0.record.threshold)}{c0.record.beaten ? " ✔" : ""}</>}
+                  cells={each((e) => stMoney(c(e).record.bonus))} />
+                <StRow g="Керуючий" gs={2} label="Стандарти"
+                  inp={mgrEmp ? (
+                    <span className="st-two">
+                      <label className="st-lbl"><StChk on={d(mgrEmp).manager.noRemarks} set={setEmp(mgrEmp.id, ["manager", "noRemarks"])} label="Без зауважень" /> без зауважень</label>
+                      {!d(mgrEmp).manager.noRemarks && <>
+                        <StIn v={d(mgrEmp).manager.remarksFound} set={setEmp(mgrEmp.id, ["manager", "remarksFound"])} label="Виявлені зауваження (−200)" cls="st-in-xs" />
+                        <StIn v={d(mgrEmp).manager.remarksUnfixed} set={setEmp(mgrEmp.id, ["manager", "remarksUnfixed"])} label="Невиправлені зауваження (−400)" cls="st-in-xs" />
+                      </>}
+                    </span>
+                  ) : <span className="st-hint">керуючого немає в команді</span>}
+                  rule="+2 000 без зауважень, або мінус: виявлені −200, невиправлені −400 (до −2 000)"
+                  cells={each((e) => stMoney(c(e).mgr.standards))} />
+                <StRow label="Коефіцієнт керуючого"
+                  inp={mgrEmp ? (
+                    <select className="st-sel" aria-label="Статус керуючого" value={String(d(mgrEmp).manager.coef)} onChange={(ev) => setEmp(mgrEmp.id, ["manager", "coef"])(ev.target.value)}>
+                      {managerCoefOptions().map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+                    </select>
+                  ) : <span className="st-hint">—</span>}
+                  rule={`ставка ${stNum(c0.baseRaw)} × (коеф. − 1)`}
+                  cells={each((e) => stMoney(c(e).mgr.coefBonus))} />
+                <StRow g="Інше" gs={showTmAdj ? 5 : 4} label="Заміна на іншому магазині" inp={<span className="st-hint">днів заміни →</span>} rule="+20% денної ставки за день заміни"
+                  cells={each((e) => <span className="st-ck"><StIn v={d(e).bonus.replacementDays} set={setEmp(e.id, ["bonus", "replacementDays"])} label={`Днів заміни — ${e.full_name}`} cls="st-in-xs" /> {stMoney(c(e).bonus.replacement)}</span>)} />
+                <StRow label="Атестація (курси)" inp={<span className="st-hint">галочка по кожному →</span>} rule="≥ 95% курсів без перепризначення → 500"
+                  cells={each((e) => <span className="st-ck"><StChk on={d(e).bonus.coursesOk} set={setEmp(e.id, ["bonus", "coursesOk"])} label={`Курси — ${e.full_name}`} /> {stMoney(c(e).bonus.courses)}</span>)} />
+                <StRow label="ЕЗ" inp={<span className="st-hint">з модуля «ЕЗ»</span>} rule={`20% від прибутку ЕЗ · ÷ ${team}`} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
+                <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>} rule="будь-який додатковий бонус, ТМ бачить і звіряє"
+                  cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
+                {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>} rule="" cells={each((e) => stMoney(c(e).adj))} />}
+                <StTotalRow cls="st-sub" label="Всього нараховано" hint="включно з ЕЗ" cells={each((e) => stNum(c(e).grossTotal))} />
+                {[["official", "Офіційно на картку"], ["advance", "Аванс готівка"], ["birthdays", "Дні народження"], ["inventory", "Інвентаризація"], ["ownUse", "Товар для власних потреб"]].map(([k, title], i) => (
+                  <StRow key={k} g={i === 0 ? "Мінус" : null} gs={5} label={title} inp={<span className="st-hint">вноситься по кожному →</span>} rule=""
+                    cells={each((e) => <StIn v={d(e).adj[k]} set={setEmp(e.id, ["adj", k])} label={`${title} — ${e.full_name}`} cls="st-in-w" />)} />
+                ))}
+                <StTotalRow cls="st-sub" label="Загальна ЗП" hint="= всього нараховано" cells={each((e) => stNum(c(e).grossTotal))} />
+                <StTotalRow cls="st-pay" label="До виплати"
+                  cells={each((e) => (
+                    <>
+                      <div className="st-payv">{stNum(c(e).total)}</div>
+                      {d(e).paymentStatus === "paid" && <div className="st-hint">виплачено</div>}
+                      {d(e).paymentStatus === "to_pay" && <div className="st-hint">призначено до виплати</div>}
+                    </>
+                  ))} />
+              </tbody>
+            </table>
+          </div>
+
+          <div className="st-shots">
+            <button className="btn-secondary small" onClick={() => setShotsOpen((v) => !v)}><Camera size={13} /> Скріни-підтвердження{shotCount ? ` · ${shotCount}` : ""}</button>
+            {shotsOpen && (
+              <div className="st-shots-grid">
+                {ST_SHOTS.filter(([k]) => k !== "quarter" || isQuarterEnd).map(([k, title]) => (
+                  <div key={k} className="st-shot">
+                    <div className="st-shot-t">{title}</div>
+                    <ScreenshotStack shots={shotsFor(k)} onAdd={(url) => addShot(k, url)} onRemove={(i) => removeShot(k, i)} onPreview={setPreview} readOnly={false} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="save-bar">
             <span className="save-hint">
               {saving ? "Зберігаю…" : savedAt ? `Збережено о ${savedAt.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}` : "Зміни зберігаються автоматично"}
             </span>
-            <button className="btn-secondary" onClick={saveDraft} disabled={saving}>Зберегти</button>
-            <button className="btn-primary" onClick={submit} disabled={saving}>
-              {saving ? "Надсилання…" : "Подати ТМ на погодження"}
+            <button className="btn-secondary" disabled={saving} onClick={async () => { setSaving(true); await saveAll(); setSaving(false); pushToast({ title: "Чернетку збережено", body: monthLabel(ym) }); }}>Зберегти</button>
+            <button className={armed ? "btn-primary st-armed" : "btn-primary"} onClick={askSubmit} disabled={saving}>
+              {saving ? "Надсилання…" : armed ? "Точно подати? Натисніть ще раз" : "Подати ТМ на погодження"}
             </button>
           </div>
         </>
-      ) : (
-        <SmCorrectionsTab data={data} onReply={onReply} />
       )}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
     </div>
@@ -10564,7 +10803,7 @@ function SmSalaryGate({ salon }) {
       </div>
     );
   }
-  return <SmView salon={salon} embedded />;
+  return <SmStoreSalary salon={salon} />;
 }
 
 function SmCabinet({ salonKey, onExit, onLogout }) {
@@ -11493,6 +11732,65 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-process-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:12.5px;}
 .ez-sale-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:6px;}
 .ez-sale-row > span:nth-child(2){margin-left:auto;font-weight:600;}
+
+/* --- СМ: розрахунок ЗП магазину (одна таблиця) --- */
+.st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
+.st-strip{display:flex;flex-wrap:wrap;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
+.st-cell{padding:12px 18px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
+.st-cell.st-total{border-right:none;margin-left:auto;align-items:flex-end;text-align:right;}
+.st-cap{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);}
+.st-plan{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace;color:var(--ink);}
+.st-plan em,.st-adjs em{font-style:normal;font-family:'Inter',sans-serif;font-size:11px;color:var(--muted);margin-right:5px;}
+.st-plan b{font-size:16px;font-weight:600;}
+.st-plan label,.st-adjs label{display:inline-flex;align-items:center;}
+.st-pct{font-size:22px;font-weight:600;color:var(--negative);}
+.st-pct.ok{color:var(--positive);}
+.st-adjs{display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
+.st-rate{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;color:var(--gold);}
+.st-hint{font-size:11.5px;color:var(--muted);font-weight:400;font-family:'Inter',sans-serif;}
+.st-warn{color:var(--negative);}
+.st-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow-x:auto;}
+.st{width:100%;min-width:900px;border-collapse:collapse;table-layout:fixed;font-size:12.5px;color:var(--ink);}
+.st td,.st th{padding:0 10px;height:28px;border-bottom:1px solid var(--line);vertical-align:middle;}
+.st th{height:auto;padding:9px 10px 10px;text-align:left;font-weight:500;border-bottom:1px solid var(--line-strong);}
+.st-hl{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);vertical-align:bottom;}
+.st-he{text-align:right !important;}
+.st-en{font-size:13px;font-weight:600;color:var(--ink);}
+.st-er{font-size:11px;color:var(--muted);margin-top:3px;display:flex;justify-content:flex-end;align-items:center;gap:5px;flex-wrap:wrap;}
+.st tr.st-gt td{border-top:1px solid var(--line-strong);}
+.st-g{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--surface-alt);border-right:1px solid var(--line);}
+.st-lab{font-weight:500;}
+.st-rule{color:var(--muted);font-size:11.5px;line-height:1.3;}
+.st-num{text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:500;font-variant-numeric:tabular-nums;}
+.st-mute{color:var(--faint);}
+.st-neg{color:var(--negative);}
+.st tr.st-dim td:not(.st-g){opacity:.55;}
+.st-in{width:100%;box-sizing:border-box;height:24px;border-radius:6px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--ink);font:500 12.5px 'IBM Plex Mono',monospace;text-align:right;padding:0 8px;}
+.st-in:focus{outline:2px solid var(--gold);outline-offset:0;border-color:var(--gold);}
+.st-in-m{width:78px;}.st-in-s{width:96px;}.st-in-xs{width:44px;}.st-in.off{opacity:.5;}
+.st-plan .st-in-w{width:120px;}
+.st-ck{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end;}
+.st-chk{width:14px;height:14px;margin:0;accent-color:var(--gold);}
+.st-lbl{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink);white-space:nowrap;}
+.st-two{display:flex;gap:6px;align-items:center;}
+.st-two .st-in{flex:1 1 0;min-width:0;}
+.st-two .st-in-xs{flex:none;width:44px;}
+.st-seg{display:inline-flex;gap:3px;vertical-align:middle;margin-right:6px;flex-wrap:wrap;}
+.st-seg i,.st-seg button{font-style:normal;font:inherit;font-size:11px;padding:1px 7px;border-radius:6px;border:1px solid var(--line-strong);color:var(--muted);background:none;}
+.st-seg button{cursor:pointer;}
+.st-seg .on{border-color:var(--gold);background:rgba(190,138,46,.16);color:var(--gold);font-weight:600;}
+.st-pill{display:inline-block;padding:2px 9px;border-radius:999px;background:rgba(190,138,46,.16);color:var(--gold);font-size:11.5px;font-weight:600;}
+.st-sel{width:100%;height:24px;border-radius:6px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--ink);font-size:12px;padding:0 6px;}
+.st tr.st-sub td{background:var(--surface-alt);font-weight:600;height:34px;}
+.st tr.st-pay td{background:var(--surface-sink);height:46px;border-bottom:none;font-weight:600;font-size:14px;}
+.st-payv{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:var(--gold);}
+.st-shots{margin:12px 0;}
+.st-shots-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:10px;}
+.st-shot{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px;}
+.st-shot-t{font-size:12px;font-weight:600;color:var(--ink);margin-bottom:6px;}
+.st-corr{margin-bottom:18px;}
+.st-corr h4{color:var(--on-dark);margin:0 0 8px;font-size:14px;}
+.btn-primary.st-armed{background:var(--negative);color:#fff;}
 
 /* --- Контроль видаткових накладних --- */
 .dc-list{display:flex;flex-direction:column;gap:10px;}
