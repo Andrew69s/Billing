@@ -2663,6 +2663,9 @@ function SmStoreSalary({ salon }) {
   const [armed, setArmed] = useState(false);
   const [preview, setPreview] = useState(null);
   const [shotsOpen, setShotsOpen] = useState(false);
+  const [fit, setFit] = useState({ s: 1, h: 0, phone: false }); // масштаб під екран
+  const fitRef = useRef(null);
+  const innerRef = useRef(null);
   const saved = useRef({});      // empId → JSON останнього збереженого документа
   const touched = useRef(false); // були зміни від користувача
   const draftsRef = useRef(null);
@@ -2740,6 +2743,29 @@ function SmStoreSalary({ salon }) {
     return () => clearTimeout(t);
   }, [drafts]);
   useEffect(() => () => { if (touched.current) saveRef.current(); }, []);
+
+  // масштаб «під екран»: вся сторінка вміщується у вікно без прокруток (на телефоні — без масштабування)
+  const stReady = !!drafts && emps.length > 0 && emps.every((e) => calcs[e.id]);
+  const W0 = Math.max(1180, 700 + emps.length * 168);
+  useEffect(() => {
+    const outer = fitRef.current, inner = innerRef.current;
+    if (!outer || !inner) return undefined;
+    const measure = () => {
+      const availW = outer.clientWidth;
+      const docTop = outer.getBoundingClientRect().top + window.scrollY;
+      const availH = window.innerHeight - Math.min(docTop, 160) - 12;
+      const h0 = inner.offsetHeight;
+      if (availW < 760) { setFit((p) => (p.phone ? p : { s: 1, h: 0, phone: true })); return; }
+      const raw = Math.min(availW / W0, h0 > 0 ? availH / h0 : 1.5);
+      const sc = Math.max(0.6, Math.min(1.5, raw));
+      setFit((p) => (!p.phone && Math.abs(p.s - sc) < 0.004 && p.h === h0 ? p : { s: sc, h: h0, phone: false }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(outer); ro.observe(inner);
+    window.addEventListener("resize", measure);
+    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
+  }, [stReady, tab, W0]);
 
   const changeMonth = async (v) => {
     if (touched.current) await saveAll();
@@ -2856,7 +2882,9 @@ function SmStoreSalary({ salon }) {
   const each = (fn) => emps.map(fn);
 
   return (
-    <div className="embedded st-page">
+    <div className="st-fit" ref={fitRef}>
+    <div className="st-fit-box" style={fit.phone ? undefined : { width: W0 * fit.s, height: fit.h * fit.s }}>
+    <div className="embedded st-page st-fit-in" ref={innerRef} style={fit.phone ? undefined : { width: W0, transform: `scale(${fit.s})` }}>
       <div className="month-picker">
         <select value={ym} onChange={(ev) => changeMonth(ev.target.value)}>
           {months.map((m) => (<option key={m} value={m}>{monthLabel(m)}</option>))}
@@ -3045,6 +3073,8 @@ function SmStoreSalary({ salon }) {
         </>
       )}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
+    </div>
+    </div>
     </div>
   );
 }
@@ -10538,7 +10568,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   );
 
   return (
-    <div className="view cab-shell">
+    <div className={`view cab-shell${mod?.wide ? " cab-wide" : ""}`}>
       <TaskAckGate cabKey={cabKey} />
       <CommandPalette cabKey={cabKey} items={items} />
       <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
@@ -10835,7 +10865,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
 
   const modules = [
     { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <SmOverview salon={salon} /> },
-    { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <SmSalaryGate salon={salon} /> },
+    { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, wide: true, render: () => <SmSalaryGate salon={salon} /> },
     { key: "cash", label: "Готівка", group: "Щоденне", icon: <Banknote size={16} />, render: () => <CashModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "kpi", label: "Показники магазину", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "ez", label: "ЕЗ", group: "Щоденне", icon: <BadgePercent size={16} />, render: () => <EzSalesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
@@ -11734,6 +11764,9 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-sale-row > span:nth-child(2){margin-left:auto;font-weight:600;}
 
 /* --- СМ: розрахунок ЗП магазину (одна таблиця) --- */
+.st-fit{display:flex;justify-content:center;width:100%;}
+.st-fit-box{max-width:100%;}
+.st-fit-in{transform-origin:top left;}
 .st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
 .st-strip{display:flex;flex-wrap:wrap;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
 .st-cell{padding:12px 18px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
@@ -12196,6 +12229,7 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 
 /* ---------- оболонка кабінету з лівою панеллю ---------- */
 .cab-shell{max-width:1120px;animation:none;}  /* без transform — щоб мобільна шухляда позиціонувалась від краю екрана */
+.cab-shell.cab-wide{max-width:none;}
 .cab-layout{display:grid;grid-template-columns:232px 1fr;gap:22px;align-items:start;}
 .cab-side{position:sticky;top:78px;display:flex;flex-direction:column;gap:2px;padding:8px;background:rgba(var(--sf),.03);border:1px solid var(--line-dark);border-radius:var(--radius-md);}
 .cab-side-item{display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;border:none;border-radius:var(--radius-sm);background:none;color:var(--on-dark-2);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;text-align:left;transition:background .14s var(--ease),color .14s var(--ease);}
