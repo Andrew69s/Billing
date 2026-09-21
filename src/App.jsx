@@ -69,6 +69,7 @@ import {
   listBonusMonthly, bonusMonthlyMap, upsertBonusMonthly, deleteBonusMonthly,
 } from "./lib/bonus.js";
 import { pushState, enablePush, disablePush } from "./lib/push.js";
+import { soundOn, setSoundOn, desktopSupported, desktopPermission, desktopOn, setDesktopOff, enableDesktop, alertNew } from "./lib/alerts.js";
 import {
   listCashDays, outstandingBySalon, setCashDay, cashHandover, listHandovers, subscribeCash,
   yesterdayISO as cashYesterday,
@@ -924,7 +925,7 @@ function TopBar({ title, onBack, onLogout, cabKey, onMenu }) {
       {onMenu && (
         <button className="topbar-menu" onClick={onMenu} aria-label="Меню"><Menu size={18} /></button>
       )}
-      <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> Назад</button>
+      {onBack && <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> Назад</button>}
       <button className="topbar-title topbar-title-btn" onClick={openPalette} title="Пошук і швидкі дії (Ctrl/⌘ + K)">
         <span>{title}</span>
         <kbd className="topbar-kbd">⌘K</kbd>
@@ -1010,6 +1011,40 @@ const relTime = (iso) => {
   return `${Math.floor(s / 86400)} дн тому`;
 };
 
+/* звук і сповіщення на екрані комп'ютера (коли вкладка прихована) */
+function AlertToggles() {
+  const [sound, setSound] = useState(soundOn());
+  const [desk, setDesk] = useState(desktopOn());
+  const [perm, setPerm] = useState(desktopPermission());
+  const flipSound = () => {
+    const next = !sound;
+    setSoundOn(next); setSound(next);
+    pushToast({ title: next ? "Звук сповіщень увімкнено" : "Звук сповіщень вимкнено" });
+  };
+  const flipDesk = async () => {
+    if (desk) { setDesktopOff(); setDesk(false); pushToast({ title: "Сповіщення на екрані вимкнено" }); return; }
+    const p = await enableDesktop();
+    setPerm(p);
+    if (p === "granted") { setDesk(true); pushToast({ title: "Сповіщення на екрані увімкнено", body: "З'являтимуться, коли вкладка прихована" }); }
+    else pushToast({ title: "Дозвіл не надано", body: "Дозвольте сповіщення для цього сайту в налаштуваннях браузера" });
+  };
+  return (
+    <>
+      <button className={`notif-push ${sound ? "on" : ""}`} onClick={flipSound}>
+        <Bell size={14} /><span>{sound ? "Звук сповіщень · увімкнено" : "Увімкнути звук сповіщень"}</span>
+        <span className={`notif-push-sw ${sound ? "on" : ""}`} />
+      </button>
+      {desktopSupported() && (
+        <button className={`notif-push ${desk ? "on" : ""}`} onClick={flipDesk} disabled={perm === "denied"}>
+          <Bell size={14} />
+          <span>{perm === "denied" ? "Сповіщення на екрані заблоковано в браузері" : desk ? "На екрані, коли вкладка прихована · увімкнено" : "Показувати на екрані, коли вкладка прихована"}</span>
+          {perm !== "denied" && <span className={`notif-push-sw ${desk ? "on" : ""}`} />}
+        </button>
+      )}
+    </>
+  );
+}
+
 function PushToggle({ cabKey }) {
   const [state, setState] = useState(null); // unsupported|denied|on|off|null
   const [busy, setBusy] = useState(false);
@@ -1057,6 +1092,7 @@ function NotificationCenter({ cabKey }) {
     const unsub = subscribeNotifications(cabKey, (n) => {
       setItems((prev) => [n, ...prev.filter((x) => x.id !== n.id)]);
       showToast(n);
+      alertNew(n, () => { const t = notifTargetOf(n); if (t) goToModule(t); }); // звук + сповіщення на екрані, якщо вкладка прихована
     });
     const onLocal = (e) => showToast(e.detail || {});
     toastBus?.addEventListener("toast", onLocal);
@@ -1099,6 +1135,7 @@ function NotificationCenter({ cabKey }) {
                   </button>
                 )}
               </div>
+              <AlertToggles />
               <PushToggle cabKey={cabKey} />
               <div className="notif-list">
                 {items.length === 0 && <div className="notif-empty">Поки що порожньо</div>}
@@ -2670,6 +2707,7 @@ function SmStoreSalary({ salon }) {
   const [preview, setPreview] = useState(null);
   const [shotsOpen, setShotsOpen] = useState(false);
   const [ez, setEz] = useState({ total: 0, confirmed: 0 }); // оборот ЕЗ за місяць з модуля «ЕЗ»
+  const [subAuto, setSubAuto] = useState({}); // empId → днів заміни на іншому магазині за графіком
   const [fit, setFit] = useState({ s: 1, w: 0, h: 0, phone: false }); // масштаб і логічна ширина під екран
   const fitRef = useRef(null);
   const innerRef = useRef(null);
@@ -2691,13 +2729,19 @@ function SmStoreSalary({ salon }) {
     if (!employees) return undefined;
     let alive = true;
     setDrafts(null); setCalcs({}); touched.current = false;
-    Promise.all(emps.map((e) => loadSmData(salon.key, e.id, ym))).then((docs) => {
+    Promise.all([Promise.all(emps.map((e) => loadSmData(salon.key, e.id, ym))), listShifts(ym).catch(() => [])]).then(([docs, monthShifts]) => {
       if (!alive) return;
       const next = {};
+      const auto = {};
+      emps.forEach((e) => { auto[e.id] = monthTally(monthShifts, e.id, e.salon_key).substDays; });
+      setSubAuto(auto);
       emps.forEach((e, i) => {
         const d = _.cloneDeep(docs[i]);
         saved.current[e.id] = JSON.stringify(docs[i]);
         if (d.status === "draft") d.manager.coef = ST_ROLE_COEF[e.role] || "1.0"; // коеф. керуючого за замовчуванням = роль
+        // дні заміни: автоматично з графіка, але СМ може виправити (тоді значення вважається ручним)
+        if (d.bonus.replacementManual === undefined && (d.bonus.replacementDays || 0) > 0 && d.bonus.replacementDays !== auto[e.id]) d.bonus.replacementManual = true;
+        if (!d.bonus.replacementManual && (d.status === "draft" || d.status === "corrected")) d.bonus.replacementDays = auto[e.id];
         d.manager.attestPay = e.role === "manager" || e.role === "acting_manager" ? 1000 : 500; // атестація: 1 000 керуючому, 500 іншим
         next[e.id] = d;
       });
@@ -2806,6 +2850,16 @@ function SmStoreSalary({ salon }) {
       y.base.monthFact = v;
       return y;
     }));
+  };
+  // дні заміни: змінене вручну відрізняється від графіка → ручне; збіглося з графіком → знову авто
+  const setReplacement = (e, v) => {
+    touch();
+    setDrafts((d) => {
+      const y = _.cloneDeep(d[e.id]);
+      y.bonus.replacementDays = v;
+      y.bonus.replacementManual = v !== (subAuto[e.id] || 0);
+      return { ...d, [e.id]: y };
+    });
   };
   // KPI: сума + галочка. Старі документи (за порогами) при першій правці переходять на ручний режим із поточних значень
   const kpi = (e, kind) => {
@@ -3052,8 +3106,19 @@ function SmStoreSalary({ salon }) {
                   ) : <span className="st-hint">—</span>}
                   rule={`ставка ${stNum(c0.baseRaw)} × (коеф. − 1)`}
                   cells={each((e) => stMoney(c(e).mgr.coefBonus))} />
-                <StRow g="Інше" gs={showTmAdj ? 5 : 4} label="Заміна на іншому магазині" inp={<span className="st-hint">днів заміни →</span>} rule="+20% денної ставки за день заміни"
-                  cells={each((e) => <span className="st-ck"><StIn v={d(e).bonus.replacementDays} set={setEmp(e.id, ["bonus", "replacementDays"])} label={`Днів заміни — ${e.full_name}`} cls="st-in-xs" /> {stMoney(c(e).bonus.replacement)}</span>)} />
+                <StRow g="Інше" gs={showTmAdj ? 5 : 4} label="Заміна на іншому магазині" inp={<span className="st-hint">днів із графіка змін · можна виправити</span>} rule="+20% денної ставки за день заміни"
+                  cells={each((e) => {
+                    const auto = subAuto[e.id] || 0;
+                    const days = d(e).bonus.replacementDays || 0;
+                    return (
+                      <span className="st-ck">
+                        {days !== auto && (
+                          <button type="button" className="st-reset" title={`Повернути за графіком: ${auto}`} aria-label={`Повернути за графіком: ${auto}`} onClick={() => setReplacement(e, auto)}><RefreshCw size={12} /></button>
+                        )}
+                        <StIn v={days} set={(v) => setReplacement(e, v)} label={`Днів заміни — ${e.full_name}`} cls="st-in-xs" /> {stMoney(c(e).bonus.replacement)}
+                      </span>
+                    );
+                  })} />
                 <StRow label="Атестація (курси)" inp={<span className="st-hint">галочка по кожному →</span>} rule="≥ 95% курсів без перепризначення → 500"
                   cells={each((e) => <span className="st-ck"><StChk on={d(e).bonus.coursesOk} set={setEmp(e.id, ["bonus", "coursesOk"])} label={`Курси — ${e.full_name}`} /> {stMoney(c(e).bonus.courses)}</span>)} />
                 <StRow label="ЕЗ" inp={<span className="st-hint">з модуля «ЕЗ»</span>} rule={`20% від прибутку ЕЗ · ÷ ${team}`} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
@@ -4870,11 +4935,13 @@ function DateTimeField({ value, onChange }) {
   const toggle = () => {
     if (open) { setOpen(false); return; }
     const r = btnRef.current.getBoundingClientRect();
-    const flip = r.bottom + 350 > window.innerHeight;
+    const z = window.__uiZoom || 1; // фіксоване позиціювання рахується в масштабованих px
+    const rb = r.bottom / z, rt = r.top / z, rl = r.left / z, vh = window.innerHeight / z, vw = window.innerWidth / z;
+    const flip = rb + 350 > vh;
     setPos({
-      left: Math.max(8, Math.min(r.left, window.innerWidth - 296)),
-      top: flip ? undefined : r.bottom + 6,
-      bottom: flip ? window.innerHeight - r.top + 6 : undefined,
+      left: Math.max(8, Math.min(rl, vw - 296)),
+      top: flip ? undefined : rb + 6,
+      bottom: flip ? vh - rt + 6 : undefined,
     });
     setView(new Date((sel || new Date()).getFullYear(), (sel || new Date()).getMonth(), 1));
     setOpen(true);
@@ -6384,10 +6451,20 @@ const shiftErr = (e) => {
   return m || "Помилка";
 };
 
-function ShiftCellMenu({ pos, field, current, onClose, onSet }) {
+/* скорочена назва магазину для клітинки заміни: Гор, Мос, Тур, Лип, Щир, Шев, Кав, Ваш */
+const salonCode = (sl) => {
+  const name = sl.city === "Львів" ? shortAddr(sl.addr).split(",")[0].trim().split(/\s+/).pop() : sl.city;
+  return name.slice(0, 3);
+};
+
+function ShiftCellMenu({ pos, field, current, homeSalon, onClose, onSet }) {
   const curHours = current ? current[field === "plan" ? "plan_h" : "fact_h"] : null;
+  const isSubst = !!current && current.state === "work" && !!current.salon_key && current.salon_key !== homeSalon;
   const [hrs, setHrs] = useState(curHours != null && Number(curHours) !== 1 ? String(curHours) : "");
-  const submitHours = () => { if (hrs !== "" && !Number.isNaN(Number(hrs))) onSet({ type: "worked", hours: Number(hrs) }); };
+  const [dest, setDest] = useState(isSubst ? current.salon_key : "");
+  const hoursNum = hrs !== "" && !Number.isNaN(Number(hrs)) ? Number(hrs) : undefined;
+  const submitHours = () => { if (hoursNum != null) onSet({ type: "worked", hours: hoursNum, keepSalon: isSubst }); };
+  const submitSubst = () => { if (dest) onSet({ type: "subst", salon: dest, hours: hoursNum }); };
   return createPortal(
     <>
       <div className="dtf-backdrop" onClick={onClose} />
@@ -6406,37 +6483,12 @@ function ShiftCellMenu({ pos, field, current, onClose, onSet }) {
           />
           <button disabled={hrs === ""} onClick={submitHours}>Вказати години</button>
         </div>
-      </div>
-    </>,
-    document.body,
-  );
-}
-
-/* пошук будь-якого співробітника з території (не лише свого магазину) —
-   щоб СМ міг вказати, що хтось інший сьогодні тут на заміні */
-function ShiftSubstSearch({ pos, candidates, onPick, onClose }) {
-  const [q, setQ] = useState("");
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    const list = s ? candidates.filter((e) => e.full_name.toLowerCase().includes(s)) : candidates;
-    return list.slice(0, 40);
-  }, [q, candidates]);
-  return createPortal(
-    <>
-      <div className="dtf-backdrop" onClick={onClose} />
-      <div className="shift-menu shift-search-menu" style={{ top: pos.top, left: pos.left }}>
-        <input
-          className="shift-search-input" autoFocus placeholder="Пошук співробітника з території…"
-          value={q} onChange={(e) => setQ(e.target.value)}
-        />
-        <div className="shift-search-list">
-          {filtered.length === 0 && <div className="shift-search-empty">Нікого не знайдено</div>}
-          {filtered.map((e) => (
-            <button key={e.id} className="shift-search-item" onClick={() => onPick(e)}>
-              <span className="ssi-name">{e.full_name}</span>
-              <span className="ssi-from">{salonByKey(e.salon_key) ? salonShortName(salonByKey(e.salon_key)) : ""}</span>
-            </button>
-          ))}
+        <div className="shift-menu-row shift-menu-subst">
+          <select value={dest} onChange={(e) => setDest(e.target.value)} aria-label="Заміна в магазині">
+            <option value="">Заміна в іншому магазині…</option>
+            {SALONS.filter((x) => x.key !== homeSalon).map((x) => <option key={x.key} value={x.key}>{salonLabel(x)}</option>)}
+          </select>
+          <button disabled={!dest} onClick={submitSubst}>Заміна</button>
         </div>
       </div>
     </>,
@@ -6444,23 +6496,18 @@ function ShiftSubstSearch({ pos, candidates, onPick, onClose }) {
   );
 }
 
-/* Одна незалежна таблиця — «План» або «Факт» (field визначає, яке поле редагує клік).
-   Обидві рендеряться поруч у ShiftGrid, нічого не накладається одне на одне. */
+/* Таблиця «Факт»: лише співробітники свого магазину. Заміна в іншому магазині — синя клітинка зі скороченою
+   назвою того магазину (без окремого рядка). Години бачить СМ магазину співробітника і ТМ. */
 function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today, seeAllHours, viewerSalon }) {
   const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
-  const [substMenu, setSubstMenu] = useState(null); // { salonKey, day, pos }
   const nDays = daysInMonth(ym);
   const modeAllowed = (k) => canEditSalon(k) && !(lockedFor && lockedFor(k));
 
   const openMenu = (e, empId, day, homeSalon) => {
     if (!modeAllowed(homeSalon)) return;
     const r = e.currentTarget.getBoundingClientRect();
-    setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.min(r.left, window.innerWidth - 210) } });
-  };
-  const openSubstMenu = (e, salonKey, day) => {
-    if (!modeAllowed(salonKey)) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    setSubstMenu({ salonKey, day, pos: { top: Math.min(r.bottom + 4, window.innerHeight - 260), left: Math.min(r.left, window.innerWidth - 236) } });
+    const z = window.__uiZoom || 1; // фіксоване позиціювання рахується в масштабованих px
+    setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom / z + 4, window.innerHeight / z - 250), left: Math.min(r.left / z, window.innerWidth / z - 220) } });
   };
 
   const applySet = async (action) => {
@@ -6468,7 +6515,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
     const wd = dayKey(ym, day);
     setMenu(null);
     const cur = shiftMap[`${empId}:${wd}`] || {};
-    let row = { employee_id: empId, work_date: wd, salon_key: cur.salon_key || homeSalon, plan_h: cur.plan_h ?? null, fact_h: cur.fact_h ?? null, state: "work", absence_reason: cur.absence_reason || "", is_senior: cur.is_senior || false, updated_by: cabKey };
+    let row = { employee_id: empId, work_date: wd, salon_key: homeSalon, plan_h: cur.plan_h ?? null, fact_h: cur.fact_h ?? null, state: "work", absence_reason: cur.absence_reason || "", is_senior: cur.is_senior || false, updated_by: cabKey };
     const factOnly = field === "fact"; // у таблиці «Факт» план не чіпаємо (він може бути замкнений)
     if (action.type === "clear") {
       if (factOnly && cur.plan_h != null) {
@@ -6481,6 +6528,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
       const h = action.hours != null && !Number.isNaN(action.hours) ? action.hours : 1;
       if (field === "plan") row.plan_h = h; else row.fact_h = h;
       row.state = "work"; row.absence_reason = "";
+      if (action.keepSalon && cur.salon_key) row.salon_key = cur.salon_key; // години в клітинці заміни лишають її заміною
     } else if (action.type === "off") {
       row.state = "off"; row.fact_h = null; if (!factOnly) row.plan_h = null;
     } else if (action.type === "absent") {
@@ -6491,32 +6539,19 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
       row.salon_key = action.salon;
       const h = action.hours != null && !Number.isNaN(action.hours) ? action.hours : 1;
       if (field === "plan") row.plan_h = h; else row.fact_h = h;
-      row.state = "work";
+      row.state = "work"; row.absence_reason = "";
     }
-    await upsertShift(row).catch((e) => alert(shiftErr(e)));
+    try {
+      await upsertShift(row);
+      if (action.type === "subst") {
+        const d = salonByKey(action.salon);
+        pushToast({ title: "Заміну вказано", body: `${employees.find((x) => x.id === empId)?.full_name || ""} · ${d ? salonCode(d) : ""} · ${day}-го` });
+      }
+    } catch (e) { alert(shiftErr(e)); }
     onChange();
   };
 
-  const pickSubst = async (emp) => {
-    const { salonKey, day } = substMenu;
-    setSubstMenu(null);
-    const wd = dayKey(ym, day);
-    const cur = shiftMap[`${emp.id}:${wd}`] || {};
-    const sameSalon = cur.salon_key === salonKey;
-    const row = {
-      employee_id: emp.id, work_date: wd, salon_key: salonKey,
-      plan_h: field === "plan" ? 1 : (sameSalon ? cur.plan_h ?? null : null),
-      fact_h: field === "fact" ? 1 : (sameSalon ? cur.fact_h ?? null : null),
-      state: "work", absence_reason: "", updated_by: cabKey,
-    };
-    try {
-      await upsertShift(row);
-      pushToast({ title: "Заміну додано", body: `${emp.full_name} · ${salonShortName(salonByKey(salonKey) || {})}` });
-      onChange();
-    } catch (e) { pushToast({ title: "Не вдалося додати заміну", body: shiftErr(e) }); }
-  };
-
-  const cellInfo = (s, homeSalon) => {
+  const cellInfo = (s, homeSalon, showH) => {
     if (!s) return { txt: "", cls: "" };
     if (s.state === "closed") return { txt: "", cls: "sh-closed", title: "Зачинено" };
     if (s.state === "off") return { txt: "", cls: "sh-off", title: "Вихідний" };
@@ -6526,40 +6561,27 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
     }
     const hVal = field === "plan" ? s.plan_h : s.fact_h;
     if (hVal == null) return { txt: "", cls: "" };
-    // години бачить лише СМ магазину, де їх внесли; ТМ і керівник — по всіх
-    const showH = seeAllHours || s.salon_key === viewerSalon;
-    const hTxt = Number(hVal) !== 1 && showH ? String(hVal).replace(/\.0$/, "") : "";
-    const subst = s.salon_key !== homeSalon;
-    if (subst) {
-      const sn = salonByKey(s.salon_key);
-      return { txt: hTxt, cls: "sh-subst", title: `Заміна: ${sn ? salonLabel(sn) : "?"}${hTxt ? ` · ${hTxt} год` : ""}` };
+    const hNum = Number(hVal) !== 1 ? String(hVal).replace(/\.0$/, "") : "";
+    if (s.salon_key !== homeSalon) {
+      const dest = salonByKey(s.salon_key);
+      return { txt: dest ? salonCode(dest) : "?", cls: "sh-subst", title: `Заміна: ${dest ? salonLabel(dest) : "?"}${hNum && showH ? ` · ${hNum} год` : ""}` };
     }
-    return { txt: hTxt, cls: field === "fact" ? "sh-fill" : "sh-fill-plan" };
+    return { txt: showH ? hNum : "", cls: field === "fact" ? "sh-fill" : "sh-fill-plan" };
   };
 
-  // сума годин співробітника саме в цьому магазині (1 = «відпрацював» без вказаних годин)
-  const hoursAt = (empId, salonKey) => {
+  // сума годин співробітника за місяць (1 = «відпрацював» без вказаних годин)
+  const hoursOf = (empId) => {
     const h = shifts.reduce((a, sh) => (
-      sh.employee_id === empId && sh.salon_key === salonKey && sh.state === "work" && sh.fact_h != null && Number(sh.fact_h) !== 1
-        ? a + Number(sh.fact_h) : a
+      sh.employee_id === empId && sh.state === "work" && sh.fact_h != null && Number(sh.fact_h) !== 1 ? a + Number(sh.fact_h) : a
     ), 0);
     return Math.round(h * 10) / 10;
   };
 
-  const groups = useMemo(() => salons.map((s) => {
-    const home = employees.filter((e) => e.salon_key === s.key && e.status === "active");
-    const substIds = new Set();
-    shifts.forEach((sh) => {
-      if (sh.salon_key !== s.key || sh.state !== "work") return;
-      if ((field === "plan" ? sh.plan_h : sh.fact_h) == null) return;
-      const emp = employees.find((e) => e.id === sh.employee_id);
-      if (emp && emp.salon_key !== s.key) substIds.add(emp.id);
-    });
-    const rows = [...home, ...employees.filter((e) => substIds.has(e.id))]
-      .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name));
-    return { salon: s, emps: rows };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [salons, employees, shifts, field]);
+  const groups = useMemo(() => salons.map((sl) => ({
+    salon: sl,
+    emps: employees.filter((e) => e.salon_key === sl.key && e.status === "active")
+      .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
+  })), [salons, employees]);
 
   return (
     <div className="grid-scroll">
@@ -6578,30 +6600,27 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
         <tbody>
           {groups.map(({ salon, emps }) => {
             const edit = modeAllowed(salon.key);
+            const showH = seeAllHours || salon.key === viewerSalon;
             return (
               <React.Fragment key={salon.key}>
                 <tr className="grp"><td colSpan={nDays + 2}>{salonLabel(salon)}</td></tr>
                 {emps.length === 0 && <tr><td className="rh muted" colSpan={nDays + 2}>немає співробітників</td></tr>}
                 {emps.map((e) => {
-                  const isForeign = e.salon_key !== salon.key;
                   const t = monthTally(shifts, e.id, e.salon_key);
+                  const hrs = showH ? hoursOf(e.id) : 0;
                   return (
-                    <tr key={e.id} className={isForeign ? "subst-row" : ""}>
-                      <td className="rh">
-                        <span className="nm">{e.full_name}</span>
-                        {isForeign && <><br /><span className="rl">заміна</span></>}
-                      </td>
+                    <tr key={e.id}>
+                      <td className="rh"><span className="nm">{e.full_name}</span></td>
                       {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => {
                         const wd = dayKey(ym, d);
                         let s = shiftMap[`${e.id}:${wd}`];
-                        if (isForeign && (!s || s.salon_key !== salon.key)) s = null; // тут показуємо лише дні, де він саме на заміні в ЦЬОМУ магазині
-                        if (!s && !isForeign && closedDays[`${salon.key}:${wd}`]) s = { state: "closed" };
-                        const { txt, cls, title } = cellInfo(s, salon.key);
+                        if (!s && closedDays[`${salon.key}:${wd}`]) s = { state: "closed" };
+                        const { txt, cls, title } = cellInfo(s, salon.key, showH);
                         return (
                           <td key={d}
                             className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
                             title={title || undefined}
-                            onClick={edit ? (ev) => openMenu(ev, e.id, d, isForeign ? salon.key : e.salon_key) : undefined}>
+                            onClick={edit ? (ev) => openMenu(ev, e.id, d, e.salon_key) : undefined}>
                             {txt}
                           </td>
                         );
@@ -6609,20 +6628,11 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
                       <td className="rh sh-sum">
                         {field === "plan"
                           ? <><b>{t.planDays}</b> дн{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</>
-                          : <><b>{t.factDays}</b> дн{(seeAllHours || salon.key === viewerSalon) && hoursAt(e.id, salon.key) > 0 ? <> · <b>{String(hoursAt(e.id, salon.key)).replace(".", ",")}</b> год</> : ""}{t.substDays ? ` · зам. ${t.substDays}` : ""}{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</>}
+                          : <><b>{t.factDays}</b> дн{hrs > 0 ? <> · <b>{String(hrs).replace(".", ",")}</b> год</> : ""}{t.substDays ? ` · зам. ${t.substDays}` : ""}{t.absentDays ? ` · відс. ${t.absentDays}` : ""}</>}
                       </td>
                     </tr>
                   );
                 })}
-                {edit && (
-                  <tr className="subst-add-row">
-                    <td className="rh subst-add-label">+ заміна</td>
-                    {Array.from({ length: nDays }, (_, i) => i + 1).map((d) => (
-                      <td key={d} className="sh sh-edit sh-add" title="Додати заміну з території (пошук)" onClick={(ev) => openSubstMenu(ev, salon.key, d)} />
-                    ))}
-                    <td className="rh" />
-                  </tr>
-                )}
               </React.Fragment>
             );
           })}
@@ -6630,14 +6640,8 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
       </table>
       {menu && (
         <ShiftCellMenu
-          pos={menu.pos} field={field} onClose={() => setMenu(null)} onSet={applySet}
+          pos={menu.pos} field={field} homeSalon={menu.homeSalon} onClose={() => setMenu(null)} onSet={applySet}
           current={shiftMap[`${menu.empId}:${dayKey(ym, menu.day)}`]}
-        />
-      )}
-      {substMenu && (
-        <ShiftSubstSearch
-          pos={substMenu.pos} onClose={() => setSubstMenu(null)} onPick={pickSubst}
-          candidates={employees.filter((e) => e.status === "active" && e.salon_key !== substMenu.salonKey)}
         />
       )}
     </div>
@@ -6667,7 +6671,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
         <span><i className="sw sh-fill" />відпрацював</span>
         <span><i className="sw sh-off" />вихідний</span>
         <span><i className="sw sh-vac" />відпустка</span>
-        <span><i className="sw sh-subst" />заміна на іншому магазині</span>
+        <span><i className="sw sh-subst" />заміна — скорочена назва магазину</span>
         <span><i className="sw sh-closed" />зачинено</span>
         <span><i className="sw sh-absent" />інша відсутність</span>
       </div>
@@ -6735,6 +6739,86 @@ function StoreOpeningLog({ cab }) {
   );
 }
 
+/* ТМ: аналіз замін — хто (зі свого магазину) куди й у які числа виходив на заміну */
+function ShiftSubstAnalysis({ cab, ym, employees, shifts }) {
+  const [mode, setMode] = useState("emp"); // emp — за співробітником | store — за магазином, куди виходили
+  const [salonF, setSalonF] = useState("all");
+  const my = cab.tmKey || cab.key;
+  const scope = useMemo(() => new Set((cab.type === "tm" ? SALONS.filter((s) => salonTmOn(s.key) === my) : SALONS).map((s) => s.key)), [cab.type, my]);
+  const empById = useMemo(() => Object.fromEntries(employees.map((e) => [e.id, e])), [employees]);
+
+  const recs = useMemo(() => shifts
+    .filter((s) => s.state === "work" && s.fact_h != null)
+    .map((s) => ({ s, e: empById[s.employee_id] }))
+    .filter(({ s, e }) => e && e.salon_key !== s.salon_key && (scope.has(e.salon_key) || scope.has(s.salon_key)))
+    .filter(({ s, e }) => salonF === "all" || e.salon_key === salonF || s.salon_key === salonF)
+    .map(({ s, e }) => ({ emp: e, home: e.salon_key, dest: s.salon_key, day: Number(s.work_date.slice(8, 10)), h: Number(s.fact_h) !== 1 ? Number(s.fact_h) : 0 })),
+  [shifts, empById, scope, salonF]);
+
+  const rows = useMemo(() => {
+    const m = {};
+    recs.forEach((r) => {
+      const k = mode === "emp" ? `${r.emp.id}|${r.dest}` : `${r.dest}|${r.emp.id}`;
+      (m[k] ||= { emp: r.emp, home: r.home, dest: r.dest, days: [], hours: 0 });
+      m[k].days.push(r.day); m[k].hours += r.h;
+    });
+    const nameOf = (r) => (mode === "emp" ? r.emp.full_name : salonLabel(salonByKey(r.dest) || {}));
+    return Object.values(m).sort((a, b) => nameOf(a).localeCompare(nameOf(b), "uk") || a.emp.full_name.localeCompare(b.emp.full_name, "uk"));
+  }, [recs, mode]);
+
+  const totalDays = recs.length;
+  const totalEmps = new Set(recs.map((r) => r.emp.id)).size;
+  const sname = (k) => { const sl = salonByKey(k); return sl ? salonLabel(sl) : k; };
+  const dayList = (days) => [...days].sort((a, b) => a - b).join(", ");
+  const fmtH = (h) => (h > 0 ? String(Math.round(h * 10) / 10).replace(".", ",") : "—");
+
+  return (
+    <div>
+      <div className="inv-toolbar">
+        <div className="trn-tabs">
+          <button className={mode === "emp" ? "on" : ""} onClick={() => setMode("emp")}>За співробітником</button>
+          <button className={mode === "store" ? "on" : ""} onClick={() => setMode("store")}>За магазином, куди виходили</button>
+        </div>
+        <select value={salonF} onChange={(e) => setSalonF(e.target.value)}>
+          <option value="all">Усі магазини</option>
+          {SALONS.filter((s) => scope.has(s.key)).map((s) => <option key={s.key} value={s.key}>{salonLabel(s)}</option>)}
+        </select>
+      </div>
+      <p className="hint" style={{ margin: "6px 0 12px" }}>
+        {totalDays === 0
+          ? `За ${monthLabel(ym)} замін немає.`
+          : `За ${monthLabel(ym)}: ${totalDays} ${totalDays === 1 ? "день заміни" : "днів замін"}, ${totalEmps} ${totalEmps === 1 ? "співробітник" : "співробітників"}.`}
+      </p>
+      {rows.length > 0 && (
+        <div className="grid-scroll">
+          <table className="open-log">
+            <thead>
+              <tr>
+                {mode === "emp"
+                  ? <><th>Співробітник (свій магазин)</th><th>Куди виходив на заміну</th></>
+                  : <><th>Куди виходили</th><th>Хто (свій магазин)</th></>}
+                <th>Числа</th><th>Днів</th><th>Годин</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={`${r.emp.id}|${r.dest}`}>
+                  {mode === "emp"
+                    ? <><td><b>{r.emp.full_name}</b><br /><span className="muted">{sname(r.home)}</span></td><td>{sname(r.dest)}</td></>
+                    : <><td>{sname(r.dest)}</td><td><b>{r.emp.full_name}</b><br /><span className="muted">{sname(r.home)}</span></td></>}
+                  <td className="open-log-t">{dayList(r.days)}</td>
+                  <td className="open-log-t">{r.days.length}</td>
+                  <td className="open-log-t">{fmtH(r.hours)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ShiftScheduleModule({ cab }) {
   const [ym, setYm] = useState(nowYm());
   const [view, setView] = useState("grid");
@@ -6773,6 +6857,7 @@ function ShiftScheduleModule({ cab }) {
   const onShiftToday = shifts.filter((s) => s.work_date === today && s.state === "work" && s.fact_h != null);
 
   const showOpenings = cab.type === "tm" || cab.type === "manager";
+  const showSubst = showOpenings || cab.key === ADMIN_KEY;
 
   return (
     <div className="tasks-mod">
@@ -6781,10 +6866,11 @@ function ShiftScheduleModule({ cab }) {
         {showOpenings && (
           <div className="trn-tabs">
             <button className={view === "grid" ? "on" : ""} onClick={() => setView("grid")}>Зміни</button>
+            {showSubst && <button className={view === "subst" ? "on" : ""} onClick={() => setView("subst")}>Аналіз замін</button>}
             <button className={view === "openings" ? "on" : ""} onClick={() => setView("openings")}>Відкриття магазинів</button>
           </div>
         )}
-        {view === "grid" && (
+        {(view === "grid" || view === "subst") && (
           <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
             {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
           </select>
@@ -6797,6 +6883,7 @@ function ShiftScheduleModule({ cab }) {
       </div>
 
       {view === "openings" && <StoreOpeningLog cab={cab} />}
+      {view === "subst" && showSubst && <ShiftSubstAnalysis cab={cab} ym={ym} employees={employees} shifts={shifts} />}
 
       {view === "grid" && ym === nowYm() && (
         <div className="tasks-dash">
@@ -10813,7 +10900,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
     <div className={`view cab-shell${mod?.wide ? " cab-wide" : ""}`}>
       <TaskAckGate cabKey={cabKey} />
       <CommandPalette cabKey={cabKey} items={items} />
-      <TopBar title={title} onBack={onExit} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
+      <TopBar title={title} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
       <div className={`cab-scrim ${navOpen ? "on" : ""}`} onClick={() => setNavOpen(false)} />
       {banner}
       <div className="cab-layout">
@@ -11142,7 +11229,7 @@ function OfficeCabinet({ cabKey, onExit, onLogout }) {
   if (!caps) {
     return (
       <div className="view">
-        <TopBar title={person?.name || "Офіс"} onBack={onExit} onLogout={onLogout} cabKey={cabKey} />
+        <TopBar title={person?.name || "Офіс"} onLogout={onLogout} cabKey={cabKey} />
         <div className="loading">Завантаження…</div>
       </div>
     );
@@ -12055,6 +12142,8 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-cb.on .st-cb-box{background:linear-gradient(180deg,var(--gold-bright),var(--gold));border-color:var(--gold);color:var(--gold-ink);}
 .st-cb input:focus-visible + .st-cb-box{outline:2px solid var(--gold);outline-offset:2px;}
 .st-cb-t{font-size:12px;color:var(--ink);white-space:nowrap;pointer-events:none;}
+.st-reset{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid var(--line-strong);border-radius:6px;background:var(--input-bg);color:var(--gold);cursor:pointer;padding:0;}
+.st-reset:hover{border-color:var(--gold);}
 .st-ezv{font-family:'IBM Plex Mono',monospace;font-size:14px;}
 .st-ez-sum{color:var(--ink);}
 .st-pct-sm{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:var(--negative);}
@@ -12171,31 +12260,31 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 /* без горизонтального скролу — таблиця фіксованого макета розтягується на всю ширину,
    стовпці днів рівномірно ділять залишок після колонки імені й підсумку (мал. екрани — медіа нижче) */
 .grid-scroll{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
-table.sched{table-layout:fixed;width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:10px;}
+table.sched{table-layout:fixed;width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;}
 table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
 table.sched thead th{background:var(--surface-alt);color:var(--muted);font-weight:600;padding:2px 0;line-height:1.15;}
 table.sched thead th.we{background:rgba(63,107,74,.14);color:var(--positive);}
 table.sched .wd{font-size:7.5px;opacity:.7;}
-table.sched .rh{width:82px;text-align:left;padding:2px 6px;background:var(--surface);font-family:'Inter',sans-serif;line-height:1.2;overflow:hidden;}
-table.sched .rh .nm{font-size:10px;font-weight:600;color:var(--ink);word-break:break-word;}
+table.sched .rh{width:118px;text-align:left;padding:2px 6px;background:var(--surface);font-family:'Inter',sans-serif;line-height:1.2;overflow:hidden;}
+table.sched .rh .nm{font-size:11.5px;font-weight:600;color:var(--ink);word-break:break-word;}
 table.sched .rh .rl{font-size:8px;color:var(--muted);}
 table.sched .grp td{background:var(--surface-sink);text-align:left;padding:2px 8px;font-size:9.5px;font-weight:700;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-td.sh{height:20px;color:var(--ink);overflow:hidden;white-space:nowrap;text-overflow:clip;font-size:10px;font-weight:600;}
+td.sh{height:28px;color:var(--ink);overflow:hidden;white-space:nowrap;text-overflow:clip;font-size:11.5px;font-weight:600;}
 td.sh-edit{cursor:pointer;}
 td.sh-edit:hover{background:rgba(190,138,46,.1);}
 td.sh-off{background:rgba(190,138,46,.2);}
 td.sh-vac{background:rgba(160,58,42,.34)!important;color:var(--negative-bright)!important;font-weight:700;}
 td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(--surface-sink) 3px,transparent 3px,transparent 6px);}
-td.sh-subst{background:rgba(78,108,151,.16);color:#4E6C97;font-weight:600;}
+td.sh-subst{background:#2F5AA6;color:#F2F7FF;font-weight:700;font-size:10.5px;letter-spacing:.02em;}
 td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);}
 /* напівпрозора заливка станів на дуже вузьких клітинках зливається в суцільну пляму без видимої
    межі (base var(--line) занадто близький до кольору заливки) — форсуємо темний бордер */
 td.sh-vac,td.sh-absent,td.sh-off,td.sh-subst{border-left-color:rgba(0,0,0,.6)!important;border-right-color:rgba(0,0,0,.6)!important;}
-td.sh-fill{background:#0a0a0a;}
+td.sh-fill{background:#0a0a0a;color:#F2EEE2;font-weight:700;}
 td.sh-fill-plan{background:linear-gradient(135deg,#0a0a0a 0 46%,transparent 46%);}
 td.sh-fill.sh-edit:hover{background:#333;}
 td.sh-today{outline:2px solid var(--gold);outline-offset:-2px;}
-td.sh-sum,th.sh-sum-h{width:52px;background:var(--surface-alt);font-size:8.5px;color:var(--muted);padding:0 3px;text-align:right;line-height:1.2;}
+td.sh-sum,th.sh-sum-h{width:150px;background:var(--surface-alt);font-size:11px;color:var(--muted);padding:0 8px;text-align:left;line-height:1.2;white-space:nowrap;}
 td.sh-sum b{color:var(--ink);}
 tr.subst-row .rh{background:rgba(78,108,151,.07);}
 tr.subst-row .rl{color:#4E6C97;}
@@ -12206,7 +12295,7 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .shift-legend span{display:flex;align-items:center;gap:6px;}
 .shift-legend .sw{width:16px;height:16px;border-radius:3px;border:1px solid var(--line-strong);background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--pos);font-style:normal;font-family:'IBM Plex Mono',monospace;}
 .shift-legend .sw.sh-plan{color:var(--muted);}
-.shift-legend .sw.sh-subst{color:#4E6C97;background:rgba(78,108,151,.16);}
+.shift-legend .sw.sh-subst{color:#F2F7FF;background:#2F5AA6;}
 .shift-legend .sw.sh-off{background:rgba(190,138,46,.24);}
 .shift-legend .sw.sh-vac{background:rgba(160,58,42,.34);}
 .shift-legend .sw.sh-absent{background:rgba(160,58,42,.12);}
@@ -12225,7 +12314,7 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .shift-menu-row button{flex:1;min-width:38px;padding:6px 4px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);font-family:inherit;font-size:11.5px;color:var(--ink-soft);cursor:pointer;}
 .shift-menu-row button:hover{background:rgba(190,138,46,.14);}
 .shift-menu-subst{font-size:11px;color:var(--muted);}
-.shift-menu-subst select{flex:1;padding:5px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-size:11px;}
+.shift-menu-subst select{flex:1;min-width:0;padding:5px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-size:11px;}
 .shift-menu-hours input{width:52px;flex:none;padding:6px 5px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:11.5px;color:var(--ink);background:var(--surface-alt);text-align:center;}
 .shift-menu-hours button{flex:1;}
 .shift-menu-hint{font-size:10px;color:var(--muted);text-align:center;font-family:'IBM Plex Mono',monospace;}
@@ -13316,15 +13405,9 @@ function AppMain() {
       // ігноруючи реальні перепризначення між ТМ. Кеш вантажиться асинхронно,
       // тож після завантаження форсуємо ре-рендер, щоб дека одразу оновилась.
       loadReassignCache().then(() => { if (active) bumpRefs(); }).catch(() => {});
-      const keep = localStorage.getItem(KEEP_KEY) === "1";
-      const aliveTab = sessionStorage.getItem(ALIVE_KEY) === "1";
+      // вхід зберігається до натискання «Вийти»: оновлення сторінки, нова вкладка чи перезапуск не розлогінюють
+      const keep = true;
       const cab = await currentCabinet();
-      if (cab && !keep && !aliveTab) {
-        // сесія є, але «Не виходити» не відмічено і вкладку відкрито заново → вийти
-        await signOutCab();
-        if (active) { setReady(true); }
-        return;
-      }
       sessionStorage.setItem(ALIVE_KEY, "1");
       if (cab) {
         await initAfterAuth();
@@ -13336,15 +13419,25 @@ function AppMain() {
     return () => { active = false; };
   }, []);
 
-  const enter = (cab, remember) => {
+  const enter = (cab) => {
     setSession(cab);
     setPending(null);
-    localStorage.setItem(KEEP_KEY, remember ? "1" : "0");
+    localStorage.setItem(KEEP_KEY, "1"); // лишаємось у кабінеті до «Вийти»
     sessionStorage.setItem(ALIVE_KEY, "1");
-    setRemembered(remember ? cab : null);
+    setRemembered(cab);
     loadCalcRefs().then(bumpRefs);
   };
   const goHome = () => setSession(null);            // на головну, сесія Supabase лишається
+
+  // з кабінету виходимо лише кнопкою «Вийти»: кнопка «Назад» браузера / жест назад на телефоні нікуди не веде
+  const inCab = !!session;
+  useEffect(() => {
+    if (!inCab) return undefined;
+    const guard = () => window.history.pushState({ cab: 1 }, "", window.location.href);
+    guard();
+    window.addEventListener("popstate", guard);
+    return () => window.removeEventListener("popstate", guard);
+  }, [inCab]);
   const logout = async () => { await signOutCab(); localStorage.removeItem(KEEP_KEY); setSession(null); setRemembered(null); };
   const pick = async (cab) => {
     if (remembered && remembered.key === cab.key) { setSession(cab); return; }
@@ -13368,7 +13461,7 @@ function AppMain() {
           subtitle={SUBTITLE[pending.type]}
           cabKey={pending.key}
           onCancel={() => setPending(null)}
-          onSuccess={(remember) => enter(pending, remember)}
+          onSuccess={() => enter(pending)}
           verify={(login, password) => verifyLogin(pending.key, login, password)}
         />
       )}

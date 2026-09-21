@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { installStorage } from "./lib/storage.js";
 import { initPwaUpdate } from "./lib/pwaUpdate.js";
 import { initScreenFit } from "./lib/screenFit.js";
+import { initAlertUnlock } from "./lib/alerts.js";
 import { supabase } from "./lib/supabase.js";
 import "./index.css";
 import App from "./App.jsx";
@@ -11,6 +12,7 @@ import App from "./App.jsx";
 installStorage();
 initPwaUpdate();
 initScreenFit();
+initAlertUnlock();
 
 // коли вкладка знову активна після довгого простою — відновити автооновлення
 // токена й одразу підтягти свіжу сесію (інакше Edge-функції ловлять "unauthorized")
