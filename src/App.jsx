@@ -6584,7 +6584,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
   })), [salons, employees]);
 
   return (
-    <div className="grid-scroll">
+    <div className="grid-scroll sched-wrap">
       <table className="sched">
         <thead>
           <tr>
@@ -6668,7 +6668,7 @@ function ShiftGrid({ ym, salons, employees, shifts, storeDays, canEditSalon, onC
       <ShiftTable field="fact" {...tableProps} />
 
       <div className="shift-legend">
-        <span><i className="sw sh-fill" />відпрацював</span>
+        <span><i className="sw sh-fill" />відпрацював (години)</span>
         <span><i className="sw sh-off" />вихідний</span>
         <span><i className="sw sh-vac" />відпустка</span>
         <span><i className="sw sh-subst" />заміна — скорочена назва магазину</span>
@@ -10543,7 +10543,7 @@ function TrainingModule({ cab }) {
    кабінет-специфічні вкладки сюди навмисно не входять. */
 const ADDABLE_MODULES = [
   { key: "tasks", label: "Задачі", group: ORG_GROUP, icon: <CheckSquare size={16} />, render: (c) => <TasksModule cab={c} /> },
-  { key: "shifts", label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: (c) => <ShiftScheduleModule cab={c} /> },
+  { key: "shifts", wide: true, label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: (c) => <ShiftScheduleModule cab={c} /> },
   { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: (c) => <TerritoryModule cab={c} /> },
   { key: "warehouse", label: "Склад", group: ORG_GROUP, icon: <Warehouse size={16} />, render: (c) => <SupplyModule cab={c} /> },
   { key: "expenses", label: "Витрати по СМ", group: ORG_GROUP, icon: <TrendingDown size={16} />, render: (c) => <ExpensesModule cab={c} /> },
@@ -10561,6 +10561,43 @@ const ADDABLE_BY_KEY = Object.fromEntries(ADDABLE_MODULES.map((m) => [m.key, m])
 
 /* Модалка нової задачі: по центру, ~50% екрана, не зникає, поки виконавець
    не натисне «Ознайомлений». Показуємо по одній задачі за раз. */
+/* Нова новина від адміністратора — одразу на екран (як нова задача), поки не натиснуть «Зрозуміло» */
+function NewsGate({ cabKey }) {
+  const [queue, setQueue] = useState([]);
+  useEffect(() => {
+    let a = true;
+    const fresh = (n) => n.kind === "news" && !n.read && Date.now() - new Date(n.created_at).getTime() < 7 * 86400000; // старіші за тиждень не спливають
+    listNotifications(60).then((all) => { if (a) setQueue(all.filter(fresh).reverse()); }).catch(() => {});
+    const unsub = subscribeNotifications(cabKey, (n) => {
+      if (n.kind === "news") setQueue((q) => (q.some((x) => x.id === n.id) ? q : [...q, n]));
+    });
+    // якщо позначили прочитаним у дзвіночку — прибираємо з черги
+    const sync = () => listNotifications(60).then((all) => { if (a) setQueue((q) => q.filter((x) => all.some((y) => y.id === x.id && !y.read))); }).catch(() => {});
+    notifBus?.addEventListener("c", sync);
+    return () => { a = false; unsub(); notifBus?.removeEventListener("c", sync); };
+  }, [cabKey]);
+
+  if (!queue.length) return null;
+  const n = queue[0];
+  const ok = async () => {
+    setQueue((q) => q.filter((x) => x.id !== n.id));
+    await markRead(n.id).catch(() => {});
+    pokeNotifs();
+  };
+  return createPortal(
+    <div className="taskgate-overlay">
+      <div className="taskgate">
+        <div className="taskgate-eyebrow">Новина{queue.length > 1 ? ` · ще ${queue.length - 1}` : ""}</div>
+        <h2 className="taskgate-title">{n.title}</h2>
+        {n.body && <p className="taskgate-desc">{n.body}</p>}
+        <div className="taskgate-meta"><span>{fmtDate(n.created_at)}</span></div>
+        <button className="btn-primary taskgate-btn" onClick={ok}>Зрозуміло</button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function TaskAckGate({ cabKey }) {
   const [queue, setQueue] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -10899,6 +10936,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   return (
     <div className={`view cab-shell${mod?.wide ? " cab-wide" : ""}`}>
       <TaskAckGate cabKey={cabKey} />
+      <NewsGate cabKey={cabKey} />
       <CommandPalette cabKey={cabKey} items={items} />
       <TopBar title={title} onLogout={onLogout} cabKey={cabKey} onMenu={() => setNavOpen((v) => !v)} />
       <div className={`cab-scrim ${navOpen ? "on" : ""}`} onClick={() => setNavOpen(false)} />
@@ -11084,7 +11122,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "archive", label: "Архів", group: ORG_GROUP, icon: <ArchiveIcon size={16} />, render: () => <EmployeesModule cab={{ key: tmKey, type: "tm", tmKey }} archive /> },
     { key: "tasks", label: "Задачі", group: ORG_GROUP, icon: <CheckSquare size={16} />, render: () => <TasksModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
-    { key: "shifts", label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
+    { key: "shifts", wide: true, label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "training", label: "Тестування", group: ORG_GROUP, icon: <GraduationCap size={16} />, render: () => <TrainingModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "zsu", label: "Коди ЗСУ", group: ORG_GROUP, icon: <BadgePercent size={16} />, render: () => <ZsuCodesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
@@ -11117,7 +11155,7 @@ function ManagerCabinet({ onExit, onLogout }) {
     { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: () => <DirectoryModule cab={cab} /> },
     { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: () => (<><EmployeesModule cab={cab} /><EmployeesModule cab={cab} archive /></>) },
     { key: "tasks", label: "Задачі", group: ORG_GROUP, icon: <CheckSquare size={16} />, render: () => <TasksModule cab={cab} /> },
-    { key: "shifts", label: "Графік", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={cab} /> },
+    { key: "shifts", wide: true, label: "Графік", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={cab} /> },
     { key: "training", label: "Тестування", group: ORG_GROUP, icon: <GraduationCap size={16} />, render: () => <TrainingModule cab={cab} /> },
     { key: "zsu", label: "Коди ЗСУ", group: ORG_GROUP, icon: <BadgePercent size={16} />, render: () => <ZsuCodesModule cab={cab} /> },
     { key: "inv", label: "Рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={cab} /> },
@@ -11204,7 +11242,7 @@ function SmCabinet({ salonKey, onExit, onLogout }) {
     { key: "directory", label: "Довідник", group: ORG_GROUP, icon: <FileText size={16} />, render: () => <DirectoryModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "team", label: "Команда", group: ORG_GROUP, icon: <Users size={16} />, render: () => <EmployeesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "tasks", label: "Задачі й чек-листи", group: ORG_GROUP, icon: <ListChecks size={16} />, render: () => <TasksModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
-    { key: "shifts", label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
+    { key: "shifts", wide: true, label: "Графік змін", group: ORG_GROUP, icon: <Calendar size={16} />, render: () => <ShiftScheduleModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "training", label: "Тестування", group: ORG_GROUP, icon: <GraduationCap size={16} />, render: () => <TrainingModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "zsu", label: "Коди ЗСУ", group: ORG_GROUP, icon: <BadgePercent size={16} />, render: () => <ZsuCodesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
     { key: "bn", label: "Безнальні рахунки", group: ORG_GROUP, icon: <CreditCard size={16} />, render: () => <InvoicesModule cab={{ key: salonKey, type: "sm", tmKey: salonTmOn(salonKey) }} /> },
@@ -12260,45 +12298,41 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 /* без горизонтального скролу — таблиця фіксованого макета розтягується на всю ширину,
    стовпці днів рівномірно ділять залишок після колонки імені й підсумку (мал. екрани — медіа нижче) */
 .grid-scroll{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);}
-table.sched{table-layout:fixed;width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;}
-table.sched th,table.sched td{border:1px solid var(--line);text-align:center;padding:0;}
-table.sched thead th{background:var(--surface-alt);color:var(--muted);font-weight:600;padding:2px 0;line-height:1.15;}
-table.sched thead th.we{background:rgba(63,107,74,.14);color:var(--positive);}
-table.sched .wd{font-size:7.5px;opacity:.7;}
-table.sched .rh{width:118px;text-align:left;padding:2px 6px;background:var(--surface);font-family:'Inter',sans-serif;line-height:1.2;overflow:hidden;}
-table.sched .rh .nm{font-size:11.5px;font-weight:600;color:var(--ink);word-break:break-word;}
-table.sched .rh .rl{font-size:8px;color:var(--muted);}
-table.sched .grp td{background:var(--surface-sink);text-align:left;padding:2px 8px;font-size:9.5px;font-weight:700;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-td.sh{height:28px;color:var(--ink);overflow:hidden;white-space:nowrap;text-overflow:clip;font-size:11.5px;font-weight:600;}
+/* графік змін: окремі плитки з проміжком, як на макеті */
+.grid-scroll.sched-wrap{background:transparent;border:none;border-radius:0;overflow-x:auto;overflow-y:hidden;}
+table.sched{table-layout:fixed;width:100%;border-collapse:separate;border-spacing:2px;font-family:'IBM Plex Mono',monospace;font-size:11px;}
+table.sched th,table.sched td{border:none;text-align:center;padding:0;}
+table.sched thead th{background:transparent;color:var(--muted);font-weight:700;font-size:12.5px;padding:2px 0 6px;line-height:1.2;}
+table.sched thead th.we{background:transparent;color:var(--positive);}
+table.sched .wd{display:block;font-size:9.5px;font-weight:500;opacity:.8;}
+table.sched .rh{width:118px;text-align:left;padding:0 10px;background:transparent;font-family:'Inter',sans-serif;line-height:1.2;overflow:hidden;}
+table.sched .rh .nm{font-size:12.5px;font-weight:600;color:var(--ink);word-break:break-word;}
+table.sched .rh .rl{font-size:10.5px;color:var(--muted);font-weight:400;}
+table.sched .grp td{background:var(--surface-alt);text-align:left;padding:8px 10px;font-size:12px;font-weight:500;letter-spacing:.04em;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+table.sched tr.grp:not(:first-child) td{border-top:6px solid transparent;background-clip:padding-box;}
+td.sh{height:36px;background:var(--surface);color:var(--ink);overflow:hidden;white-space:nowrap;text-overflow:clip;font-size:12.5px;font-weight:700;}
 td.sh-edit{cursor:pointer;}
-td.sh-edit:hover{background:rgba(190,138,46,.1);}
-td.sh-off{background:rgba(190,138,46,.2);}
-td.sh-vac{background:rgba(160,58,42,.34)!important;color:var(--negative-bright)!important;font-weight:700;}
+td.sh-edit:hover{filter:brightness(1.35);}
+td.sh-off{background:linear-gradient(rgba(190,138,46,.24),rgba(190,138,46,.24)),var(--surface);}
+td.sh-vac{background:linear-gradient(rgba(160,58,42,.42),rgba(160,58,42,.42)),var(--surface)!important;color:var(--negative-bright)!important;font-weight:700;}
 td.sh-closed{background:repeating-linear-gradient(45deg,var(--surface-sink),var(--surface-sink) 3px,transparent 3px,transparent 6px);}
-td.sh-subst{background:#2F5AA6;color:#F2F7FF;font-weight:700;font-size:10.5px;letter-spacing:.02em;}
-td.sh-absent{background:rgba(160,58,42,.1);color:var(--negative);}
-/* напівпрозора заливка станів на дуже вузьких клітинках зливається в суцільну пляму без видимої
-   межі (base var(--line) занадто близький до кольору заливки) — форсуємо темний бордер */
-td.sh-vac,td.sh-absent,td.sh-off,td.sh-subst{border-left-color:rgba(0,0,0,.6)!important;border-right-color:rgba(0,0,0,.6)!important;}
-td.sh-fill{background:#0a0a0a;color:#F2EEE2;font-weight:700;}
-td.sh-fill-plan{background:linear-gradient(135deg,#0a0a0a 0 46%,transparent 46%);}
-td.sh-fill.sh-edit:hover{background:#333;}
+td.sh-subst{background:#2F5AA6;color:#F2F7FF;font-weight:700;font-size:9.5px;letter-spacing:0;}
+td.sh-absent{background:linear-gradient(rgba(160,58,42,.16),rgba(160,58,42,.16)),var(--surface);color:var(--negative);}
+td.sh-fill{background:#0B0F14;color:#ECE6D7;font-weight:700;}
+td.sh-fill-plan{background:linear-gradient(135deg,#0B0F14 0 46%,transparent 46%);}
+td.sh-fill.sh-edit:hover{background:#26303B;filter:none;}
 td.sh-today{outline:2px solid var(--gold);outline-offset:-2px;}
-td.sh-sum,th.sh-sum-h{width:150px;background:var(--surface-alt);font-size:11px;color:var(--muted);padding:0 8px;text-align:left;line-height:1.2;white-space:nowrap;}
-td.sh-sum b{color:var(--ink);}
-tr.subst-row .rh{background:rgba(78,108,151,.07);}
-tr.subst-row .rl{color:#4E6C97;}
-tr.subst-add-row .rh{color:var(--muted);font-size:9px;font-style:italic;background:var(--surface);}
-td.sh-add{cursor:pointer;background:repeating-linear-gradient(45deg,transparent,transparent 4px,rgba(78,108,151,.12) 4px,rgba(78,108,151,.12) 8px);}
-td.sh-add:hover{background:rgba(78,108,151,.26);}
-.shift-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--on-dark-2);}
+td.sh-sum,th.sh-sum-h{width:170px;background:var(--surface);font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);padding:0 12px;text-align:left;line-height:1.2;white-space:nowrap;}
+th.sh-sum-h{background:transparent;font-size:11px;letter-spacing:.06em;text-transform:uppercase;}
+td.sh-sum b{color:var(--ink);font-weight:600;}
+.shift-legend{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;font-size:12px;color:var(--on-dark-2);}
 .shift-legend span{display:flex;align-items:center;gap:6px;}
-.shift-legend .sw{width:16px;height:16px;border-radius:3px;border:1px solid var(--line-strong);background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--pos);font-style:normal;font-family:'IBM Plex Mono',monospace;}
+.shift-legend .sw{width:20px;height:20px;border-radius:5px;border:none;background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--pos);font-style:normal;font-family:'IBM Plex Mono',monospace;}
 .shift-legend .sw.sh-plan{color:var(--muted);}
 .shift-legend .sw.sh-subst{color:#F2F7FF;background:#2F5AA6;}
-.shift-legend .sw.sh-off{background:rgba(190,138,46,.24);}
-.shift-legend .sw.sh-vac{background:rgba(160,58,42,.34);}
-.shift-legend .sw.sh-absent{background:rgba(160,58,42,.12);}
+.shift-legend .sw.sh-off{background:linear-gradient(rgba(190,138,46,.24),rgba(190,138,46,.24)),var(--surface);}
+.shift-legend .sw.sh-vac{background:linear-gradient(rgba(160,58,42,.42),rgba(160,58,42,.42)),var(--surface);}
+.shift-legend .sw.sh-absent{background:linear-gradient(rgba(160,58,42,.16),rgba(160,58,42,.16)),var(--surface);}
 .shift-menu{position:fixed;z-index:301;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 20px 50px -14px rgba(0,0,0,.5);padding:10px;width:200px;animation:fadeIn .14s ease both;}
 /* палітра — клік по клітинці спершу пропонує обрати КОЛІР (стан), як на паперовому графіку */
 .shift-swatches{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
@@ -12326,12 +12360,13 @@ td.sh-add:hover{background:rgba(78,108,151,.26);}
 .ssi-from{color:var(--muted);font-size:10.5px;flex-shrink:0;}
 .shift-search-empty{padding:10px;text-align:center;color:var(--muted);font-size:12px;}
 @media (max-width:640px){
-  table.sched{font-size:8px;}
-  table.sched .rh{width:58px;padding:2px 4px;}
-  table.sched .rh .nm{font-size:8.5px;}
-  table.sched .rh .rl{font-size:7px;}
-  td.sh{height:22px;font-size:9px;}
-  td.sh-sum,th.sh-sum-h{width:34px;font-size:7px;padding:0 2px;}
+  table.sched{font-size:8px;border-spacing:1px;min-width:720px;}
+  table.sched .rh{width:74px;padding:0 4px;}
+  table.sched .rh .nm{font-size:10px;}
+  table.sched thead th{font-size:10px;}
+  td.sh{height:28px;font-size:10px;}
+  td.sh-subst{font-size:8px;}
+  td.sh-sum,th.sh-sum-h{width:90px;font-size:9px;padding:0 6px;}
 }
 
 /* щоденний вхід */
