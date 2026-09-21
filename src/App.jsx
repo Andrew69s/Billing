@@ -12,7 +12,7 @@ import {
   Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
   Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
   Wrench, MessageSquare, Send, Banknote, Menu,
-  Warehouse, Paperclip, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search, Lock,
+  Warehouse, Paperclip, Info, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search, Lock,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -533,6 +533,7 @@ function ConditionsBlocks({ blocks }) {
   return (
     <div className="cond-blocks">
       {blocks.map((b, i) => {
+        if (b.h) return <h4 key={i} className="cond-h">{b.h}</h4>;
         if (b.p) return <p key={i} className="cond-p">{b.p}</p>;
         if (b.note) return <p key={i} className="cond-note">{b.note}</p>;
         if (b.ul) return (
@@ -2418,13 +2419,29 @@ const StSeg = ({ items }) => (
       : <i key={t} className={on ? "on" : ""}>{t}</i>
   ))}</span>
 );
-function StRow({ g, gs, label, inp, rule, cells, cls }) {
+/* умови мотивації по блоках (як у попередній версії) — номери пунктів для smCond */
+const ST_COND = {
+  "Основа": ["1.1"], "Дзвінки": ["3.1"], "Атестація": ["2.1"], "KPI": ["3.3", "3.4"], "Сайт і БН": ["3.6", "3.7"],
+  "PPI": ["4.1"], "Премії": ["5.1", "5.2"], "Керуючий": ["2.2", "2.3"], "Інше": ["3.2", "3.5", "5.3"],
+};
+const StInfoCtx = React.createContext(null);
+function StRow({ g, gs, label, inp, cells, cls }) {
+  const openInfo = React.useContext(StInfoCtx);
   return (
     <tr className={`${g ? "st-gt " : ""}${cls || ""}`}>
-      {g && <td className="st-g" rowSpan={gs}>{g}</td>}
+      {g && (
+        <td className="st-g" rowSpan={gs}>
+          <span className="st-g-in">
+            {g}
+            {ST_COND[g] && openInfo && (
+              <span role="button" tabIndex={0} className="st-info" title="Умови мотивації" aria-label={`Умови: ${g}`}
+                onClick={() => openInfo(g)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openInfo(g); } }}><Info size={13} /></span>
+            )}
+          </span>
+        </td>
+      )}
       <td className="st-lab">{label}</td>
       <td className="st-inp">{inp}</td>
-      <td className="st-rule">{rule}</td>
       {cells.map((x, i) => <td key={i} className="st-num">{x}</td>)}
     </tr>
   );
@@ -2432,7 +2449,7 @@ function StRow({ g, gs, label, inp, rule, cells, cls }) {
 function StTotalRow({ label, hint, cells, cls }) {
   return (
     <tr className={`st-gt ${cls}`}>
-      <td colSpan={4} className="st-lab">{label} {hint && <span className="st-hint">{hint}</span>}</td>
+      <td colSpan={3} className="st-lab">{label} {hint && <span className="st-hint">{hint}</span>}</td>
       {cells.map((x, i) => <td key={i} className="st-num">{x}</td>)}
     </tr>
   );
@@ -2460,6 +2477,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
   const [ez, setEz] = useState({ total: 0, confirmed: 0 }); // оборот ЕЗ за місяць з модуля «ЕЗ»
   const [subAuto, setSubAuto] = useState({}); // empId → днів заміни на іншому магазині за графіком
   const [workAuto, setWorkAuto] = useState({}); // empId → відпрацьованих днів за графіком
+  const [infoGroup, setInfoGroup] = useState(null); // блок, для якого відкрито умови мотивації
   const saved = useRef({});      // empId → JSON останнього збереженого документа
   const touched = useRef(false); // були зміни від користувача
   const draftsRef = useRef(null);
@@ -2857,15 +2875,15 @@ function SmStoreSalary({ salon, review, ymProp }) {
           </div>
           {calcErr && <div className="banner banner-late"><AlertTriangle size={16} /> Не вдалося перерахувати: {calcErr}. Показано попередні цифри.</div>}
 
+          <StInfoCtx.Provider value={setInfoGroup}>
           <div className="st-wrap">
             <table className="st">
-              <colgroup><col style={{ width: 104 }} /><col style={{ width: 200 }} /><col style={{ width: 230 }} /><col style={{ width: 260 }} />{emps.map((e) => <col key={e.id} style={{ width: 190 }} />)}</colgroup>
+              <colgroup><col style={{ width: 104 }} /><col style={{ width: 200 }} /><col style={{ width: 250 }} />{emps.map((e) => <col key={e.id} style={{ width: 190 }} />)}</colgroup>
               <thead>
                 <tr>
                   <th />
                   <th className="st-hl">Стаття</th>
                   <th className="st-hl">Вхідні дані магазину</th>
-                  <th className="st-hl">Правило з таблиці</th>
                   {emps.map((e) => (
                     <th key={e.id} className="st-he">
                       <div className="st-en">{e.full_name}</div>
@@ -2890,34 +2908,31 @@ function SmStoreSalary({ salon, review, ymProp }) {
                 </tr>
               </thead>
               <tbody>
-                <StRow g="Основа" gs={1} label="Ставка ЗП" inp={<span className="st-pill">{c0.category} · {planBracketLabel(c0.bracket)}</span>} rule="за категорією та % виконання" cells={each((e) => stMoney(c(e).baseAdjusted))} />
+                <StRow g="Основа" gs={1} label="Ставка ЗП" inp={<span className="st-pill">{c0.category} · {planBracketLabel(c0.bracket)}</span>} cells={each((e) => stMoney(c(e).baseAdjusted))} />
                 <StRow g="Дзвінки" gs={1} label="Обіг з дзвінків"
-                  inp={<StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" />}
-                  rule={<><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /> ≥ {stNum(c0.bonus.callsPlanRevenue)} → 5% · ÷ {team}</>}
+                  inp={<span className="st-two"><StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" /><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /></span>}
                   cells={each((e) => stMoney(c(e).bonus.calls))} />
-                <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>} rule="1 000 керуючому · 500 іншим співробітникам"
+                <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>}
                   cells={each((e) => <span className="st-ck"><StChk on={d(e).manager.attestationAll} set={setEmp(e.id, ["manager", "attestationAll"])} label={`Атестація — ${e.full_name}`} /> {stMoney(c(e).mgr.attest)}</span>)} />
                 {[["avgCheck", "Середній чек"], ["checkLen", "Довжина чека"]].map(([kind, title], i) => (
-                  <StRow key={kind} g={i === 0 ? "KPI" : null} gs={2} label={title} inp={<span className="st-hint">сума й галочка →</span>} rule="зараховується сума з поля, якщо стоїть галочка"
+                  <StRow key={kind} g={i === 0 ? "KPI" : null} gs={2} label={title} inp={<span className="st-hint">сума й галочка →</span>}
                     cells={each((e) => {
                       const k = kpi(e, kind);
                       return <span className="st-ck"><StIn v={k.sum} set={(v) => setKpi(e, kind, { sum: v })} label={`${title} — ${e.full_name}, сума`} cls={`st-in-m ${k.ok ? "" : "off"}`} /><StChk on={k.ok} set={(v) => setKpi(e, kind, { ok: v })} label={`${title} — ${e.full_name}, зарахувати`} /></span>;
                     })} />
                 ))}
-                <StRow g="Сайт і БН" gs={2} label="Продажі із сайту (НП)" inp={<StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" />} rule={`4% від суми · ÷ ${team}`} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
-                <StRow label="Продажі по БН" inp={<StIn v={d0.bonus.bnRevenue} set={setShared(["bonus", "bnRevenue"])} label="Продажі по БН" />} rule={`4% від суми · ÷ ${team}`} cells={each((e) => stMoney(c(e).bonus.bn))} />
-                <StRow g="PPI" gs={1} label="Оборот PPI" inp={<StIn v={d0.ppi.ppiRevenue} set={setShared(["ppi", "ppiRevenue"])} label="Оборот PPI" />}
-                  rule={<><StSeg items={[["3%", !!d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(true)], ["1%", !d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(false)]]} /> план закрито → 3% · ÷ {team}</>}
+                <StRow g="Сайт і БН" gs={2} label="Продажі із сайту (НП)" inp={<StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" />} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
+                <StRow label="Продажі по БН" inp={<StIn v={d0.bonus.bnRevenue} set={setShared(["bonus", "bnRevenue"])} label="Продажі по БН" />} cells={each((e) => stMoney(c(e).bonus.bn))} />
+                <StRow g="PPI" gs={1} label="Оборот PPI"
+                  inp={<span className="st-two"><StIn v={d0.ppi.ppiRevenue} set={setShared(["ppi", "ppiRevenue"])} label="Оборот PPI" /><StSeg items={[["3%", !!d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(true)], ["1%", !d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(false)]]} /></span>}
                   cells={each((e) => stMoney(c(e).ppi.bonus))} />
                 <StRow g="Премії" gs={2} cls={isQuarterEnd ? "" : "st-dim"} label="Квартальна премія"
-                  inp={<span className="st-hint">{isQuarterEnd ? "сума 3 ЗП і «3/3 плани» →" : "—"}</span>}
-                  rule={isQuarterEnd ? "10% від суми трьох останніх ЗП" : `лише в кінці кварталу (${monthLabel(qMonths[2])})`}
+                  inp={<span className="st-hint">{isQuarterEnd ? "сума 3 ЗП і «3/3 плани» →" : `лише в кінці кварталу (${monthLabel(qMonths[2])})`}</span>}
                   cells={each((e) => (isQuarterEnd
                     ? <span className="st-ck"><StIn v={d(e).quarterly.last3SalarySum} set={setEmp(e.id, ["quarterly", "last3SalarySum"])} label={`Сума 3 останніх ЗП — ${e.full_name}`} cls="st-in-m" /><StChk on={d(e).quarterly.threeOfThree} set={setEmp(e.id, ["quarterly", "threeOfThree"])} label={`3/3 плани — ${e.full_name}`} /></span>
                     : stMoney(0)))} />
                 <StRow label="Рекордний показник"
                   inp={<span className="st-two"><StIn v={d0.record.monthlyTo} set={setShared(["record", "monthlyTo"])} label="Оборот ТО за місяць (команда)" /><StIn v={d0.record.prevRecord} set={setShared(["record", "prevRecord"])} label="Попередній рекорд ТО" /></span>}
-                  rule={<>ліворуч оборот, праворуч попередній рекорд · 1% від обороту, якщо ≥ {stNum(c0.record.threshold)}{c0.record.beaten ? " ✔" : ""}</>}
                   cells={each((e) => stMoney(c(e).record.bonus))} />
                 <StRow g="Керуючий" gs={2} label="Стандарти"
                   inp={mgrEmp ? (
@@ -2929,7 +2944,6 @@ function SmStoreSalary({ salon, review, ymProp }) {
                       </>}
                     </span>
                   ) : <span className="st-hint">керуючого немає в команді</span>}
-                  rule="+2 000 без зауважень, або мінус: виявлені −200, невиправлені −400 (до −2 000)"
                   cells={each((e) => stMoney(c(e).mgr.standards))} />
                 <StRow label="Коефіцієнт керуючого"
                   inp={mgrEmp ? (
@@ -2937,9 +2951,8 @@ function SmStoreSalary({ salon, review, ymProp }) {
                       {managerCoefOptions().map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
                     </select>
                   ) : <span className="st-hint">—</span>}
-                  rule={`ставка ${stNum(c0.baseRaw)} × (коеф. − 1)`}
                   cells={each((e) => stMoney(c(e).mgr.coefBonus))} />
-                <StRow g="Інше" gs={showTmAdj ? 5 : 4} label="Заміна на іншому магазині" inp={<span className="st-hint">днів із графіка змін · можна виправити</span>} rule="+20% денної ставки за день заміни"
+                <StRow g="Інше" gs={showTmAdj ? 5 : 4} label="Заміна на іншому магазині" inp={<span className="st-hint">днів із графіка змін · можна виправити</span>}
                   cells={each((e) => {
                     const auto = subAuto[e.id] || 0;
                     const days = d(e).bonus.replacementDays || 0;
@@ -2952,16 +2965,16 @@ function SmStoreSalary({ salon, review, ymProp }) {
                       </span>
                     );
                   })} />
-                <StRow label="Атестація (курси)" inp={<span className="st-hint">галочка по кожному →</span>} rule="≥ 95% курсів без перепризначення → 500"
+                <StRow label="Атестація (курси)" inp={<span className="st-hint">галочка по кожному →</span>}
                   cells={each((e) => <span className="st-ck"><StChk on={d(e).bonus.coursesOk} set={setEmp(e.id, ["bonus", "coursesOk"])} label={`Курси — ${e.full_name}`} /> {stMoney(c(e).bonus.courses)}</span>)} />
-                <StRow label="ЕЗ" inp={<span className="st-hint">з модуля «ЕЗ»</span>} rule={`20% від прибутку ЕЗ · ÷ ${team}`} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
-                <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>} rule="будь-який додатковий бонус, ТМ бачить і звіряє"
+                <StRow label="ЕЗ" inp={<span className="st-hint">з модуля «ЕЗ»</span>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
+                <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>}
                   cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
-                {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>} rule=""
+                {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>}
                   cells={each((e) => (isReview && editMode ? <StIn v={d(e).adj.amount} set={setEmp(e.id, ["adj", "amount"])} label={`Додатково від ТМ — ${e.full_name}`} cls="st-in-w" /> : stMoney(c(e).adj)))} />}
                 <StTotalRow cls="st-sub" label="Всього нараховано" hint="включно з ЕЗ" cells={each((e) => stNum(c(e).grossTotal))} />
                 {[["official", "Офіційно на картку"], ["advance", "Аванс готівка"], ["birthdays", "Дні народження"], ["inventory", "Інвентаризація"], ["ownUse", "Товар для власних потреб"]].map(([k, title], i) => (
-                  <StRow key={k} g={i === 0 ? "Мінус" : null} gs={5} label={title} inp={<span className="st-hint">вноситься по кожному →</span>} rule=""
+                  <StRow key={k} g={i === 0 ? "Мінус" : null} gs={5} label={title} inp={<span className="st-hint">вноситься по кожному →</span>}
                     cells={each((e) => <StIn v={d(e).adj[k]} set={setEmp(e.id, ["adj", k])} label={`${title} — ${e.full_name}`} cls="st-in-w" />)} />
                 ))}
                 <StTotalRow cls="st-pay st-gross" label="Загальна ЗП" hint="= всього нараховано" cells={each((e) => <div className="st-payv">{stNum(c(e).grossTotal)}</div>)} />
@@ -2976,6 +2989,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
               </tbody>
             </table>
           </div>
+          </StInfoCtx.Provider>
 
           <div className="st-shots">
             <button className="btn-secondary small" onClick={() => setShotsOpen((v) => !v)}><Camera size={13} /> Скріни-підтвердження{shotCount ? ` · ${shotCount}` : ""}</button>
@@ -3044,6 +3058,11 @@ function SmStoreSalary({ salon, review, ymProp }) {
         </>
       )}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
+      {infoGroup && (() => {
+        const conds = (ST_COND[infoGroup] || []).map((n) => smCond(n)).filter(Boolean);
+        const blocks = conds.length === 1 ? conds[0].blocks : conds.flatMap((cd) => [{ h: cd.title }, ...cd.blocks]);
+        return <InfoModal title={conds.length === 1 ? conds[0].title : `Умови: ${infoGroup}`} blocks={blocks.length ? blocks : [{ p: "Умови для цього блоку поки не завантажено." }]} onClose={() => setInfoGroup(null)} />;
+      })()}
     </div>
   );
 }
@@ -12103,7 +12122,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-sale-row > span:nth-child(2){margin-left:auto;font-weight:600;}
 
 /* --- СМ: розрахунок ЗП магазину (одна таблиця) --- */
-.st-page{max-width:calc(800px + var(--st-n,3) * 190px);margin:0 auto;}
+.st-page{max-width:calc(560px + var(--st-n,3) * 190px);margin:0 auto;}
 .st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
 .st-strip{padding:14px 0;display:flex;flex-wrap:nowrap;align-items:stretch;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
 .st-cell{flex:0 0 auto;padding:0 22px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
@@ -12122,7 +12141,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-hint{font-size:12.5px;color:var(--st-hint);font-weight:400;font-family:'Inter',sans-serif;}
 .st-warn{color:var(--st-neg);}
 .st-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow-x:auto;}
-.st{width:100%;min-width:calc(794px + var(--st-n,3) * 190px);border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
+.st{width:100%;min-width:calc(554px + var(--st-n,3) * 190px);border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
 .st td,.st th{padding:0 14px;height:40px;border-bottom:1px solid var(--line);vertical-align:middle;}
 .st th{height:auto;padding:14px 14px 14px;text-align:left;font-weight:500;border-bottom:1px solid var(--line-strong);}
 .st-hl{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);vertical-align:bottom;}
@@ -12130,6 +12149,10 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-en{font-size:15.5px;font-weight:600;color:var(--ink);}
 .st-er{font-size:12.5px;color:var(--muted);margin-top:3px;display:flex;justify-content:flex-end;align-items:center;gap:5px;flex-wrap:wrap;}
 .st tr.st-gt td{border-top:1px solid var(--line-strong);}
+.st-g-in{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.st-info{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--st-cap);color:var(--st-cap);cursor:pointer;flex-shrink:0;text-transform:none;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
+.st-info:hover,.st-info:focus-visible{color:var(--st-gold);border-color:var(--st-gold);background:rgba(190,138,46,.12);outline:none;}
+.cond-h{margin:16px 0 6px;font-family:'Fraunces',serif;font-size:14.5px;font-weight:600;color:var(--ink);}
 .st-g{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--surface-alt);border-right:1px solid var(--line);}
 .st-lab{font-weight:500;}
 .st-rule{color:var(--muted);font-size:12.5px;line-height:1.35;}
