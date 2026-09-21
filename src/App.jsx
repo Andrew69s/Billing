@@ -38,7 +38,7 @@ import {
 import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, deleteTaskBatch, groupTasks, markSeen, markTaskAck, subscribeTasks } from "./lib/tasks.js";
 import {
   INVOICE_STATUS, INVOICE_FLOW, nextStatus, deriveVat,
-  listInvoices, createInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice, getInvoice,
+  listInvoices, createInvoice, createManualInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice, getInvoice,
   listCounterparties,
 } from "./lib/invoices.js";
 import {
@@ -5638,6 +5638,124 @@ const docsDays = (inv) => Math.max(0, Math.floor((Date.now() - new Date(docsStam
 const docsState = (inv) => (inv.docs_office_at ? "handed" : inv.docs_notified_at ? "notified" : "waiting");
 const daysWord = (n) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "день" : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? "дні" : "днів"}`;
 
+/* нагадування СМ про відсутні видаткові накладні: задача з екраном «Ознайомлений» + відмітка в рахунку */
+async function sendDocsReminder(inv, byKey) {
+  // повторне нагадування: прибираємо попередню задачу, щоб у СМ не накопичувались дублі
+  if (inv.docs_task_id) await deleteTask(inv.docs_task_id).catch(() => {});
+  const created = await createTasks({
+    title: `Бухгалтер повідомляє вас про відсутність видаткових накладних за рахунком: ${inv.counterparty || "без назви"}, сума ${invMoney(inv.amount)}`,
+    description: "Знайдіть і передайте оригінали видаткових накладних в офіс.",
+    assignees: [inv.created_by], due_at: "", priority: false, created_by: byKey,
+  });
+  await updateInvoice(inv.id, {
+    docs_notified_at: new Date().toISOString(),
+    docs_notify_count: (inv.docs_notify_count || 0) + 1,
+    docs_task_id: created[0]?.id || null,
+    history: [...(inv.history || []), { status: inv.status, at: new Date().toISOString(), by: byKey, note: "СМ повідомлено про відсутність видаткових накладних" }],
+  });
+}
+const ymdUa = (d) => (d ? String(d).slice(0, 10).split("-").reverse().join(".") : "");
+
+/* Вікно «Додати рахунок вручну» (Юля): документи за старі періоди, яких магазин не виставляв */
+function InvoiceManualModal({ cab, rows, onClose, onCreated }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [salonKey, setSalonKey] = useState("");
+  const [counterparty, setCounterparty] = useState("");
+  const [invNo, setInvNo] = useState("");
+  const [date, setDate] = useState("");
+  const [amount, setAmount] = useState(0);
+  const [issuer, setIssuer] = useState("budvik");
+  const [comment, setComment] = useState("");
+  const [notifyNow, setNotifyNow] = useState(true);
+  const [sugg, setSugg] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { listCounterparties().then(setSugg).catch(() => {}); }, []);
+  const salons = useMemo(() => [...SALONS].sort((a, b) => salonLabel(a).localeCompare(salonLabel(b), "uk")), []);
+
+  const submit = async () => {
+    setErr("");
+    if (!salonKey) return setErr("Оберіть магазин, якому призначити рахунок");
+    if (!counterparty.trim()) return setErr("Вкажіть компанію (покупця)");
+    if (!(amount > 0)) return setErr("Вкажіть суму рахунку");
+    if (!date) return setErr("Вкажіть дату рахунку");
+    if (date > today) return setErr("Дата рахунку не може бути в майбутньому");
+    const no = invNo.trim().toLowerCase();
+    if (no && rows.some((r) => r.created_by === salonKey && (r.invoice_no || "").trim().toLowerCase() === no && (r.counterparty || "").trim().toLowerCase() === counterparty.trim().toLowerCase())) {
+      return setErr("Такий рахунок цього магазину вже є в списку");
+    }
+    setBusy(true);
+    let created;
+    try {
+      created = await createManualInvoice({
+        salonKey, counterparty, issuer: issuer === "budvik" ? "ТОВ Будвік" : "ФОП", vat: issuer === "budvik",
+        amount, invoice_no: invNo, invoice_date: date, comment, by: cab.key,
+      });
+    } catch (e) { setErr(e.message || "Не вдалося додати рахунок"); setBusy(false); return; }
+    if (notifyNow) {
+      try { await sendDocsReminder(created, cab.key); pushToast({ title: "Рахунок додано, СМ повідомлено", body: cabName(salonKey) }); }
+      catch (e) { pushToast({ title: "Рахунок додано, але СМ не повідомлено", body: String(e.message || e) }); }
+    } else {
+      pushToast({ title: "Рахунок додано", body: `${counterparty.trim()} · ${invMoney(amount)}` });
+    }
+    onCreated(); onClose();
+  };
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Додати рахунок вручну</h3>
+          <button className="modal-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <p className="hint">Для документів за старі періоди, яких магазин не виставляв. Рахунок одразу потрапить у «Чекають документи».</p>
+          <label className="over-field"><span>Магазин (СМ отримає повідомлення)</span>
+            <select value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
+              <option value="">Оберіть магазин…</option>
+              {salons.map((s) => <option key={s.key} value={s.key}>{salonLabel(s)}</option>)}
+            </select>
+          </label>
+          <label className="over-field"><span>Компанія (покупець)</span>
+            <input list="inv-manual-companies" value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="Кому виставлено рахунок" />
+            <datalist id="inv-manual-companies">{sugg.map((c) => <option key={c} value={c} />)}</datalist>
+          </label>
+          <div className="task-modal-row">
+            <label className="over-field"><span>№ рахунку</span>
+              <input value={invNo} onChange={(e) => setInvNo(e.target.value)} placeholder="—" />
+            </label>
+            <label className="over-field"><span>Дата рахунку</span>
+              <input type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)} />
+            </label>
+            <label className="over-field"><span>Сума, грн</span>
+              <NumInput value={amount} onChange={setAmount} placeholder="0.00" />
+            </label>
+          </div>
+          <div className="over-field"><span>Постачальник</span>
+            <div className="inv-issuer">
+              <button type="button" className={issuer === "budvik" ? "on" : ""} onClick={() => setIssuer("budvik")}>Будвік · з ПДВ</button>
+              <button type="button" className={issuer === "fop" ? "on" : ""} onClick={() => setIssuer("fop")}>ФОП · без ПДВ</button>
+            </div>
+          </div>
+          <label className="over-field"><span>Коментар (необовʼязково)</span>
+            <textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Напр. накладна за березень, потрібен оригінал" />
+          </label>
+          <label className="task-priority-toggle">
+            <input type="checkbox" checked={notifyNow} onChange={(e) => setNotifyNow(e.target.checked)} />
+            Одразу повідомити СМ про відсутність документів
+          </label>
+          {err && <p className="form-err">{err}</p>}
+        </div>
+        <div className="modal-foot">
+          <button className="btn-secondary" onClick={onClose} disabled={busy}>Скасувати</button>
+          <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? "…" : "Додати рахунок"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function InvoiceDocsControl({ rows, cab, onChanged, onPreview }) {
   const [tasks, setTasks] = useState([]);
   const [f, setF] = useState("open"); // open | notified | handed | all
@@ -5695,29 +5813,30 @@ function InvoiceDocsControl({ rows, cab, onChanged, onPreview }) {
   const notifySm = async (inv) => {
     setBusyId(inv.id);
     try {
-      // повторне нагадування: прибираємо попередню задачу, щоб у СМ не накопичувались дублі
-      if (inv.docs_task_id) await deleteTask(inv.docs_task_id).catch(() => {});
-      const created = await createTasks({
-        title: `Бухгалтер повідомляє вас про відсутність видаткових накладних за рахунком: ${inv.counterparty || "без назви"}, сума ${invMoney(inv.amount)}`,
-        description: "Знайдіть і передайте оригінали видаткових накладних в офіс.",
-        assignees: [inv.created_by], due_at: "", priority: false, created_by: cab.key,
-      });
-      await updateInvoice(inv.id, {
-        docs_notified_at: new Date().toISOString(),
-        docs_notify_count: (inv.docs_notify_count || 0) + 1,
-        docs_task_id: created[0]?.id || null,
-        history: withHistory(inv, "СМ повідомлено про відсутність видаткових накладних"),
-      });
+      await sendDocsReminder(inv, cab.key);
       pushToast({ title: "СМ повідомлено", body: cabName(inv.created_by) });
       onChanged();
     } catch (e) { pushToast({ title: "Не вдалося повідомити", body: String(e.message || e) }); }
     setBusyId("");
   };
 
+  const [delArmed, setDelArmed] = useState("");
+  const removeManual = async (inv) => {
+    if (delArmed !== inv.id) { setDelArmed(inv.id); setTimeout(() => setDelArmed((v) => (v === inv.id ? "" : v)), 4000); return; }
+    setBusyId(inv.id); setDelArmed("");
+    try {
+      if (inv.docs_task_id) await deleteTask(inv.docs_task_id).catch(() => {});
+      await deleteInvoice(inv.id);
+      pushToast({ title: "Рахунок видалено", body: `${inv.counterparty || "рахунок"} · ${invMoney(inv.amount)}` });
+      onChanged();
+    } catch (e) { pushToast({ title: "Не вдалося видалити", body: String(e.message || e) }); }
+    setBusyId("");
+  };
+
   return (
     <div>
       <p className="hint" style={{ marginBottom: 12 }}>
-        Тут усі рахунки, які магазини позначили «Пропечатано». Позначайте, коли оригінали документів дійшли до офісу.
+        Тут усі рахунки, які магазини позначили «Пропечатано», і ті, що ви додали вручну. Позначайте, коли оригінали документів дійшли до офісу.
         Якщо їх немає — одним кліком нагадайте магазину.
       </p>
       <div className="inv-toolbar">
@@ -5753,13 +5872,15 @@ function InvoiceDocsControl({ rows, cab, onChanged, onPreview }) {
                   <div className="dc-main">
                     <div className="dc-name">{inv.counterparty || "Без назви"}</div>
                     <div className="dc-sub">
-                      {cabName(inv.created_by)}{inv.invoice_no ? ` · рахунок № ${inv.invoice_no}` : ""} · пропечатано {fmtDate(docsStamp(inv))}
+                      {cabName(inv.created_by)}{inv.invoice_no ? ` · рахунок № ${inv.invoice_no}` : ""} · {inv.manual ? `від ${ymdUa(inv.invoice_date)}` : `пропечатано ${fmtDate(docsStamp(inv))}`}
                       {inv.screenshot && <> · <button className="wh-link" onClick={() => onPreview(inv.screenshot)}>рахунок</button></>}
                     </div>
+                    {inv.comment && inv.manual && <div className="dc-sub">{inv.comment}</div>}
                   </div>
                   <div className="dc-amt">{invMoney(inv.amount)}</div>
                 </div>
                 <div className="dc-bottom">
+                  {inv.manual && <span className="dc-pill info">Додано вручну</span>}
                   {st === "handed" ? (
                     <span className="dc-pill ok">Передано в офіс {fmtDate(inv.docs_office_at)} · {cabName(inv.docs_office_by)}</span>
                   ) : (
@@ -5769,6 +5890,9 @@ function InvoiceDocsControl({ rows, cab, onChanged, onPreview }) {
                     </>
                   )}
                   <span className="dc-spacer" />
+                  {inv.manual && st !== "handed" && (
+                    <button className="wh-link" disabled={busy} onClick={() => removeManual(inv)}>{delArmed === inv.id ? "точно видалити?" : "видалити"}</button>
+                  )}
                   {st === "handed" ? (
                     <button className="wh-link" disabled={busy} onClick={() => markOffice(inv, false)}>скасувати</button>
                   ) : (
@@ -5792,6 +5916,7 @@ function InvoiceDocsControl({ rows, cab, onChanged, onPreview }) {
 function InvoicesModule({ cab }) {
   const [rows, reload] = useInvoices();
   const [showModal, setShowModal] = useState(false);
+  const [showManual, setShowManual] = useState(false);
   const [view, setView] = useState("list");     // list | analytics
   const [filter, setFilter] = useState("open"); // open | archive | all | <status>
   const [medok, setMedok] = useState([]);
@@ -5855,6 +5980,9 @@ function InvoicesModule({ cab }) {
         <h3 className="ov-h">Безнальні рахунки</h3>
         {canCreate && (
           <button className="btn-primary small" onClick={() => setShowModal(true)}><Plus size={14} /> Новий рахунок</button>
+        )}
+        {canControlDocs && (
+          <button className="btn-primary small" onClick={() => setShowManual(true)}><Plus size={14} /> Додати рахунок</button>
         )}
       </div>
 
@@ -5965,6 +6093,7 @@ function InvoicesModule({ cab }) {
       )}
 
       {showModal && <InvoiceCreateModal cab={cab} onClose={() => setShowModal(false)} onCreated={reload} />}
+      {showManual && <InvoiceManualModal cab={cab} rows={rows} onClose={() => setShowManual(false)} onCreated={() => { reload(); setView("docs"); }} />}
       {editInv && <InvoiceCreateModal cab={cab} inv={editInv} onClose={() => setEditInv(null)} onCreated={reload} />}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
     </div>
@@ -11870,6 +11999,9 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-corr h4{color:var(--on-dark);margin:0 0 8px;font-size:14px;}
 .btn-primary.st-armed{background:var(--negative);color:#fff;}
 
+.inv-issuer{display:flex;gap:8px;}
+.inv-issuer button{flex:1;padding:10px 12px;border-radius:10px;border:1px solid var(--line-strong);background:var(--input-bg);color:var(--ink-soft);font-size:13px;font-family:inherit;cursor:pointer;}
+.inv-issuer button.on{border-color:var(--gold);background:rgba(190,138,46,.14);color:var(--gold);font-weight:600;}
 /* --- Контроль видаткових накладних --- */
 .dc-list{display:flex;flex-direction:column;gap:10px;}
 .dc-row{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-radius:var(--radius-md);background:var(--surface);border:1px solid var(--line);}

@@ -42,6 +42,34 @@ export async function createInvoice({ counterparty, issuer, vat, items, amount, 
   return data;
 }
 
+/* Рахунок, доданий вручну бухгалтером на будь-який магазин (документи за старі періоди).
+   Одразу «Пропечатано» — потрапляє в «Контроль документів»; дні очікування рахуються від дати рахунку. */
+export async function createManualInvoice({ salonKey, counterparty, issuer, vat, amount, invoice_no, invoice_date, comment, by }) {
+  const at = new Date(`${invoice_date}T12:00:00`).toISOString();
+  const row = {
+    created_by: salonKey,
+    counterparty: (counterparty || "").trim(),
+    issuer: (issuer || "").trim(),
+    vat: !!vat,
+    items: [],
+    amount: Number(amount) || 0,
+    invoice_no: (invoice_no || "").trim(),
+    screenshot: "",
+    comment: (comment || "").trim(),
+    status: "documented",
+    manual: true,
+    invoice_date,
+    created_at: at,
+    history: [
+      { status: "issued", at, by, note: "додано вручну" },
+      { status: "documented", at, by, note: "додано вручну" },
+    ],
+  };
+  const { data, error } = await supabase.from("invoices").insert(row).select().single();
+  if (error) throw error;
+  return data;
+}
+
 /* Будвік → з ПДВ, ФОП → без ПДВ; інакше — що прочитав AI */
 export function deriveVat(issuer, aiVat) {
   const s = (issuer || "").toLowerCase();
