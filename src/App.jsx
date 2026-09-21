@@ -2918,7 +2918,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                   <StRow key={kind} g={i === 0 ? "KPI" : null} gs={2} label={title} inp={<span className="st-hint">сума й галочка →</span>}
                     cells={each((e) => {
                       const k = kpi(e, kind);
-                      return <span className="st-ck"><StIn v={k.sum} set={(v) => setKpi(e, kind, { sum: v })} label={`${title} — ${e.full_name}, сума`} cls={`st-in-m ${k.ok ? "" : "off"}`} /><StChk on={k.ok} set={(v) => setKpi(e, kind, { ok: v })} label={`${title} — ${e.full_name}, зарахувати`} /></span>;
+                      return <span className="st-ck"><StChk on={k.ok} set={(v) => setKpi(e, kind, { ok: v })} label={`${title} — ${e.full_name}, зарахувати`} /><StIn v={k.sum} set={(v) => setKpi(e, kind, { sum: v })} label={`${title} — ${e.full_name}, сума`} cls={`st-in-m ${k.ok ? "" : "off"}`} /></span>;
                     })} />
                 ))}
                 <StRow g="Сайт і БН" gs={2} label="Продажі із сайту (НП)" inp={<StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" />} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
@@ -2929,7 +2929,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                 <StRow g="Премії" gs={2} cls={isQuarterEnd ? "" : "st-dim"} label="Квартальна премія"
                   inp={<span className="st-hint">{isQuarterEnd ? "сума 3 ЗП і «3/3 плани» →" : `лише в кінці кварталу (${monthLabel(qMonths[2])})`}</span>}
                   cells={each((e) => (isQuarterEnd
-                    ? <span className="st-ck"><StIn v={d(e).quarterly.last3SalarySum} set={setEmp(e.id, ["quarterly", "last3SalarySum"])} label={`Сума 3 останніх ЗП — ${e.full_name}`} cls="st-in-m" /><StChk on={d(e).quarterly.threeOfThree} set={setEmp(e.id, ["quarterly", "threeOfThree"])} label={`3/3 плани — ${e.full_name}`} /></span>
+                    ? <span className="st-ck"><StChk on={d(e).quarterly.threeOfThree} set={setEmp(e.id, ["quarterly", "threeOfThree"])} label={`3/3 плани — ${e.full_name}`} /><StIn v={d(e).quarterly.last3SalarySum} set={setEmp(e.id, ["quarterly", "last3SalarySum"])} label={`Сума 3 останніх ЗП — ${e.full_name}`} cls="st-in-m" /></span>
                     : stMoney(0)))} />
                 <StRow label="Рекордний показник"
                   inp={<span className="st-two"><StIn v={d0.record.monthlyTo} set={setShared(["record", "monthlyTo"])} label="Оборот ТО за місяць (команда)" /><StIn v={d0.record.prevRecord} set={setShared(["record", "prevRecord"])} label="Попередній рекорд ТО" /></span>}
@@ -2957,7 +2957,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     const auto = subAuto[e.id] || 0;
                     const days = d(e).bonus.replacementDays || 0;
                     return (
-                      <span className="st-ck">
+                      <span className="st-ck st-ck-flex">
                         {days !== auto && (
                           <button type="button" className="st-reset" title={`Повернути за графіком: ${auto}`} aria-label={`Повернути за графіком: ${auto}`} onClick={() => setReplacement(e, auto)}><RefreshCw size={12} /></button>
                         )}
@@ -2965,7 +2965,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                       </span>
                     );
                   })} />
-                <StRow label="Атестація (курси)" inp={<span className="st-hint">галочка по кожному →</span>}
+                <StRow label="Курси ≥ 95%" inp={<span className="st-hint">галочка по кожному →</span>}
                   cells={each((e) => <span className="st-ck"><StChk on={d(e).bonus.coursesOk} set={setEmp(e.id, ["bonus", "coursesOk"])} label={`Курси — ${e.full_name}`} /> {stMoney(c(e).bonus.courses)}</span>)} />
                 <StRow label="ЕЗ" inp={<span className="st-hint">з модуля «ЕЗ»</span>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
                 <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>}
@@ -12167,7 +12167,9 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-in-w{max-width:170px;display:block;margin-left:auto;}
 .st-in-m{width:96px;}.st-in-s{width:110px;}.st-in-xs{width:56px;}.st-in.off{opacity:.5;}
 .st-plan .st-in-w{width:112px;}
-.st-ck{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end;}
+.st-ck{display:grid;grid-template-columns:36px 1fr;align-items:center;column-gap:8px;width:100%;}
+.st-ck>:last-child{justify-self:end;text-align:right;}
+.st-ck.st-ck-flex{display:inline-flex;justify-content:flex-end;width:auto;}
 .st-cb{position:relative;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;cursor:pointer;flex-shrink:0;user-select:none;}
 .st-cb.txt{width:auto;padding:0 10px 0 4px;gap:8px;}
 .st-cb input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;}
