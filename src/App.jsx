@@ -2623,7 +2623,13 @@ const ST_ROLE_COEF = { manager: "1.2", acting_manager: "1.1", seller: "1.0", int
 const stNum = (n) => Math.round(n || 0).toLocaleString("uk-UA");
 const stMoney = (v) => (v ? <span className={v < 0 ? "st-neg" : ""}>{stNum(v)}</span> : <span className="st-mute">—</span>);
 const StIn = ({ v, set, label, cls }) => <NumInput className={`st-in ${cls || ""}`} value={v} onChange={set} aria-label={label} />;
-const StChk = ({ on, set, label }) => <input type="checkbox" className="st-chk" checked={!!on} onChange={(ev) => set(ev.target.checked)} aria-label={label} />;
+const StChk = ({ on, set, label, text }) => (
+  <label className={`st-cb ${on ? "on" : ""} ${text ? "txt" : ""}`}>
+    <input type="checkbox" checked={!!on} onChange={(ev) => set(ev.target.checked)} aria-label={label} />
+    <span className="st-cb-box"><Check size={13} strokeWidth={3} /></span>
+    {text && <span className="st-cb-t">{text}</span>}
+  </label>
+);
 const StSeg = ({ items }) => (
   <span className="st-seg">{items.map(([t, on, click]) => (
     click
@@ -2663,6 +2669,7 @@ function SmStoreSalary({ salon }) {
   const [armed, setArmed] = useState(false);
   const [preview, setPreview] = useState(null);
   const [shotsOpen, setShotsOpen] = useState(false);
+  const [ez, setEz] = useState({ total: 0, confirmed: 0 }); // оборот ЕЗ за місяць з модуля «ЕЗ»
   const [fit, setFit] = useState({ s: 1, w: 0, h: 0, phone: false }); // масштаб і логічна ширина під екран
   const fitRef = useRef(null);
   const innerRef = useRef(null);
@@ -2691,6 +2698,7 @@ function SmStoreSalary({ salon }) {
         const d = _.cloneDeep(docs[i]);
         saved.current[e.id] = JSON.stringify(docs[i]);
         if (d.status === "draft") d.manager.coef = ST_ROLE_COEF[e.role] || "1.0"; // коеф. керуючого за замовчуванням = роль
+        d.manager.attestPay = e.role === "manager" || e.role === "acting_manager" ? 1000 : 500; // атестація: 1 000 керуючому, 500 іншим
         next[e.id] = d;
       });
       // спільні цифри магазину: беремо перше заповнене значення, щоб усі документи збігалися
@@ -2708,6 +2716,19 @@ function SmStoreSalary({ salon }) {
   }, [employees, emps, salon.key, ym]);
 
   useEffect(() => { draftsRef.current = drafts; }, [drafts]);
+
+  // оборот ЕЗ, який СМ вносить у модулі «ЕЗ» (усі внесені продажі; окремо — підтверджені ТМ)
+  useEffect(() => {
+    let alive = true;
+    const load = () => listEzSales({ salonKey: salon.key, ym }).then((l) => {
+      if (!alive) return;
+      const sum = (arr) => arr.reduce((a, x) => a + (Number(x.amount) || 0), 0);
+      setEz({ total: sum(l), confirmed: sum(l.filter((x) => x.status === "confirmed")) });
+    }).catch(() => {});
+    load();
+    const off = subscribeEzSales(load);
+    return () => { alive = false; off(); };
+  }, [salon.key, ym]);
 
   // розрахунок на сервері (debounce на введення)
   useEffect(() => {
@@ -2881,6 +2902,7 @@ function SmStoreSalary({ salon }) {
   const catOpts = smCategoryOptions();
   const onCat = (key) => setShared(["base", "categoryOverride"])(key === c0.autoCategory || key === d0.base.categoryOverride ? "" : key);
   const each = (fn) => emps.map(fn);
+  const pctNoEz = c0.monthPlan > 0 ? ((c0.factAdjusted - ez.total) / c0.monthPlan) * 100 : 0;
 
   return (
     <div className="st-fit" ref={fitRef}>
@@ -2922,15 +2944,21 @@ function SmStoreSalary({ salon }) {
               <div className="st-cap">План · факт · виконання</div>
               <div className="st-plan">
                 <span><em>План</em> <b>{stNum(c0.monthPlan)}</b></span>
-                <label><em>Факт</em> <StIn v={d0.base.monthFact} set={setFact} label="Факт ТО за місяць" cls="st-in-w" /></label>
+                <label><em>Факт з ЕЗ</em> <StIn v={d0.base.monthFact} set={setFact} label="Факт з ЕЗ за місяць" cls="st-in-w" /></label>
                 <span className={`st-pct ${c0.planPercent >= 100 ? "ok" : ""}`}>{c0.planPercent.toFixed(0)}%</span>
               </div>
               <div className="st-adjs">
+                <span title="Підтягується з модуля «ЕЗ»: усі продажі, які вніс СМ"><em>ЕЗ</em> <b className="st-ezv">{stNum(ez.total)}</b>{ez.total !== ez.confirmed && <span className="st-hint"> · підтверджено ТМ {stNum(ez.confirmed)}</span>}</span>
                 <label><em>Чеки Віктора</em> <StIn v={d0.base.viktorChecks} set={setShared(["base", "viktorChecks"])} label="Чеки Віктора" cls="st-in-s" /></label>
                 <label><em>Низькорентабельні</em> <StIn v={d0.base.lowMarginChecks} set={setShared(["base", "lowMarginChecks"])} label="Низькорентабельні чеки" cls="st-in-s" /></label>
                 <span className="st-hint">скориг. факт {stNum(c0.factAdjusted)}</span>
               </div>
               <StSeg items={[0, 1, 2, 3, 4].map((i) => [planBracketLabel(i), c0.bracket === i])} />
+            </div>
+            <div className="st-cell">
+              <div className="st-cap">Виконання без ЕЗ</div>
+              <div className={`st-pct st-pct-big ${pctNoEz >= 100 ? "ok" : ""}`}>{pctNoEz.toFixed(0)}%</div>
+              <div className="st-hint">{stNum(c0.factAdjusted - ez.total)} з {stNum(c0.monthPlan)}</div>
             </div>
             <div className="st-cell">
               <div className="st-cap">Категорія · {d0.base.categoryOverride ? "вручну" : "авто"}</div>
@@ -2978,7 +3006,7 @@ function SmStoreSalary({ salon }) {
                   inp={<StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" />}
                   rule={<><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /> ≥ {stNum(c0.bonus.callsPlanRevenue)} → 5% · ÷ {team}</>}
                   cells={each((e) => stMoney(c(e).bonus.calls))} />
-                <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>} rule="1 000 за атестацію"
+                <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>} rule="1 000 керуючому · 500 іншим співробітникам"
                   cells={each((e) => <span className="st-ck"><StChk on={d(e).manager.attestationAll} set={setEmp(e.id, ["manager", "attestationAll"])} label={`Атестація — ${e.full_name}`} /> {stMoney(c(e).mgr.attest)}</span>)} />
                 {[["avgCheck", "Середній чек"], ["checkLen", "Довжина чека"]].map(([kind, title], i) => (
                   <StRow key={kind} g={i === 0 ? "KPI" : null} gs={2} label={title} inp={<span className="st-hint">сума й галочка →</span>} rule="зараховується сума з поля, якщо стоїть галочка"
@@ -3005,7 +3033,7 @@ function SmStoreSalary({ salon }) {
                 <StRow g="Керуючий" gs={2} label="Стандарти"
                   inp={mgrEmp ? (
                     <span className="st-two">
-                      <label className="st-lbl"><StChk on={d(mgrEmp).manager.noRemarks} set={setEmp(mgrEmp.id, ["manager", "noRemarks"])} label="Без зауважень" /> без зауважень</label>
+                      <StChk on={d(mgrEmp).manager.noRemarks} set={setEmp(mgrEmp.id, ["manager", "noRemarks"])} label="Без зауважень" text="без зауважень" />
                       {!d(mgrEmp).manager.noRemarks && <>
                         <StIn v={d(mgrEmp).manager.remarksFound} set={setEmp(mgrEmp.id, ["manager", "remarksFound"])} label="Виявлені зауваження (−200)" cls="st-in-xs" />
                         <StIn v={d(mgrEmp).manager.remarksUnfixed} set={setEmp(mgrEmp.id, ["manager", "remarksUnfixed"])} label="Невиправлені зауваження (−400)" cls="st-in-xs" />
@@ -3035,7 +3063,7 @@ function SmStoreSalary({ salon }) {
                   <StRow key={k} g={i === 0 ? "Мінус" : null} gs={5} label={title} inp={<span className="st-hint">вноситься по кожному →</span>} rule=""
                     cells={each((e) => <StIn v={d(e).adj[k]} set={setEmp(e.id, ["adj", k])} label={`${title} — ${e.full_name}`} cls="st-in-w" />)} />
                 ))}
-                <StTotalRow cls="st-sub" label="Загальна ЗП" hint="= всього нараховано" cells={each((e) => stNum(c(e).grossTotal))} />
+                <StTotalRow cls="st-pay st-gross" label="Загальна ЗП" hint="= всього нараховано" cells={each((e) => <div className="st-payv">{stNum(c(e).grossTotal)}</div>)} />
                 <StTotalRow cls="st-pay" label="До виплати"
                   cells={each((e) => (
                     <>
@@ -11805,7 +11833,18 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-in-m{width:78px;}.st-in-s{width:96px;}.st-in-xs{width:44px;}.st-in.off{opacity:.5;}
 .st-plan .st-in-w{width:120px;}
 .st-ck{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end;}
-.st-chk{width:14px;height:14px;margin:0;accent-color:var(--gold);}
+.st-cb{position:relative;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;cursor:pointer;flex-shrink:0;user-select:none;}
+.st-cb.txt{width:auto;padding:0 10px 0 4px;gap:8px;}
+.st-cb input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;}
+.st-cb-box{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line-strong);background:var(--input-bg);display:flex;align-items:center;justify-content:center;color:transparent;transition:background .14s var(--ease),border-color .14s var(--ease),box-shadow .14s var(--ease),transform .14s var(--ease);pointer-events:none;flex-shrink:0;}
+.st-cb:hover .st-cb-box{border-color:var(--gold);box-shadow:0 0 0 3px rgba(190,138,46,.18);}
+.st-cb:active .st-cb-box{transform:scale(.92);}
+.st-cb.on .st-cb-box{background:linear-gradient(180deg,var(--gold-bright),var(--gold));border-color:var(--gold);color:var(--gold-ink);}
+.st-cb input:focus-visible + .st-cb-box{outline:2px solid var(--gold);outline-offset:2px;}
+.st-cb-t{font-size:12px;color:var(--ink);white-space:nowrap;pointer-events:none;}
+.st-ezv{font-family:'IBM Plex Mono',monospace;font-size:14px;}
+.st-pct-big{font-size:30px;line-height:1;}
+.st tr.st-gross td{background:var(--surface-alt);border-top:1px solid var(--line-strong);}
 .st-lbl{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink);white-space:nowrap;}
 .st-two{display:flex;gap:6px;align-items:center;}
 .st-two .st-in{flex:1 1 0;min-width:0;}

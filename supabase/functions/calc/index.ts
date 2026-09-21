@@ -211,7 +211,8 @@ const MANAGER_COEF_META = [
   { key: "1.0", label: "— (без коефіцієнта)" },
 ];
 function calcManagerBlock(m: any, baseRate: number) {
-  const attest = m.attestationAll ? 1000 : 0;
+  // атестація ≥ 98%: 1 000 керуючому, 500 іншим співробітникам (сума в attestPay ставиться за роллю; немає → 1 000, як у старих місяцях)
+  const attest = m.attestationAll ? (Number(m.attestPay) === 500 ? 500 : 1000) : 0;
   let standards;
   if (m.noRemarks) standards = 2000;
   else {
