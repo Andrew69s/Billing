@@ -2474,7 +2474,8 @@ function SmStoreSalary({ salon, review, ymProp }) {
   const [armed, setArmed] = useState(false);
   const [preview, setPreview] = useState(null);
   const [shotsOpen, setShotsOpen] = useState(false);
-  const [ez, setEz] = useState({ total: 0, confirmed: 0 }); // оборот ЕЗ за місяць з модуля «ЕЗ»
+  const [ez, setEz] = useState({ total: 0, confirmed: 0, list: [] }); // оборот ЕЗ за місяць з модуля «ЕЗ»
+  const [ezOpen, setEzOpen] = useState(false); // перегляд самих продажів ЕЗ за місяць
   const [subAuto, setSubAuto] = useState({}); // empId → днів заміни на іншому магазині за графіком
   const [workAuto, setWorkAuto] = useState({}); // empId → відпрацьованих днів за графіком
   const [infoGroup, setInfoGroup] = useState(null); // блок, для якого відкрито умови мотивації
@@ -2546,7 +2547,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
     const load = () => listEzSales({ salonKey: salon.key, ym }).then((l) => {
       if (!alive) return;
       const sum = (arr) => arr.reduce((a, x) => a + (Number(x.amount) || 0), 0);
-      setEz({ total: sum(l), confirmed: sum(l.filter((x) => x.status === "confirmed")) });
+      setEz({ total: sum(l), confirmed: sum(l.filter((x) => x.status === "confirmed")), list: l });
     }).catch(() => {});
     load();
     const off = subscribeEzSales(load);
@@ -2841,7 +2842,10 @@ function SmStoreSalary({ salon, review, ymProp }) {
                 <span className={`st-pct ${c0.planPercent >= 100 ? "ok" : ""}`}>{c0.planPercent.toFixed(0)}%</span>
               </div>
               <div className="st-adjs">
-                <span title="Підтягується з модуля «ЕЗ»: усі продажі, які вніс СМ"><em>ЕЗ</em> <b className="st-ezv">{stNum(ez.total)}</b>{ez.total !== ez.confirmed && <span className="st-hint"> · підтверджено ТМ {stNum(ez.confirmed)}</span>}</span>
+                <button type="button" className="st-ez-btn" title="Перейти до продажів ЕЗ за місяць" onClick={() => setEzOpen(true)}>
+                  <em>ЕЗ</em> <b className="st-ezv">{stNum(ez.total)}</b>{ez.total !== ez.confirmed && <span className="st-hint"> · підтверджено ТМ {stNum(ez.confirmed)}</span>}
+                  <ChevronRight size={13} />
+                </button>
                 <label><em>Чеки Віктора</em> <StIn v={d0.base.viktorChecks} set={setShared(["base", "viktorChecks"])} label="Чеки Віктора" cls="st-in-s" /></label>
                 <label><em>Низькорентабельні</em> <StIn v={d0.base.lowMarginChecks} set={setShared(["base", "lowMarginChecks"])} label="Низькорентабельні чеки" cls="st-in-s" /></label>
                 <span className="st-hint">скориг. факт {stNum(c0.factAdjusted)}</span>
@@ -2967,7 +2971,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                   })} />
                 <StRow label="Курси ≥ 95%" inp={<span className="st-hint">галочка по кожному →</span>}
                   cells={each((e) => <span className="st-ck"><StChk on={d(e).bonus.coursesOk} set={setEmp(e.id, ["bonus", "coursesOk"])} label={`Курси — ${e.full_name}`} /> {stMoney(c(e).bonus.courses)}</span>)} />
-                <StRow label="ЕЗ" inp={<span className="st-hint">з модуля «ЕЗ»</span>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
+                <StRow label="ЕЗ" inp={<button type="button" className="wh-link" onClick={() => setEzOpen(true)}>{ez.list.length} прод. за місяць · переглянути →</button>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
                 <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>}
                   cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
                 {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>}
@@ -3058,6 +3062,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
         </>
       )}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
+      {ezOpen && <EzSalonSalesModal salon={salon} ym={ym} sales={ez.list} onClose={() => setEzOpen(false)} />}
       {infoGroup && (() => {
         const conds = (ST_COND[infoGroup] || []).map((n) => smCond(n)).filter(Boolean);
         const blocks = conds.length === 1 ? conds[0].blocks : conds.flatMap((cd) => [{ h: cd.title }, ...cd.blocks]);
@@ -9162,6 +9167,7 @@ function EzProcessRow({ sale, cabKey, onDone }) {
     } catch (e) { pushToast({ title: "Не вдалося видалити", body: String(e.message || e) }); setBusy(false); }
   };
 
+  const teamShare = Math.round(netPreview * 0.2);
   return (
     <div className="ez-process-row">
       <div className="ez-process-head">
@@ -9176,13 +9182,63 @@ function EzProcessRow({ sale, cabKey, onDone }) {
         <Field label="ПДВ" suffix="грн" value={costVat} onChange={setCostVat} />
       </div>
       <div className="ez-process-foot">
-        <span>Прибуток: <b>{suah(netPreview)}</b></span>
+        <span>Прибуток: {suah(netPreview)} · на команду (20%): <b className="ez-team-num">{suah(teamShare)}</b></span>
         <span style={{ display: "flex", gap: 8 }}>
           <button className="btn-danger small" onClick={del} disabled={busy}>{confirmDel ? "Точно видалити?" : "Видалити"}</button>
           <button className="btn-primary small" onClick={process} disabled={busy}>{busy ? "…" : editingConfirmed ? "Зберегти" : "Опрацьовано"}</button>
         </span>
       </div>
     </div>
+  );
+}
+
+/* Перегляд продажів ЕЗ магазину за місяць — «провалитися» з розрахунку ЗП для аналізу */
+function EzSalonSalesModal({ salon, ym, sales, onClose }) {
+  const totalAmount = sales.reduce((a, s) => a + (Number(s.amount) || 0), 0);
+  const totalProfit = sales.filter((s) => s.status === "confirmed").reduce((a, s) => a + (Number(s.net_profit) || 0), 0);
+  const totalTeam = Math.round(totalProfit * 0.2);
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Продажі ЕЗ · {salonLabel(salon)} · {monthLabel(ym)}</h3>
+          <button className="modal-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <div className="ez-month-kpi">
+            <span className="st-cap">На команду за місяць</span>
+            <b>{suah(totalTeam)}</b>
+            <span className="hint" style={{ width: "auto" }}>оборот {suah(totalAmount)} · {sales.length} прод.</span>
+          </div>
+          {sales.length === 0 ? <div className="admin-empty">Продажів немає.</div> : (
+            <div className="ez-cards">
+              {sales.map((s) => {
+                const teamShare = s.status === "confirmed" ? Math.round((Number(s.net_profit) || 0) * 0.2) : null;
+                return (
+                  <div className="ez-card" key={s.id}>
+                    <div className="ez-card-ic"><BadgePercent size={17} /></div>
+                    <div className="ez-card-main">
+                      <div className="ez-card-title">{s.nomenclature || "Без номенклатури"}</div>
+                      <div className="ez-card-sub">
+                        {s.article && <span>{s.article}</span>}
+                        {s.order_no && <span>№ {s.order_no}</span>}
+                        <span>{EZ_PAYMENT_METHODS[s.payment_method]}</span>
+                        <span>{fmtDate(s.created_at)}</span>
+                      </div>
+                    </div>
+                    <div className="ez-card-nums">
+                      <div className="ez-card-amt">{suah(Number(s.amount))}</div>
+                      {teamShare != null ? <div className="ez-card-team">на команду <b>{suah(teamShare)}</b></div> : ezStatusBadge(s.status)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -9244,28 +9300,53 @@ function EzSalesModule({ cab }) {
       )}
 
       {isSm && (
-        <div className="task-list">
+        <div className="ez-cards">
           {sales.length === 0 && <div className="admin-empty">Продажів немає.</div>}
-          {sales.map((s) => (
-            <div className="ez-sale-row" key={s.id}>
-              <div>
-                <b>{s.nomenclature || "Без номенклатури"}</b>
-                <span className="muted"> · {EZ_PAYMENT_METHODS[s.payment_method]}{s.article ? ` · ${s.article}` : ""}</span>
+          {(() => {
+            const monthConfirmed = sales.filter((s) => s.status === "confirmed").reduce((a, s) => a + (Number(s.net_profit) || 0), 0);
+            const monthTeam = Math.round(monthConfirmed * 0.2);
+            return sales.length > 0 && (
+              <div className="ez-month-kpi">
+                <span className="st-cap">На команду за {monthLabel(ym).toLowerCase()}</span>
+                <b>{suah(monthTeam)}</b>
+                <span className="hint" style={{ width: "auto" }}>з підтверджених продажів · тягнеться в ЗП автоматично</span>
               </div>
-              <span>{suah(Number(s.amount))}</span>
-              {ezStatusBadge(s.status)}
-              <button className="wh-link" onClick={() => setEditSale(s)}>редагувати</button>
-              <button className="zsu-undo" title="Видалити" onClick={async () => {
-                try {
-                  await deleteEzSale(s.id);
-                  if (s.status === "confirmed") await recomputeTurnoverEz(s.salon_key, s.ym).catch(() => {});
-                  pushToast({ title: "Видалено" }); reload();
-                } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
-              }}>
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))}
+            );
+          })()}
+          {sales.map((s) => {
+            const teamShare = s.status === "confirmed" ? Math.round((Number(s.net_profit) || 0) * 0.2) : null;
+            return (
+              <div className="ez-card" key={s.id}>
+                <div className="ez-card-ic"><BadgePercent size={17} /></div>
+                <div className="ez-card-main">
+                  <div className="ez-card-title">{s.nomenclature || "Без номенклатури"}</div>
+                  <div className="ez-card-sub">
+                    {s.article && <span>{s.article}</span>}
+                    {s.order_no && <span>№ {s.order_no}</span>}
+                    <span>{EZ_PAYMENT_METHODS[s.payment_method]}</span>
+                  </div>
+                </div>
+                <div className="ez-card-nums">
+                  <div className="ez-card-amt">{suah(Number(s.amount))}</div>
+                  {teamShare != null
+                    ? <div className="ez-card-team">на команду <b>{suah(teamShare)}</b></div>
+                    : ezStatusBadge(s.status)}
+                </div>
+                <div className="ez-card-act">
+                  <button className="wh-link" onClick={() => setEditSale(s)}>редагувати</button>
+                  <button className="zsu-undo" title="Видалити" onClick={async () => {
+                    try {
+                      await deleteEzSale(s.id);
+                      if (s.status === "confirmed") await recomputeTurnoverEz(s.salon_key, s.ym).catch(() => {});
+                      pushToast({ title: "Видалено" }); reload();
+                    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+                  }}>
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -12186,6 +12267,9 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-cb-t{font-size:13.5px;color:var(--ink);white-space:nowrap;pointer-events:none;}
 .st-reset{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid var(--line-strong);border-radius:6px;background:var(--input-bg);color:var(--st-gold);cursor:pointer;padding:0;}
 .st-reset:hover{border-color:var(--st-gold);}
+.st-ez-btn{display:inline-flex;align-items:center;gap:6px;background:none;border:none;padding:0;font:inherit;color:inherit;cursor:pointer;}
+.st-ez-btn:hover .st-ezv{text-decoration:underline;}
+.st-ez-btn svg{color:var(--muted);}
 .st-ezv{font-family:'IBM Plex Mono',monospace;font-size:17px;}
 .st-ez-sum{color:var(--ink);}
 .st-pct-sm{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:var(--st-neg);}
@@ -12298,6 +12382,25 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .sr-state.none{color:var(--negative);}
 :root[data-theme="dark"] .sr-state.none{color:var(--negative-bright);}
 .sr-appr{font-size:12.5px;color:var(--muted);}
+
+/* --- Продажі ЕЗ: картки (СМ) --- */
+.ez-cards{display:flex;flex-direction:column;gap:10px;}
+.ez-month-kpi{display:flex;align-items:baseline;gap:10px;padding:12px 16px;border-radius:var(--radius-md);background:rgba(190,138,46,.1);border:1px solid rgba(190,138,46,.3);margin-bottom:2px;}
+.ez-month-kpi b{font-family:'IBM Plex Mono',monospace;font-size:19px;color:var(--gold);}
+:root[data-theme="dark"] .ez-month-kpi b{color:var(--gold-bright);}
+.ez-card{display:flex;align-items:center;gap:14px;padding:12px 16px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
+.ez-card-ic{flex-shrink:0;width:38px;height:38px;border-radius:10px;background:rgba(190,138,46,.12);color:var(--gold);display:flex;align-items:center;justify-content:center;}
+.ez-card-main{flex:1;min-width:0;}
+.ez-card-title{font-weight:600;font-size:13.5px;color:var(--ink);}
+.ez-card-sub{display:flex;gap:8px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:2px;}
+.ez-card-nums{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;text-align:right;}
+.ez-card-amt{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;color:var(--ink);}
+.ez-card-team{font-size:11.5px;color:var(--muted);}
+.ez-card-team b{font-family:'IBM Plex Mono',monospace;color:var(--positive);}
+:root[data-theme="dark"] .ez-card-team b{color:var(--positive-bright);}
+.ez-card-act{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.ez-team-num{color:var(--positive);}
+:root[data-theme="dark"] .ez-team-num{color:var(--positive-bright);}
 
 /* --- Контроль видаткових накладних --- */
 .dc-list{display:flex;flex-direction:column;gap:10px;}
