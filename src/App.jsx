@@ -9028,8 +9028,10 @@ function SupplyStocktake({ warehouse, items, cabKey, locked, doneInfo, onReload 
 }
 
 /* ==================== ПРОДАЖІ ЕЗ (генератори/електроінструмент) ==================== */
-function EzSaleForm({ salonKey, ym, cabKey, sale, onClose, onCreated }) {
+function EzSaleForm({ salonKey, ym: ymProp, cabKey, sale, onClose, onCreated }) {
   const editing = !!sale;
+  const months = useMemo(() => recentMonths(12), []);
+  const [ym, setYm] = useState(sale?.ym || ymProp || nowYm()); // місяць продажу — можна вибрати й заднім числом (до 10 числа наступного за минулим)
   const [nomenclature, setNomenclature] = useState(sale?.nomenclature || "");
   const [article, setArticle] = useState(sale?.article || "");
   const [orderNo, setOrderNo] = useState(sale?.order_no || "");
@@ -9073,7 +9075,17 @@ function EzSaleForm({ salonKey, ym, cabKey, sale, onClose, onCreated }) {
           <h3>{editing ? "Редагувати продаж ЕЗ" : "Новий продаж ЕЗ"}</h3>
           <button className="modal-x" onClick={onClose}><X size={18} /></button>
         </div>
+        {!editing && ym !== nowYm() && (
+          <p className="hint" style={{ padding: "0 20px", color: "var(--gold-bright)" }}>Продаж буде враховано в ЗП за {monthLabel(ym).toLowerCase()}, а не за поточний місяць.</p>
+        )}
         <div className="modal-body">
+          {!editing && (
+            <label className="over-field" style={{ maxWidth: "100%" }}><span>Місяць продажу</span>
+              <select value={ym} onChange={(e) => setYm(e.target.value)}>
+                {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+              </select>
+            </label>
+          )}
           <label className="over-field" style={{ maxWidth: "100%" }}><span>Номенклатура</span>
             <input value={nomenclature} onChange={(e) => setNomenclature(e.target.value)} />
           </label>
