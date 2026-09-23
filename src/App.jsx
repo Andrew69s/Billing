@@ -7593,7 +7593,7 @@ function TurnoverRings({ scopeSalons, single: singleProp, onDayDrill }) {
             <div className="rg-hero-val">{fmt(totV)}</div>
             <div className="rg-hero-lab">оборот {single ? "магазину" : "мережі"} · {heroLab}</div>
           </div>
-          <div className={`rg-hero-pct ${turnoverBand(totBand)}`}>{Math.round(totPct)}%</div>
+          <div className={`rg-hero-pct ${turnoverBand(totBand)}`}>{totPct.toFixed(1)}%</div>
         </div>
         <div className="rg-terr-bar rg-hero-bar">
           <div className={`rg-terr-fill ${turnoverBand(totBand)}`} style={{ width: `${Math.min(100, Math.max(0, totPct))}%` }} />
