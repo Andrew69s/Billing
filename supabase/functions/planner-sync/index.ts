@@ -59,8 +59,11 @@ function maxCP(v: any, m: string): number {
   return mx;
 }
 function dayFact(v: any) {
-  // оборот = ТО осн.асортименту + LiqPay − повернення (як dayFactValue у планері)
-  const assort = maxCP(v, "assort") + maxCP(v, "liqpay") - (Number(v.retOS) || 0);
+  // оборот = «Продажі осн.асортименту» з планера = ТО Осн + БН + LiqPay + Оплата частинами + ІМ − Повернення.
+  // bn/liqpay/installment/im — разові денні поля (без чекпойнтів _12../_20), тому беремо як є, а не через maxCP.
+  const assort = maxCP(v, "assort")
+    + (Number(v.bn) || 0) + (Number(v.liqpay) || 0) + (Number(v.installment) || 0) + (Number(v.im) || 0)
+    - (Number(v.retOS) || 0);
   const ez = maxCP(v, "ez") - (Number(v.retEZ) || 0);
   const cheky = (v.cheky_20 != null || v.cheky_12 != null) ? maxCP(v, "cheky") : (Number(v.cheky) || 0);
   const dzvinky = (v.dzvinky_20 != null || v.dzvinky_12 != null) ? maxCP(v, "dzvinky") : (Number(v.dzvinky) || 0);
