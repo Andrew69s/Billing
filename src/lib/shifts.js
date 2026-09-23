@@ -1,4 +1,4 @@
-import { supabase, rtChannel } from "./supabase.js";
+import { supabase, rtChannel, withAuthRetry } from "./supabase.js";
 
 export const ABSENCE_REASONS = {
   vacation: "Відпустка",
@@ -20,13 +20,15 @@ export const todayISO = () => {
 export async function listShifts(ym) {
   const from = `${ym}-01`;
   const to = dayKey(ym, daysInMonth(ym));
-  const { data, error } = await supabase
-    .from("shifts")
-    .select("*")
-    .gte("work_date", from)
-    .lte("work_date", to);
-  if (error) throw error;
-  return data || [];
+  return withAuthRetry(async () => {
+    const { data, error } = await supabase
+      .from("shifts")
+      .select("*")
+      .gte("work_date", from)
+      .lte("work_date", to);
+    if (error) throw error;
+    return data || [];
+  });
 }
 
 /* колонки shifts NOT NULL зі значенням за замовч. — підставляємо завжди самі.
@@ -71,11 +73,13 @@ export async function setStoreDay(row) {
   if (error) throw error;
 }
 export async function listStoreDays(ym) {
-  const { data, error } = await supabase
-    .from("store_days").select("*")
-    .gte("work_date", `${ym}-01`).lte("work_date", dayKey(ym, daysInMonth(ym)));
-  if (error) throw error;
-  return data || [];
+  return withAuthRetry(async () => {
+    const { data, error } = await supabase
+      .from("store_days").select("*")
+      .gte("work_date", `${ym}-01`).lte("work_date", dayKey(ym, daysInMonth(ym)));
+    if (error) throw error;
+    return data || [];
+  });
 }
 
 export function subscribeShifts(onChange) {

@@ -10864,6 +10864,29 @@ function CommandPalette({ cabKey, items }) {
   );
 }
 
+/* Якщо вкладка кабінету впаде через непередбачену помилку — показуємо це місце
+   з кнопкою «Спробувати ще раз» замість того, щоб порожнім лишався весь застосунок
+   (без цього одна погана вкладка вимагала повного оновлення сторінки). */
+class ModuleErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("Помилка у вкладці кабінету:", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="mod-crash">
+          <AlertTriangle size={22} />
+          <h4>Не вдалося показати цей розділ</h4>
+          <p className="hint">Сталася непередбачена помилка. Спробуйте ще раз — якщо повториться, зробіть скрін цього повідомлення й перешліть.</p>
+          <button className="btn-secondary small" onClick={() => this.setState({ error: null })}>Спробувати ще раз</button>
+          <p className="mod-crash-tech">{String(this.state.error?.message || this.state.error)}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
   const nativeModules = modules.filter(Boolean);
   const nativeKeys = nativeModules.map((m) => m.key);
@@ -11097,7 +11120,7 @@ function CabinetShell({ title, onExit, onLogout, modules, cabKey, banner }) {
           )}
           {editNav && <p className="cab-side-tip">Перетягніть пункт у будь-яке місце або в іншу групу. Натисніть пункт, щоб приховати чи повернути.</p>}
         </nav>
-        <div className="cab-content">{mod.render()}</div>
+        <div className="cab-content"><ModuleErrorBoundary key={active}>{mod.render()}</ModuleErrorBoundary></div>
       </div>
       {(() => {
         const bkeys = ["kpi", "bn", "inv", "tasks", "cash"].filter((k) => byKey[k]);
@@ -12923,6 +12946,9 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .cab-side-item.active .cab-side-badge{background:rgba(20,15,8,.28);color:var(--gold-ink);}
 .cab-side-sep{height:1px;background:var(--line-dark);margin:7px 6px;}
 .cab-content{min-width:0;}
+.mod-crash{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:28px 24px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--negative);max-width:520px;}
+.mod-crash h4{margin:0;color:var(--ink);font-size:15px;}
+.mod-crash-tech{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--faint);word-break:break-word;}
 .cab-content .embedded{animation:none;}
 
 /* групи навігації */

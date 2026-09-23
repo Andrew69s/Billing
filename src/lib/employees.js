@@ -9,12 +9,14 @@ export const EMP_ROLES = {
 export const EMP_ROLE_ORDER = ["manager", "acting_manager", "seller", "intern"];
 
 export async function listEmployees() {
-  const { data, error } = await supabase
-    .from("employees")
-    .select("*")
-    .order("full_name", { ascending: true });
-  if (error) throw error;
-  return data || [];
+  return withAuthRetry(async () => {
+    const { data, error } = await supabase
+      .from("employees")
+      .select("*")
+      .order("full_name", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  });
 }
 
 export async function createEmployee({ salon_key, full_name, phone, dob, hired_at, role, note, by }) {
