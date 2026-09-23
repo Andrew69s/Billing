@@ -2843,7 +2843,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
               </div>
               <div className="st-adjs">
                 <button type="button" className="st-ez-btn" title="Перейти до продажів ЕЗ за місяць" onClick={() => setEzOpen(true)}>
-                  <em>ЕЗ</em> <b className="st-ezv">{stNum(ez.total)}</b>{ez.total !== ez.confirmed && <span className="st-hint"> · підтверджено ТМ {stNum(ez.confirmed)}</span>}
+                  <em>ЕЗ</em> <b className="st-ezv">{stNum(ez.total)}</b>{ez.total !== ez.confirmed && <span className="st-hint"> · підтверджено ТМ {stNum(ez.confirmed)}</span>}{ez.total === 0 && <span className="st-hint"> · перевірте місяць у вкладці «ЕЗ»</span>}
                   <ChevronRight size={13} />
                 </button>
                 <label><em>Чеки Віктора</em> <StIn v={d0.base.viktorChecks} set={setShared(["base", "viktorChecks"])} label="Чеки Віктора" cls="st-in-s" /></label>
@@ -9242,6 +9242,90 @@ function EzSalonSalesModal({ salon, ym, sales, onClose }) {
   );
 }
 
+/* Аналітика ЕЗ (ТМ/керівник): продажі, прибуток і бонус на команду в розрізі магазину та місяця */
+function EzAnalytics({ salons, sales }) {
+  const months = useMemo(() => recentMonths(12), []);
+  const monthsAsc = useMemo(() => [...months].reverse(), [months]);
+  const [salonKey, setSalonKey] = useState(salons[0]?.key || "");
+  const [monthF, setMonthF] = useState("all"); // "all" | ym
+
+  const byKeyYm = useMemo(() => {
+    const m = {};
+    sales.forEach((s) => {
+      const k = `${s.salon_key}|${s.ym}`;
+      const row = (m[k] ||= { count: 0, amount: 0, profit: 0 });
+      row.count += 1;
+      row.amount += Number(s.amount) || 0;
+      if (s.status === "confirmed") row.profit += Number(s.net_profit) || 0;
+    });
+    return m;
+  }, [sales]);
+
+  const rowsAll = salons.map((sl) => {
+    const monthsToSum = monthF === "all" ? months : [monthF];
+    let count = 0, amount = 0, profit = 0;
+    monthsToSum.forEach((ym) => { const r = byKeyYm[`${sl.key}|${ym}`]; if (r) { count += r.count; amount += r.amount; profit += r.profit; } });
+    return { sl, count, amount, profit, team: Math.round(profit * 0.2) };
+  }).sort((a, b) => b.profit - a.profit);
+  const totals = rowsAll.reduce((a, r) => ({ count: a.count + r.count, amount: a.amount + r.amount, profit: a.profit + r.profit, team: a.team + r.team }), { count: 0, amount: 0, profit: 0, team: 0 });
+
+  const chartData = monthsAsc.map((ym) => {
+    const r = byKeyYm[`${salonKey}|${ym}`];
+    return { label: monthLabel(ym).replace(" 20", " '"), Прибуток: r ? r.profit : 0, "На команду": r ? Math.round(r.profit * 0.2) : 0 };
+  });
+
+  return (
+    <div>
+      <div className="tm-salon-chips" style={{ marginBottom: 14 }}>
+        {salons.map((s) => <button key={s.key} className={`chip ${s.key === salonKey ? "active" : ""}`} onClick={() => setSalonKey(s.key)}>{salonShortName(s)}</button>)}
+      </div>
+
+      {chartData.every((d) => d.Прибуток === 0) ? (
+        <div className="admin-empty">За {salonKey ? salonLabel(salonByKey(salonKey)) : "цей магазин"} підтверджених продажів ЕЗ поки немає.</div>
+      ) : (
+        <div className="chart-wrap">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+              <CartesianGrid strokeDasharray="2 5" stroke="#D9D2BE" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#8A8069" }} tickLine={false} axisLine={{ stroke: "#D9D2BE" }} />
+              <YAxis tick={{ fontSize: 11, fill: "#8A8069" }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} tickLine={false} axisLine={false} width={40} />
+              <Tooltip formatter={(v) => suah(v)} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar dataKey="Прибуток" fill="#8C846F" radius={[3, 3, 0, 0]} />
+              <Bar dataKey="На команду" fill="#DCA94A" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      <div className="tasks-head" style={{ margin: "18px 0 10px" }}>
+        <h4 className="ov-h" style={{ fontSize: 15 }}>По всіх магазинах</h4>
+        <select className="inv-toolbar-sel" value={monthF} onChange={(e) => setMonthF(e.target.value)}>
+          <option value="all">Усі періоди (12 міс.)</option>
+          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+      </div>
+      <div className="grid-scroll">
+        <table className="open-log">
+          <thead><tr><th>Магазин</th><th>Продажів</th><th>Оборот</th><th>Прибуток</th><th>На команду</th></tr></thead>
+          <tbody>
+            {rowsAll.map((r) => (
+              <tr key={r.sl.key} className={r.sl.key === salonKey ? "trn-row-active" : ""} onClick={() => setSalonKey(r.sl.key)} style={{ cursor: "pointer" }}>
+                <td>{salonLabel(r.sl)}</td>
+                <td className="open-log-t">{r.count}</td>
+                <td className="open-log-t">{suah(r.amount)}</td>
+                <td className="open-log-t">{suah(r.profit)}</td>
+                <td className="open-log-t"><b>{suah(r.team)}</b></td>
+              </tr>
+            ))}
+            <tr className="open-log-total"><td><b>Разом</b></td><td className="open-log-t"><b>{totals.count}</b></td><td className="open-log-t"><b>{suah(totals.amount)}</b></td><td className="open-log-t"><b>{suah(totals.profit)}</b></td><td className="open-log-t"><b>{suah(totals.team)}</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function EzSalesModule({ cab }) {
   const isSm = cab.type === "sm";
   const isManagerLike = cab.type === "manager" || cab.key === ADMIN_KEY;
@@ -9276,10 +9360,13 @@ function EzSalesModule({ cab }) {
         <div className="trn-tabs" style={{ marginBottom: 10 }}>
           <button className={tab === "pending" ? "on" : ""} onClick={() => setTab("pending")}>На опрацюванні{pending.length > 0 ? ` (${pending.length})` : ""}</button>
           <button className={tab === "history" ? "on" : ""} onClick={() => setTab("history")}>Історія</button>
+          <button className={tab === "analytics" ? "on" : ""} onClick={() => setTab("analytics")}><BarChart3 size={13} /> Аналітика</button>
         </div>
       )}
 
-      {(isSm || tab === "history") && (
+      {!isSm && tab === "analytics" && <EzAnalytics salons={scopeSalons} sales={sales} />}
+
+      {(isSm || tab === "history") && tab !== "analytics" && (
         <div className="month-row" style={{ marginBottom: 10 }}>
           <select value={ym} onChange={(e) => setYm(e.target.value)}>
             {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
@@ -12399,6 +12486,9 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-card-team b{font-family:'IBM Plex Mono',monospace;color:var(--positive);}
 :root[data-theme="dark"] .ez-card-team b{color:var(--positive-bright);}
 .ez-card-act{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.open-log-total td{border-top:2px solid var(--line-strong);}
+.trn-row-active td:first-child{color:var(--gold);font-weight:600;}
+:root[data-theme="dark"] .trn-row-active td:first-child{color:var(--gold-bright);}
 .ez-team-num{color:var(--positive);}
 :root[data-theme="dark"] .ez-team-num{color:var(--positive-bright);}
 
