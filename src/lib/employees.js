@@ -1,4 +1,4 @@
-import { supabase, rtChannel } from "./supabase.js";
+import { supabase, rtChannel, withAuthRetry } from "./supabase.js";
 
 export const EMP_ROLES = {
   manager: "Керуючий",
