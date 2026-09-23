@@ -211,12 +211,14 @@ const MANAGER_COEF_META = [
   { key: "1.1", label: "В.О. керуючого (1.1)" },
   { key: "1.0", label: "— (без коефіцієнта)" },
 ];
-function calcManagerBlock(m: any, baseRate: number, isManager: boolean) {
+function calcManagerBlock(m: any, baseRate: number) {
   // атестація ≥ 98%: 1 000 керуючому, 500 іншим співробітникам (сума в attestPay ставиться за роллю; немає → 1 000, як у старих місяцях)
   const attest = m.attestationAll ? (Number(m.attestPay) === 500 ? 500 : 1000) : 0;
-  // бонус «Стандарти» нараховується лише керуючому/в.о. керуючого магазину
+  // бонус «Стандарти» нараховується лише керуючому/в.о. керуючого магазину —
+  // визначаємо це за attestPay (1000 = керуючий/в.о., 500 = решта команди), а не за
+  // окремим прапорцем з клієнта, щоб не залежати від того, чи вже задеплоєно фронтенд
   let standards = 0;
-  if (isManager) {
+  if (Number(m.attestPay) !== 500) {
     if (m.noRemarks) standards = 2000;
     else {
       const penalty = 200 * (m.remarksFound || 0) + 400 * (m.remarksUnfixed || 0);
@@ -277,7 +279,7 @@ function calcRecord(r: any, teamSize = 1) {
   return { threshold, beaten, team, teamBonus, bonus: Math.round(teamBonus / team) };
 }
 function calcQuarterly(q: any) { if (!q.threeOfThree) return 0; return Math.round((q.last3SalarySum || 0) * 0.1); }
-function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: any, avg3FromHistory?: number | null, ezProfitSum = 0, isManager = false) {
+function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: any, avg3FromHistory?: number | null, ezProfitSum = 0) {
   const daysInMonth = daysInMonthOf(ym);
   // «Середній ТО за 3 міс» — авто з реальної історії обороту (без ЕЗ), якщо вже
   // накопичилось достатньо місяців; поки історії нема (старі місяці/новий магазин) —
@@ -307,7 +309,7 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
   const factor = shiftFactor({ daysInMonth, daysOff: data.base.daysOff, area });
   const baseAdjusted = Math.round(baseRaw * factor);
   const dailyRate = Math.round(baseRaw / Math.max(1, daysInMonth - normDaysOff(area)));
-  const mgr = calcManagerBlock(data.manager, baseAdjusted, isManager);
+  const mgr = calcManagerBlock(data.manager, baseAdjusted);
   // Пороги середнього чека/довжини чека — теж із плану ТМ, якщо він уже внесений
   // (fallback на самовведені СМ значення для місяців до впровадження плану).
   const effectiveBonusInput = planRow ? {
@@ -459,7 +461,7 @@ Deno.serve(async (req) => {
       const planRow = planByPair[`${it.salonKey}|${it.ym}`];
       const { avg: avg3, months: avg3Months } = avg3For(it.salonKey, it.ym);
       const ezSum = ezByPair[`${it.salonKey}|${it.ym}`] || 0;
-      return { ...calcSmAll(it.data, it.ym, area, teamBySalon[it.salonKey] || 1, planRow, avg3, ezSum, !!it.isManager), avg3Months };
+      return { ...calcSmAll(it.data, it.ym, area, teamBySalon[it.salonKey] || 1, planRow, avg3, ezSum), avg3Months };
     });
     return json(op === "sm" ? out[0] : out);
   }

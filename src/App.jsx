@@ -298,7 +298,7 @@ async function listSmMonths(salonKey, empId) {
 async function salonSalaryRows(salonKey, ym, employees) {
   const emps = (employees || []).filter((e) => e.salon_key === salonKey && e.status === "active");
   const datas = await Promise.all(emps.map((e) => loadSmData(salonKey, e.id, ym)));
-  const calcs = emps.length ? await calcSmBatch(emps.map((e, i) => ({ data: datas[i], salonKey, ym, isManager: e.role === "manager" || e.role === "acting_manager" }))) : [];
+  const calcs = emps.length ? await calcSmBatch(emps.map((e, i) => ({ data: datas[i], salonKey, ym }))) : [];
   return emps.map((e, i) => ({ emp: e, data: datas[i], calc: calcs[i], total: calcs[i]?.total || 0 }));
 }
 
@@ -2560,7 +2560,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
     let alive = true;
     const first = !Object.keys(calcs).length;
     const t = setTimeout(() => {
-      calcSmBatch(emps.map((e) => ({ data: drafts[e.id], salonKey: salon.key, ym, isManager: e.role === "manager" || e.role === "acting_manager" })))
+      calcSmBatch(emps.map((e) => ({ data: drafts[e.id], salonKey: salon.key, ym })))
         .then((cs) => { if (alive) { setCalcs(Object.fromEntries(emps.map((e, i) => [e.id, cs[i]]))); setCalcErr(""); } })
         .catch((err) => { if (alive) setCalcErr(String(err.message || err)); });
     }, first ? 0 : 350);
