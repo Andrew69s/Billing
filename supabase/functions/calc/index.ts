@@ -218,7 +218,7 @@ function calcManagerBlock(m: any, baseRate: number) {
   if (m.noRemarks) standards = 2000;
   else {
     const penalty = 200 * (m.remarksFound || 0) + 400 * (m.remarksUnfixed || 0);
-    standards = -Math.min(2000, penalty);
+    standards = Math.max(-2000, 2000 - penalty);
   }
   const coefNum = SM_MANAGER_COEFS[String(m.coef)] ?? Number(m.coef || 1) ?? 1;
   const coefBonus = Math.round(baseRate * (coefNum - 1));
