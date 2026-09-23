@@ -7011,16 +7011,16 @@ function TerritorySummaryStrip({ salonKeys, rows, daysPassed, dim, plans }) {
   return (
     <div className="tm-strip">
       {TM_METRICS.map((mt) => {
-        const planToDate = dim ? (plan[mt.key] / dim) * daysPassed : 0;
-        const pct = planToDate ? Math.round((sum[mt.key] / planToDate) * 100) : null;
-        const tone = pct == null ? "" : pct >= 100 ? "good" : pct >= 90 ? "warn" : "bad";
+        const factPct = plan[mt.key] ? Math.round((sum[mt.key] / plan[mt.key]) * 100) : null;
+        const restPct = factPct != null ? Math.max(0, 100 - factPct) : null;
+        const tone = factPct == null ? "" : factPct >= 100 ? "good" : factPct >= 90 ? "warn" : "bad";
         return (
           <div className="tm-strip-tile" key={mt.key}>
             <span className="tm-strip-lab">{mt.label}</span>
             <b>{tmMoney(sum[mt.key])}{mt.money ? " ₴" : ""}</b>
             <span className="tm-strip-sub">
               план міс. {tmMoney(plan[mt.key])}
-              {pct != null && <em className={`tm-pct ${tone}`}> · {pct}% до дати</em>}
+              {factPct != null && <em className={`tm-pct ${tone}`}> · факт {factPct}% · залишок {restPct}%</em>}
             </span>
           </div>
         );
