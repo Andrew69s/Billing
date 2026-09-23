@@ -303,7 +303,7 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
   const factor = shiftFactor({ daysInMonth, daysOff: data.base.daysOff, area });
   const baseAdjusted = Math.round(baseRaw * factor);
   const dailyRate = Math.round(baseRaw / Math.max(1, daysInMonth - normDaysOff(area)));
-  const mgr = calcManagerBlock(data.manager, baseRaw);
+  const mgr = calcManagerBlock(data.manager, baseAdjusted);
   // Пороги середнього чека/довжини чека — теж із плану ТМ, якщо він уже внесений
   // (fallback на самовведені СМ значення для місяців до впровадження плану).
   const effectiveBonusInput = planRow ? {
