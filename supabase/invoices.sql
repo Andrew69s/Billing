@@ -123,6 +123,20 @@ drop trigger if exists trg_notify_invoice_status on public.invoices;
 create trigger trg_notify_invoice_status after update on public.invoices
   for each row execute function public.notify_invoice_status();
 
+-- скрін з 1С більше не потрібен після відвантаження магазином — звільняємо місце в БД
+create or replace function public.clear_invoice_screenshot_on_ship()
+returns trigger language plpgsql as $$
+begin
+  if new.status = 'shipped' and old.status is distinct from 'shipped' then
+    new.screenshot := '';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_clear_invoice_screenshot on public.invoices;
+create trigger trg_clear_invoice_screenshot before update on public.invoices
+  for each row execute function public.clear_invoice_screenshot_on_ship();
+
 -- realtime
 do $$ begin
   if not exists (
