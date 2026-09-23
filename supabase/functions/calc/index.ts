@@ -201,8 +201,9 @@ const SM_BASE_TABLE: Record<string, number[]> = {
 const normDaysOff = (area: string) => (area === "місто" ? 10 : 9);
 function shiftFactor({ daysInMonth, daysOff, area }: any) {
   const normWorked = Math.max(1, daysInMonth - normDaysOff(area));
-  const worked = clamp((daysInMonth || 0) - (daysOff || 0), 0, daysInMonth || 0);
-  return clamp(worked / normWorked, 0, 1);
+  // більше змін за норму — ставка теж росте пропорційно, але не більш ніж за 30 відпрацьованих днів
+  const worked = clamp((daysInMonth || 0) - (daysOff || 0), 0, 30);
+  return worked / normWorked;
 }
 const SM_MANAGER_COEFS: Record<string, number> = { "1.2": 1.2, "1.1": 1.1, "1.0": 1.0 };
 const MANAGER_COEF_META = [
