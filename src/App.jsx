@@ -75,7 +75,7 @@ import {
   yesterdayISO as cashYesterday,
 } from "./lib/cash.js";
 import {
-  SUPPLY_CATEGORIES, SUPPLY_UNITS, CENTRAL, ACT_KIND, uah as suah, uahN as suahN,
+  SUPPLY_CATEGORIES, SUPPLY_UNITS, CENTRAL, CENTRAL_DRAW_SALONS, ACT_KIND, uah as suah, uahN as suahN,
   WRITEOFF_ARTICLES_BUILTIN, listWriteoffArticles, saveWriteoffArticles, articleLabel,
   listItems, upsertItem, deleteItem, setPrice, listStock, stockMap, stockState,
   listActs, actLines, writeoffLines, salonSupplyExpenseLines, actSalon, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
@@ -8467,7 +8467,10 @@ function SupplyItemForm({ item, onClose, onSaved }) {
 
 /* --- Мій склад (салон) --- */
 function SupplySalonStock({ salonKey, items, stock, onOrderAll }) {
-  const sm = stockMap(stock, salonKey);
+  // Липинського (та інші зі списку) своїх залишків не веде — списує госп.потреби прямо з Основного складу,
+  // тож тут показуємо саме залишок Основного складу замість завжди порожнього «свого».
+  const isCentralDraw = CENTRAL_DRAW_SALONS.includes(salonKey);
+  const sm = stockMap(stock, isCentralDraw ? CENTRAL : salonKey);
   const cs = stockMap(stock, CENTRAL); // залишок Основного складу — щоб бачити, чи є що замовляти
   const rows = items.map((i) => {
     const qty = sm[i.id] || 0;
@@ -8478,18 +8481,18 @@ function SupplySalonStock({ salonKey, items, stock, onOrderAll }) {
   return (
     <div className="wh-view">
       <div className="wh-kpis">
-        <div className="wh-kpi"><span>Вартість мого запасу</span><b>{suah(total)}</b></div>
+        <div className="wh-kpi"><span>{isCentralDraw ? "Вартість запасу (Основний склад)" : "Вартість мого запасу"}</span><b>{suah(total)}</b></div>
         <div className={`wh-kpi ${need.length ? "attn" : ""}`}><span>Треба замовити</span><b>{need.length} поз.</b></div>
       </div>
       {need.length > 0 && <button className="btn-secondary small" style={{ margin: "4px 0 12px" }} onClick={() => onOrderAll(need.map((r) => ({ item_id: r.i.id, qty: String(r.need) })))}>Замовити все, що нижче мін</button>}
       <div className="wh-tw">
         <table className="wh-tbl">
-          <thead><tr><th>Позиція</th><th>Залишок Основного складу</th><th>Залишок</th><th>Мін</th><th>Замовити</th><th>Вартість</th></tr></thead>
+          <thead><tr><th>Позиція</th>{!isCentralDraw && <th>Залишок Основного складу</th>}<th>Залишок</th><th>Мін</th><th>Замовити</th><th>Вартість</th></tr></thead>
           <tbody>
             {rows.map(({ i, qty, need: n, state, value }) => (
               <tr key={i.id} className={`st-${state}`}>
                 <td className="wh-nm">{i.name}<span className="wh-cat">{i.category}</span></td>
-                <td className="num wh-cs">{cs[i.id] || 0}</td>
+                {!isCentralDraw && <td className="num wh-cs">{cs[i.id] || 0}</td>}
                 <td className={`num ${qty < 0 ? "wh-neg" : ""}`}>{qty}</td>
                 <td className="num muted">{i.min_salon}</td>
                 <td className="num">{n > 0 ? <span className="wh-pill lo">{n}</span> : "—"}</td>
@@ -8911,7 +8914,7 @@ function SupplyModule({ cab }) {
   const [editOrder, setEditOrder] = useState(null);
 
   // Липинського списує госп.потреби прямо з Основного складу, без «Мого складу»
-  const centralWriteoff = cab.key === "lviv-lypynskoho";
+  const centralWriteoff = CENTRAL_DRAW_SALONS.includes(cab.key);
   const subs = [];
   if (manageWh) subs.push(["central", "Основний склад"], ["incoming", "Замовлення салонів"], ["acts", "Складські акти"], ["items", "Довідник"]);
   if (centralWriteoff) subs.push(["writeoff", "Акт списання"]);

@@ -6,6 +6,8 @@ import { supabase, rtChannel } from "./supabase.js";
 export const SUPPLY_CATEGORIES = ["напої", "гігієна", "канцелярія", "прибирання", "пакування", "інше"];
 export const SUPPLY_UNITS = ["шт", "уп", "кг", "л"];
 export const CENTRAL = "central";
+// магазини, що не мають власного складу — списують госп.потреби прямо з Основного (розподільчого)
+export const CENTRAL_DRAW_SALONS = ["lviv-lypynskoho"];
 
 export const ACT_KIND = {
   receipt: "Прихід",
