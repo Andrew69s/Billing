@@ -247,16 +247,15 @@ function calcBonusBlock(b: any, dailyRate: number, teamSize = 1) {
   const checkLen = b.checkLenOk !== undefined
     ? manualKpi(b.checkLenOk, b.checkLenSum)
     : tierBonus(b.checkLenFact, [b.clN1, b.clN2, b.clN3], [700, 1500, 2000]);
-  const courses = b.coursesOk ? 500 : 0;
   // 3.6 НП і 3.7 БН — командні: 4% від обороту ділиться на всю команду салону
   const siteNpTeam = Math.round((b.siteNpRevenue || 0) * 0.04);
   const bnTeam = Math.round((b.bnRevenue || 0) * 0.04);
   const siteNp = Math.round(siteNpTeam / team);
   const bn = Math.round(bnTeam / team);
   return {
-    callsPct, callsPlanRevenue, calls, callsTeam, replacement, avgCheck, checkLen, courses,
+    callsPct, callsPlanRevenue, calls, callsTeam, replacement, avgCheck, checkLen,
     siteNp, bn, siteNpTeam, bnTeam, team,
-    subtotal: calls + replacement + avgCheck + checkLen + courses + siteNp + bn,
+    subtotal: calls + replacement + avgCheck + checkLen + siteNp + bn,
   };
 }
 function calcPpi(p: any, teamSize = 1) {

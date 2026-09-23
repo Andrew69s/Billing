@@ -2398,7 +2398,7 @@ const ST_SHARED = [
 const ST_SHOTS = [
   ["base", "Категорія та база"], ["attest", "Атестація"], ["standards", "Стандарти"], ["coef", "Коефіцієнт керуючого"],
   ["calls", "Обіг з дзвінків"], ["replace", "Заміна"], ["sc", "Середній чек"], ["cl", "Довжина чека"],
-  ["courses", "Курси"], ["np", "Сайт через НП"], ["bn", "Продаж по БН"], ["ppi", "PPI"],
+  ["np", "Сайт через НП"], ["bn", "Продаж по БН"], ["ppi", "PPI"],
   ["record", "Рекорд"], ["quarter", "Квартальна премія"], ["bonusExtra", "Бонус"],
 ];
 const ST_ROLE_COEF = { manager: "1.2", acting_manager: "1.1", seller: "1.0", intern: "1.0" };
@@ -2422,7 +2422,7 @@ const StSeg = ({ items }) => (
 /* умови мотивації по блоках (як у попередній версії) — номери пунктів для smCond */
 const ST_COND = {
   "Основа": ["1.1"], "Дзвінки": ["3.1"], "Атестація": ["2.1"], "KPI": ["3.3", "3.4"], "Сайт і БН": ["3.6", "3.7"],
-  "PPI": ["4.1"], "Премії": ["5.1", "5.2"], "Керуючий": ["2.2", "2.3"], "Інше": ["3.2", "3.5", "5.3"],
+  "PPI": ["4.1"], "Премії": ["5.1", "5.2"], "Керуючий": ["2.2", "2.3"], "Інше": ["3.2", "5.3"],
 };
 const StInfoCtx = React.createContext(null);
 function StRow({ g, gs, label, inp, cells, cls }) {
@@ -2931,7 +2931,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                   inp={<span className="st-two"><StIn v={d0.ppi.ppiRevenue} set={setShared(["ppi", "ppiRevenue"])} label="Оборот PPI" /><StSeg items={[["3%", !!d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(true)], ["1%", !d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(false)]]} /></span>}
                   cells={each((e) => stMoney(c(e).ppi.bonus))} />
                 <StRow g="Премії" gs={2} cls={isQuarterEnd ? "" : "st-dim"} label="Квартальна премія"
-                  inp={<span className="st-hint">{isQuarterEnd ? "сума 3 ЗП і «3/3 плани» →" : `лише в кінці кварталу (${monthLabel(qMonths[2])})`}</span>}
+                  inp={isQuarterEnd ? <span className="st-hint">сума 3 ЗП і «3/3 плани» →</span> : null}
                   cells={each((e) => (isQuarterEnd
                     ? <span className="st-ck"><StChk on={d(e).quarterly.threeOfThree} set={setEmp(e.id, ["quarterly", "threeOfThree"])} label={`3/3 плани — ${e.full_name}`} /><StIn v={d(e).quarterly.last3SalarySum} set={setEmp(e.id, ["quarterly", "last3SalarySum"])} label={`Сума 3 останніх ЗП — ${e.full_name}`} cls="st-in-m" /></span>
                     : stMoney(0)))} />
@@ -2956,7 +2956,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     </select>
                   ) : <span className="st-hint">—</span>}
                   cells={each((e) => stMoney(c(e).mgr.coefBonus))} />
-                <StRow g="Інше" gs={showTmAdj ? 5 : 4} label="Заміна на іншому магазині" inp={<span className="st-hint">днів із графіка змін · можна виправити</span>}
+                <StRow g="Інше" gs={showTmAdj ? 4 : 3} label="Заміна на іншому магазині" inp={<span className="st-hint">днів із графіка змін · можна виправити</span>}
                   cells={each((e) => {
                     const auto = subAuto[e.id] || 0;
                     const days = d(e).bonus.replacementDays || 0;
@@ -2969,8 +2969,6 @@ function SmStoreSalary({ salon, review, ymProp }) {
                       </span>
                     );
                   })} />
-                <StRow label="Курси ≥ 95%" inp={<span className="st-hint">галочка по кожному →</span>}
-                  cells={each((e) => <span className="st-ck"><StChk on={d(e).bonus.coursesOk} set={setEmp(e.id, ["bonus", "coursesOk"])} label={`Курси — ${e.full_name}`} /> {stMoney(c(e).bonus.courses)}</span>)} />
                 <StRow label="ЕЗ" inp={<button type="button" className="wh-link" onClick={() => setEzOpen(true)}>{ez.list.length} прод. за місяць · переглянути →</button>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
                 <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>}
                   cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
