@@ -1100,6 +1100,18 @@ function PushToggle({ cabKey }) {
   );
 }
 
+/* Підпис «чий це магазин» у сповіщеннях. Оголошено функцією і з запобіжником:
+   цей рядок рендериться на кожному екрані після входу, тож будь-яка помилка тут
+   валить увесь застосунок — краще показати сирий ключ, ніж сірий екран. */
+function actorName(key) {
+  try {
+    if (!key) return "";
+    const s = salonByKey(key);
+    if (s && s.city && s.addr) return salonShortName(s);
+    return cabName(key) || key;
+  } catch { return String(key || ""); }
+}
+
 function NotificationCenter({ cabKey }) {
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
@@ -1109,8 +1121,7 @@ function NotificationCenter({ cabKey }) {
   const showToast = (t) => {
     const id = t.id || `l${Date.now()}${Math.random()}`;
     // у тості теж показуємо, чий це магазин: у локальних тостів actor немає — вони не зміняться
-    const s = t.actor && t.actor !== cabKey ? salonByKey(t.actor) : null;
-    const from = t.actor && t.actor !== cabKey ? (s ? salonShortName(s) : cabName(t.actor)) : "";
+    const from = t.actor && t.actor !== cabKey ? actorName(t.actor) : "";
     const body = [from, t.body].filter(Boolean).join(" · ");
     setToasts((prev) => [...prev.slice(-3), { id, title: t.title, body }]);
     setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 6000);
@@ -1184,10 +1195,7 @@ function NotificationCenter({ cabKey }) {
                         <b>{n.title}</b>
                         {/* хто саме це зробив — інакше «Взято в роботу» не каже, який магазин */}
                         {n.actor && n.actor !== cabKey && (
-                          <span className="notif-from">{(() => {
-                            const s = salonByKey(n.actor);
-                            return s ? salonShortName(s) : cabName(n.actor);
-                          })()}</span>
+                          <span className="notif-from">{actorName(n.actor)}</span>
                         )}
                         {n.body && <p>{n.body}</p>}
                         <time>{relTime(n.created_at)}{target ? " · відкрити →" : ""}</time>
