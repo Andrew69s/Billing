@@ -9189,7 +9189,7 @@ function EzSaleForm({ salonKey, ym: ymProp, cabKey, sale, onClose, onCreated }) 
           )}
           <label className="admin-cap">
             <input type="checkbox" checked={npDeliveryPaid} onChange={(e) => setNpDeliveryPaid(e.target.checked)} />
-            <span>Оплата за доставку НП</span>
+            <span>Доставку НП оплачуємо ми</span>
           </label>
           {willRevert && (
             <p className="hint" style={{ color: "var(--negative-bright)" }}>
@@ -9224,6 +9224,15 @@ function EzProcessRow({ sale, cabKey, onDone }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const extraTotal = (Number(costNp) || 0) + (Number(costAcquiring) || 0) + (Number(costVat) || 0);
   const netPreview = Math.max(0, Number(sale.amount) - (Number(costPrice) || 0) - extraTotal);
+
+  // Що ТМ зобов'язаний заповнити, виходячи з того, що вніс магазин:
+  // галочка НП означає, що доставку платимо ми; оплата частинами — що банк бере свій %.
+  const needsNp = !!sale.np_delivery_paid;
+  const hasInstallment = sale.payment_method === "installment"
+    || (sale.payment_method === "combined" && Number(sale.payment_breakdown?.installment) > 0);
+  const npMissing = needsNp && !(Number(costNp) > 0);
+  const bankMissing = hasInstallment && !(Number(costAcquiring) > 0);
+  const blocked = npMissing || bankMissing;
 
   const process = async () => {
     setBusy(true);
@@ -9270,8 +9279,8 @@ function EzProcessRow({ sale, cabKey, onDone }) {
             .map(([k, v]) => `${EZ_PAYMENT_METHODS[k] || k} ${suahN(v)}`).join(" · ")}</span>
         )}
         <span><i>Доставка НП</i>
-          <b className={sale.np_delivery_paid ? "ez-flag-ok" : "ez-flag-off"}>
-            {sale.np_delivery_paid ? "сплатив клієнт" : "не сплачена"}
+          <b className={sale.np_delivery_paid ? "ez-flag-warn" : "ez-flag-off"}>
+            {sale.np_delivery_paid ? "платимо ми — вкажіть вартість" : "за рахунок клієнта"}
           </b>
         </span>
         {sale.created_by && <span><i>Вніс</i>{cabName(sale.created_by)}</span>}
@@ -9279,15 +9288,21 @@ function EzProcessRow({ sale, cabKey, onDone }) {
 
       <div className="item-fields">
         <Field label="Вхідна ціна" suffix="грн" value={costPrice} onChange={setCostPrice} />
-        <Field label="Доставка НП" suffix="грн" value={costNp} onChange={setCostNp} />
-        <Field label="Еквайринг" suffix="грн" value={costAcquiring} onChange={setCostAcquiring} />
+        <Field label={needsNp ? "Доставка НП — обов'язково" : "Доставка НП"} suffix="грн" value={costNp} onChange={setCostNp} />
+        <Field label={hasInstallment ? "% банку — обов'язково" : "Еквайринг"} suffix="грн" value={costAcquiring} onChange={setCostAcquiring} />
         <Field label="ПДВ" suffix="грн" value={costVat} onChange={setCostVat} />
       </div>
+      {blocked && (
+        <p className="hint ez-process-warn">
+          {npMissing && "Магазин позначив, що доставку НП оплачуємо ми — вкажіть її вартість. "}
+          {bankMissing && "Оплата частинами — вкажіть витрати на % банку."}
+        </p>
+      )}
       <div className="ez-process-foot">
         <span>Прибуток: {suah(netPreview)} · на команду (20%): <b className="ez-team-num">{suah(teamShare)}</b></span>
         <span style={{ display: "flex", gap: 8 }}>
           <button className="btn-danger small" onClick={del} disabled={busy}>{confirmDel ? "Точно видалити?" : "Видалити"}</button>
-          <button className="btn-primary small" onClick={process} disabled={busy}>{busy ? "…" : editingConfirmed ? "Зберегти" : "Опрацьовано"}</button>
+          <button className="btn-primary small" onClick={process} disabled={busy || blocked}>{busy ? "…" : editingConfirmed ? "Зберегти" : "Опрацьовано"}</button>
         </span>
       </div>
     </div>
@@ -12668,8 +12683,9 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-process-meta{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-alt);font-size:12px;color:var(--ink-soft);}
 .ez-process-meta span{display:flex;align-items:baseline;gap:6px;}
 .ez-process-meta i{font-style:normal;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
-.ez-flag-ok{color:var(--positive-bright);}
+.ez-flag-warn{color:var(--gold-bright);}
 .ez-flag-off{color:var(--muted);}
+.ez-process-warn{margin:0 0 10px;color:var(--negative-bright);}
 .ez-process-head b:last-child{margin-left:auto;}
 .ez-process-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:12.5px;}
 .ez-sale-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:6px;}
