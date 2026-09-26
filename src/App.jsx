@@ -9295,7 +9295,8 @@ function EzProcessRow({ sale, cabKey, onDone }) {
       // магазину за місяць — саме вона віднімається від обороту для категоризації
       await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
       pushToast({ title: editingConfirmed ? "Розрахунок оновлено" : "Продаж підтверджено", body: `${salonLabel(salonByKey(sale.salon_key))} · прибуток ${suah(netPreview)}` });
-      if (!editingConfirmed) notify({ recipient: sale.salon_key, kind: "ez", title: "Продаж ЕЗ підтверджено", body: `${suah(Number(sale.amount))} · прибуток ${suah(netPreview)}`, actor: cabKey, link: "ez" }).catch(() => {});
+      // магазину показуємо лише його частку, а не чистий прибуток мережі
+      if (!editingConfirmed) notify({ recipient: sale.salon_key, kind: "ez", title: "Продаж ЕЗ підтверджено", body: `${suah(Number(sale.amount))} · на команду ${suah(teamShare)}`, actor: cabKey, link: "ez" }).catch(() => {});
       onDone();
     } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); setBusy(false); }
   };
@@ -9436,22 +9437,46 @@ function EzAnalytics({ salons, sales }) {
     const monthsToSum = monthF === "all" ? months : [monthF];
     let count = 0, amount = 0, profit = 0;
     monthsToSum.forEach((ym) => { const r = byKeyYm[`${sl.key}|${ym}`]; if (r) { count += r.count; amount += r.amount; profit += r.profit; } });
-    return { sl, count, amount, profit, team: Math.round(profit * 0.2) };
+    // прибуток ділиться: 20% команді магазину, решта лишається мережі
+    const team = Math.round(profit * 0.2);
+    return { sl, count, amount, profit, team, network: profit - team };
   }).sort((a, b) => b.profit - a.profit);
-  const totals = rowsAll.reduce((a, r) => ({ count: a.count + r.count, amount: a.amount + r.amount, profit: a.profit + r.profit, team: a.team + r.team }), { count: 0, amount: 0, profit: 0, team: 0 });
+  const totals = rowsAll.reduce((a, r) => ({
+    count: a.count + r.count, amount: a.amount + r.amount,
+    profit: a.profit + r.profit, team: a.team + r.team, network: a.network + r.network,
+  }), { count: 0, amount: 0, profit: 0, team: 0, network: 0 });
 
   const chartData = monthsAsc.map((ym) => {
     const r = byKeyYm[`${salonKey}|${ym}`];
-    return { label: monthLabel(ym).replace(" 20", " '"), Прибуток: r ? r.profit : 0, "На команду": r ? Math.round(r.profit * 0.2) : 0 };
+    const team = r ? Math.round(r.profit * 0.2) : 0;
+    return { label: monthLabel(ym).replace(" 20", " '"), "На команду": team, Мережі: r ? r.profit - team : 0 };
   });
 
   return (
     <div>
+      <div className="ez-kpis">
+        <div className="ez-kpi">
+          <span>Загальний виторг</span>
+          <b>{suah(totals.amount)}</b>
+          <i>оборот по {monthF === "all" ? "усіх періодах" : monthLabel(monthF).toLowerCase()}</i>
+        </div>
+        <div className="ez-kpi ez-kpi-team">
+          <span>Прибуток на команду</span>
+          <b>{suah(totals.team)}</b>
+          <i>20% чистого прибутку</i>
+        </div>
+        <div className="ez-kpi ez-kpi-net">
+          <span>Прибуток мережі</span>
+          <b>{suah(totals.network)}</b>
+          <i>решта після бонусу команді</i>
+        </div>
+      </div>
+
       <div className="tm-salon-chips" style={{ marginBottom: 14 }}>
         {salons.map((s) => <button key={s.key} className={`chip ${s.key === salonKey ? "active" : ""}`} onClick={() => setSalonKey(s.key)}>{salonShortName(s)}</button>)}
       </div>
 
-      {chartData.every((d) => d.Прибуток === 0) ? (
+      {chartData.every((d) => d["На команду"] === 0 && d.Мережі === 0) ? (
         <div className="admin-empty">За {salonKey ? salonLabel(salonByKey(salonKey)) : "цей магазин"} підтверджених продажів ЕЗ поки немає.</div>
       ) : (
         <div className="chart-wrap">
@@ -9462,8 +9487,8 @@ function EzAnalytics({ salons, sales }) {
               <YAxis tick={{ fontSize: 11, fill: "#8A8069" }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} tickLine={false} axisLine={false} width={40} />
               <Tooltip formatter={(v) => suah(v)} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar dataKey="Прибуток" fill="#8C846F" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="На команду" fill="#DCA94A" radius={[3, 3, 0, 0]} />
+              <Bar dataKey="На команду" stackId="p" fill="#DCA94A" />
+              <Bar dataKey="Мережі" stackId="p" fill="#5F8E93" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -9478,7 +9503,7 @@ function EzAnalytics({ salons, sales }) {
       </div>
       <div className="grid-scroll">
         <table className="open-log">
-          <thead><tr><th>Магазин</th><th>Продажів</th><th>Оборот</th><th>Прибуток</th><th>На команду</th></tr></thead>
+          <thead><tr><th>Магазин</th><th>Продажів</th><th>Виторг</th><th>Прибуток</th><th>На команду</th><th>Мережі</th></tr></thead>
           <tbody>
             {rowsAll.map((r) => (
               <tr key={r.sl.key} className={r.sl.key === salonKey ? "trn-row-active" : ""} onClick={() => setSalonKey(r.sl.key)} style={{ cursor: "pointer" }}>
@@ -9487,9 +9512,10 @@ function EzAnalytics({ salons, sales }) {
                 <td className="open-log-t">{suah(r.amount)}</td>
                 <td className="open-log-t">{suah(r.profit)}</td>
                 <td className="open-log-t"><b>{suah(r.team)}</b></td>
+                <td className="open-log-t">{suah(r.network)}</td>
               </tr>
             ))}
-            <tr className="open-log-total"><td><b>Разом</b></td><td className="open-log-t"><b>{totals.count}</b></td><td className="open-log-t"><b>{suah(totals.amount)}</b></td><td className="open-log-t"><b>{suah(totals.profit)}</b></td><td className="open-log-t"><b>{suah(totals.team)}</b></td></tr>
+            <tr className="open-log-total"><td><b>Разом</b></td><td className="open-log-t"><b>{totals.count}</b></td><td className="open-log-t"><b>{suah(totals.amount)}</b></td><td className="open-log-t"><b>{suah(totals.profit)}</b></td><td className="open-log-t"><b>{suah(totals.team)}</b></td><td className="open-log-t"><b>{suah(totals.network)}</b></td></tr>
           </tbody>
         </table>
       </div>
@@ -12930,6 +12956,14 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 /* --- Продажі ЕЗ: картки (СМ) --- */
 .ez-cards{display:flex;flex-direction:column;gap:10px;}
 .ez-month-kpi{display:flex;align-items:baseline;gap:10px;padding:12px 16px;border-radius:var(--radius-md);background:rgba(190,138,46,.1);border:1px solid rgba(190,138,46,.3);margin-bottom:2px;}
+.ez-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px;}
+.ez-kpi{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
+.ez-kpi>span{font-size:11.5px;color:var(--muted);}
+.ez-kpi>b{font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:600;line-height:1;color:var(--ink);}
+.ez-kpi>i{font-style:normal;font-size:10.5px;color:var(--faint);}
+.ez-kpi-team>b{color:var(--gold);}
+.ez-kpi-net>b{color:#5F8E93;}
+@media (max-width:720px){.ez-kpis{grid-template-columns:1fr;}}
 .ez-month-kpi b{font-family:'IBM Plex Mono',monospace;font-size:19px;color:var(--gold);}
 :root[data-theme="dark"] .ez-month-kpi b{color:var(--gold-bright);}
 .ez-card{display:flex;align-items:center;gap:14px;padding:12px 16px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
