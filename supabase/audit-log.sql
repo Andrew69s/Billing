@@ -67,3 +67,49 @@ from public.kv, lateral jsonb_array_elements(value) as e
 where key = 'auditlog'
   and e ? 'at'
   and not exists (select 1 from public.audit_log);
+
+-- ---------- ОСТАННІЙ КРОК: закрити виняток у kv ----------
+-- Виконувати ЛИШЕ після того, як фронтенд із новим журналом уже на проді,
+-- інакше старий бандл писатиме в kv і записи просто зникатимуть.
+--
+-- Тут ALTER POLICY, а не CREATE: живі політики kv встигли обрости клаузулами
+-- (fop:, supply:articles, modaccess:, modcatalog:, modextra:), яких немає в
+-- schema.sql. Переписувати їх із файлу не можна — загубляться. Нижче —
+-- поточний стан бази станом на 26.09.2026 мінус `key = 'auditlog'`.
+--
+-- Після цього старий ключ kv:auditlog лишається як бекап, але читати й писати
+-- його зможе лише керівник/адмін.
+
+alter policy kv_select on public.kv using (
+  (key = 'reassign:list') or (auth.uid() is not null and (
+    is_manager_or_admin()
+    or kv_owner(key) = my_cabinet_key()
+    or (key like 'smdata:%' and my_cabinet_type() = 'tm' and current_salon_tm(kv_owner(key)) = my_cabinet_key())
+    or key like 'fop:%'
+    or key = 'supply:articles'
+    or key = ('modaccess:' || my_cabinet_key())
+    or key = ('modcatalog:' || my_cabinet_key())
+    or key = ('modextra:' || my_cabinet_key())
+    or (key like 'caps:%' and split_part(key, ':', 2) = my_cabinet_key())
+  ))
+);
+
+alter policy kv_write on public.kv using (
+  auth.uid() is not null and (
+    is_manager_or_admin()
+    or kv_owner(key) = my_cabinet_key()
+    or (key like 'smdata:%' and my_cabinet_type() = 'tm' and salon_base_tm(kv_owner(key)) = my_cabinet_key())
+    or key like 'recovery:%'
+    or key = ('modcatalog:' || my_cabinet_key())
+    or my_cabinet_key() = 'andriy'
+  )
+) with check (
+  auth.uid() is not null and (
+    is_manager_or_admin()
+    or kv_owner(key) = my_cabinet_key()
+    or (key like 'smdata:%' and my_cabinet_type() = 'tm' and salon_base_tm(kv_owner(key)) = my_cabinet_key())
+    or key like 'recovery:%'
+    or key = ('modcatalog:' || my_cabinet_key())
+    or my_cabinet_key() = 'andriy'
+  )
+);
