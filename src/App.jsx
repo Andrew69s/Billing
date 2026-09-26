@@ -943,6 +943,26 @@ function QuickCreate({ cabKey }) {
   );
 }
 
+/* Віджети шапки рендеряться на КОЖНОМУ екрані після входу, а ModuleErrorBoundary
+   обгортає лише вміст вкладки. Тому падіння дзвіночка чи «+» раніше забирало весь
+   застосунок у сірий екран. Тепер ламається тільки сам віджет, а шапка —
+   назва, меню, «Вийти» — лишається робочою. */
+class ChromeGuard extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error(`Помилка у шапці (${this.props.what}):`, error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <span className="chrome-crash" title={`${this.props.what}: ${String(this.state.error?.message || this.state.error)}`}>
+          <AlertTriangle size={15} />
+        </span>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function TopBar({ title, onBack, onLogout, cabKey, onMenu }) {
   return (
     <div className="topbar">
@@ -955,11 +975,11 @@ function TopBar({ title, onBack, onLogout, cabKey, onMenu }) {
         <kbd className="topbar-kbd">⌘K</kbd>
       </button>
       <div className="topbar-right">
-        <CalcBusyDot />
-        {cabKey && <QuickCreate cabKey={cabKey} />}
+        <ChromeGuard what="індикатор розрахунку"><CalcBusyDot /></ChromeGuard>
+        {cabKey && <ChromeGuard what="швидке створення"><QuickCreate cabKey={cabKey} /></ChromeGuard>}
         <ThemeToggle />
-        {cabKey && <FeedbackButton cabKey={cabKey} />}
-        {cabKey && <NotificationCenter cabKey={cabKey} />}
+        {cabKey && <ChromeGuard what="звернення"><FeedbackButton cabKey={cabKey} /></ChromeGuard>}
+        {cabKey && <ChromeGuard what="сповіщення"><NotificationCenter cabKey={cabKey} /></ChromeGuard>}
         {onLogout && (
           <button className="topbar-logout" onClick={onLogout}>Вийти</button>
         )}
@@ -12430,6 +12450,7 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .resume-actions{display:flex;gap:8px;}
 .resume-bar .btn-primary.small,.resume-bar .btn-secondary.small{padding:7px 14px;font-size:12px;}
 .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+.chrome-crash{display:flex;align-items:center;color:var(--negative-bright);opacity:.75;cursor:help;}
 .topbar-logout{background:rgba(var(--sf),.06);border:1px solid var(--line-dark);color:var(--on-dark-2);font-size:12px;padding:7px 13px;border-radius:999px;cursor:pointer;transition:color .15s var(--ease),border-color .15s var(--ease);}
 .topbar-logout:hover{color:var(--negative-bright);border-color:rgba(224,145,127,.4);}
 
