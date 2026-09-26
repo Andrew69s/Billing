@@ -3736,6 +3736,7 @@ function AdminLog() {
                 <span className="admin-log-time">{fmtDate(e.at)}</span>
                 <span className="admin-log-act">{label[e.action] || e.action}</span>
                 <span className="admin-log-detail">{e.detail?.cabKey ? cabName(e.detail.cabKey) : e.detail?.salonKey ? salonLabel(salonByKey(e.detail.salonKey)) : ""}</span>
+                <span className="admin-log-actor">{e.actor ? cabName(e.actor) : "—"}</span>
               </div>
             ))}
           </div>
@@ -12187,10 +12188,11 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .admin-cap{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink-soft);cursor:pointer;}
 .admin-cap input[type=checkbox]{width:15px;height:15px;accent-color:var(--gold);cursor:pointer;flex-shrink:0;}
 .admin-logrows{display:flex;flex-direction:column;margin-top:10px;}
-.admin-logrow{display:grid;grid-template-columns:150px 1fr 1fr;gap:12px;padding:8px 0;border-bottom:1px dashed var(--line);font-size:11.5px;}
+.admin-logrow{display:grid;grid-template-columns:150px 1fr 1fr 1fr;gap:12px;padding:8px 0;border-bottom:1px dashed var(--line);font-size:11.5px;}
 .admin-log-time{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
 .admin-log-act{color:var(--ink-soft);font-weight:600;}
 .admin-log-detail{color:var(--muted);}
+.admin-log-actor{color:var(--ink-soft);text-align:right;}
 
 /* ---------- модуль «Задачі» ---------- */
 /* індикатор перерахунку — у шапці біля дзвіночка, завжди в потоці (без стрибків) */

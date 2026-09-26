@@ -350,18 +350,23 @@ export function subscribeModuleAccess(cabKey, cb) {
 /* =========================================================
    ЖУРНАЛ ДІЙ
 ========================================================= */
-const LOG_KEY = "auditlog";
+/* Таблиця append-only: дописує будь-який кабінет, читають лише керівник/адмін,
+   правити й видаляти не може ніхто. Автора та час проставляє тригер на сервері. */
 export async function logAction(action, detail) {
   try {
-    let list = [];
-    try { list = JSON.parse((await window.storage.get(LOG_KEY)).value) || []; } catch { list = []; }
-    list.unshift({ action, detail: detail || {}, at: new Date().toISOString() });
-    await window.storage.set(LOG_KEY, JSON.stringify(list.slice(0, 200)));
+    const { error } = await supabase.from("audit_log").insert({ action, detail: detail || {} });
+    if (error) throw error;
   } catch (e) { console.error(e); }
 }
 export async function listLog() {
-  try { return JSON.parse((await window.storage.get(LOG_KEY)).value) || []; }
-  catch { return []; }
+  try {
+    const { data, error } = await supabase.from("audit_log")
+      .select("at, actor, action, detail")
+      .order("at", { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    return data || [];
+  } catch { return []; }
 }
 
 export function cabName(key) {
