@@ -3003,14 +3003,17 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     cells={each((e) => <StIn v={d(e).adj[k]} set={setEmp(e.id, ["adj", k])} label={`${title} — ${e.full_name}`} cls="st-in-w" />)} />
                 ))}
                 <StTotalRow cls="st-pay st-gross" label="Загальна ЗП" hint="= всього нараховано" cells={each((e) => <div className="st-payv">{stNum(c(e).grossTotal)}</div>)} />
-                <StTotalRow cls="st-pay" label="До виплати"
-                  cells={each((e) => (
-                    <>
-                      <div className="st-payv">{stNum(c(e).total)}</div>
-                      {d(e).paymentStatus === "paid" && <div className="st-hint">виплачено</div>}
-                      {d(e).paymentStatus === "to_pay" && <div className="st-hint">призначено до виплати</div>}
-                    </>
-                  ))} />
+                {/* у режимі перегляду ТМ сума й статус живуть у блоці «Виплата» внизу — тут рядок зайвий */}
+                {!(isReview && canEditReview) && (
+                  <StTotalRow cls="st-pay" label="До виплати"
+                    cells={each((e) => (
+                      <>
+                        <div className="st-payv">{stNum(c(e).total)}</div>
+                        {d(e).paymentStatus === "paid" && <div className="st-hint">виплачено</div>}
+                        {d(e).paymentStatus === "to_pay" && <div className="st-hint">призначено до виплати</div>}
+                      </>
+                    ))} />
+                )}
               </tbody>
             </table>
           </div>
@@ -3072,6 +3075,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     <span className="st-pay-nm">{e.full_name}</span>
                     <span className={`badge ${ps === "paid" ? "badge-ok" : ps === "to_pay" ? "badge-warn" : "badge-off"}`}>{ps === "paid" ? "Виплачено" : ps === "to_pay" ? "До виплати" : "Не підтверджено"}</span>
                     <span className="st-spacer" />
+                    <span className="st-pay-sum">{stNum(c(e).total)}</span>
                     {ps !== "to_pay" && ps !== "paid" && <button className="btn-secondary small" onClick={() => setPayment(e, "to_pay")}>Позначити «До виплати»</button>}
                     {ps === "to_pay" && <button className="btn-secondary small" onClick={() => setPayment(e, "paid")}>Позначити «Виплачено»</button>}
                     {ps === "paid" && <button className="btn-secondary small" onClick={() => setPayment(e, "to_pay")}>Повернути «До виплати»</button>}
@@ -12732,6 +12736,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-pay-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--line);}
 .st-pay-row:first-of-type{border-top:none;}
 .st-pay-nm{font-size:15px;font-weight:600;color:var(--ink);min-width:170px;}
+.st-pay-sum{font-family:'IBM Plex Mono',monospace;font-size:17px;font-weight:600;color:var(--gold);white-space:nowrap;}
 .st-review-bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:14px 0;}
 
 .inv-issuer{display:flex;gap:8px;}
