@@ -892,6 +892,12 @@ function QuickCreate({ cabKey }) {
   const [modal, setModal] = useState(null); // "task" | "news" | null
   const cab = useMemo(() => ({ key: cabKey, type: cabType(cabKey) }), [cabKey]);
   const isAdmin = cabKey === ADMIN_KEY;
+  // магазини, за які цей кабінет може внести витрату (те саме, що дозволяє RLS)
+  const expSalons = useMemo(() => (
+    cab.type === "sm" ? [salonByKey(cabKey)].filter(Boolean)
+      : cab.type === "tm" ? salonsOfTm(cabKey)
+        : SALONS
+  ), [cab.type, cabKey]);
   return (
     <div className="qc-wrap">
       <button className="topbar-quick" onClick={() => setOpen((v) => !v)} aria-label="Створити" title="Нова задача чи новина">
@@ -909,6 +915,11 @@ function QuickCreate({ cabKey }) {
                 <BadgePercent size={15} /> Продаж ЕЗ
               </button>
             )}
+            {expSalons.length > 0 && (
+              <button className="qc-item" onClick={() => { setOpen(false); setModal("expense"); }}>
+                <TrendingDown size={15} /> Нова витрата
+              </button>
+            )}
             {isAdmin && (
               <button className="qc-item" onClick={() => { setOpen(false); setModal("news"); }}>
                 <Sparkles size={15} /> Новина для всіх
@@ -920,6 +931,14 @@ function QuickCreate({ cabKey }) {
       {modal === "task" && <TaskCreateModal cab={cab} onClose={() => setModal(null)} onCreated={() => {}} />}
       {modal === "news" && <NewsQuickModal onClose={() => setModal(null)} />}
       {modal === "ez" && <EzSaleForm salonKey={cabKey} ym={nowYm()} cabKey={cabKey} onClose={() => setModal(null)} onCreated={() => {}} />}
+      {modal === "expense" && (
+        <ExpenseCreateModal
+          salons={expSalons}
+          defaultSalon={cab.type === "sm" ? cabKey : expSalons[0]?.key}
+          onClose={() => setModal(null)}
+          onSaved={() => {}}
+        />
+      )}
     </div>
   );
 }
@@ -9865,6 +9884,7 @@ function ExpenseCreateModal({ salons, defaultSalon, onClose, onSaved }) {
         receiptPath,
       });
       pushToast({ title: "Витрату внесено", body: `${catOf(category).label} · ${suah(amount)}` });
+      window.dispatchEvent(new Event("expenses:changed")); // модуль оновиться, з якого б входу не внесли
       onSaved();
       onClose();
     } catch (e) {
@@ -9883,7 +9903,7 @@ function ExpenseCreateModal({ salons, defaultSalon, onClose, onSaved }) {
         <div className="modal-body">
 
         {salons.length > 1 && (
-          <label className="exp-f">
+          <label className="over-field">
             <span>Магазин</span>
             <select className="inv-toolbar-sel" value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
               {salons.map((s) => <option key={s.key} value={s.key}>{salonShortName(s)}</option>)}
@@ -9891,7 +9911,7 @@ function ExpenseCreateModal({ salons, defaultSalon, onClose, onSaved }) {
           </label>
         )}
 
-        <div className="exp-f">
+        <div className="over-field">
           <span>Категорія</span>
           <div className="exp-cats-pick">
             {MANUAL_CATEGORIES.map((c) => (
@@ -9903,24 +9923,24 @@ function ExpenseCreateModal({ salons, defaultSalon, onClose, onSaved }) {
           </div>
         </div>
 
-        <label className="exp-f">
+        <label className="over-field">
           <span>Що саме</span>
-          <input className="inv-in" value={title} onChange={(e) => setTitle(e.target.value)}
+          <input value={title} onChange={(e) => setTitle(e.target.value)}
             placeholder="Напр.: інтернет за вересень, Київстар" />
         </label>
 
-        <div className="exp-f-row">
-          <label className="exp-f">
+        <div className="task-modal-row">
+          <label className="over-field">
             <span>Сума, ₴</span>
-            <NumInput className="inv-in" value={amount} onChange={setAmount} aria-label="Сума витрати" />
+            <NumInput value={amount} onChange={setAmount} aria-label="Сума витрати" />
           </label>
-          <label className="exp-f">
+          <label className="over-field">
             <span>Дата витрати</span>
             <DateTimeField value={when} onChange={setWhen} dateOnly placeholder="Оберіть дату" />
           </label>
         </div>
 
-        <div className="exp-f">
+        <div className="over-field">
           <span>Чек <em className="hint">— необов'язково</em></span>
           <div className="exp-shot">
             <div className="exp-shot-box">
@@ -9972,6 +9992,9 @@ function ExpensesModule({ cab }) {
   useEffect(() => {
     listItems({ includeArchived: true }).then((it) => setItems(Object.fromEntries(it.map((i) => [i.id, i]))));
     listWriteoffArticles().then(setArticles).catch(() => {});
+    const onChanged = () => setReload((v) => v + 1);
+    window.addEventListener("expenses:changed", onChanged);
+    return () => window.removeEventListener("expenses:changed", onChanged);
   }, []);
   useEffect(() => {
     const from = `${months[months.length - 1]}-01`;
@@ -13801,9 +13824,7 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .exp-entry-x{width:24px;height:24px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:var(--radius-sm);background:none;color:var(--faint);cursor:pointer;}
 .exp-entry-x:hover{background:rgba(160,58,42,.12);color:var(--negative-bright);}
 .exp-modal{width:min(560px,100%);}
-.exp-f{display:flex;flex-direction:column;gap:7px;}
-.exp-f>span{font-size:11.5px;color:var(--muted);}
-.exp-f-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.exp-modal .over-field{max-width:none;}
 .exp-cats-pick{display:flex;flex-wrap:wrap;gap:7px;}
 .exp-cat-chip{display:flex;align-items:center;gap:7px;height:34px;padding:0 13px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);font-family:inherit;font-size:12.5px;color:var(--muted);cursor:pointer;}
 .exp-cat-chip i{width:8px;height:8px;border-radius:50%;}
