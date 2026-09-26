@@ -9243,9 +9243,29 @@ function EzProcessRow({ sale, cabKey, onDone }) {
     <div className="ez-process-row">
       <div className="ez-process-head">
         <b>{salonLabel(salonByKey(sale.salon_key))}</b>
-        <span className="muted">{sale.nomenclature || "без номенклатури"}{sale.article ? ` · ${sale.article}` : ""}</span>
+        {sale.sold_on && <span className="ez-card-date">{new Date(`${sale.sold_on}T12:00:00`).toLocaleDateString("uk-UA")}</span>}
+        <span className="muted">{sale.nomenclature || "без номенклатури"}</span>
         <b>{suah(Number(sale.amount))}</b>
       </div>
+
+      {/* усе, що вніс магазин: без способу оплати й позначки НП порахувати
+          еквайринг і доставку неможливо */}
+      <div className="ez-process-meta">
+        {sale.article && <span><i>Артикул</i>{sale.article}</span>}
+        {sale.order_no && <span><i>№ замовлення</i>{sale.order_no}</span>}
+        <span><i>Оплата</i>{EZ_PAYMENT_METHODS[sale.payment_method]}</span>
+        {sale.payment_method === "combined" && sale.payment_breakdown && (
+          <span><i>Розбивка</i>{Object.entries(sale.payment_breakdown)
+            .map(([k, v]) => `${EZ_PAYMENT_METHODS[k] || k} ${suahN(v)}`).join(" · ")}</span>
+        )}
+        <span><i>Доставка НП</i>
+          <b className={sale.np_delivery_paid ? "ez-flag-ok" : "ez-flag-off"}>
+            {sale.np_delivery_paid ? "сплатив клієнт" : "не сплачена"}
+          </b>
+        </span>
+        {sale.created_by && <span><i>Вніс</i>{cabName(sale.created_by)}</span>}
+      </div>
+
       <div className="item-fields">
         <Field label="Вхідна ціна" suffix="грн" value={costPrice} onChange={setCostPrice} />
         <Field label="Доставка НП" suffix="грн" value={costNp} onChange={setCostNp} />
@@ -12633,6 +12653,11 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-process-list{display:flex;flex-direction:column;gap:10px;}
 .ez-process-row{border:1px solid var(--line);border-radius:var(--radius-md);padding:12px 14px;background:var(--surface);}
 .ez-process-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;}
+.ez-process-meta{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0 0 10px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-alt);font-size:12px;color:var(--ink-soft);}
+.ez-process-meta span{display:flex;align-items:baseline;gap:6px;}
+.ez-process-meta i{font-style:normal;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
+.ez-flag-ok{color:var(--positive-bright);}
+.ez-flag-off{color:var(--muted);}
 .ez-process-head b:last-child{margin-left:auto;}
 .ez-process-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:12.5px;}
 .ez-sale-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:6px;}
