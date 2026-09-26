@@ -1425,17 +1425,35 @@ function CriteriaForm({ data, update, grade, showAmounts, onAddShot, onRemoveSho
 
       <BlockHeader n="ЕЗ" title="Фінальний розрахунок" />
       <TmItem num="2.5" title="Енергозабезпечення (ЕЗ)" amount={A(calc.ez.bonus)} screenshotKey="ez" flag={flg("2.5")} {...shot}>
-        <Field readOnly={readOnly} label="Сума продажів (оборот)" suffix="грн" value={data.ez.revenue} onChange={(v) => update(["ez", "revenue"], v)} />
-        <Field readOnly={readOnly} label="Рентабельність" suffix="%" value={data.ez.profitabilityPercent} onChange={(v) => update(["ez", "profitabilityPercent"], v)} />
-        <Field readOnly={readOnly} label="Витрати ОЧ (Оплата частинами)" suffix="грн" value={data.ez.och} onChange={(v) => update(["ez", "och"], v)} />
-        <Field readOnly={readOnly} label="Витрати НП (Нова Пошта)" suffix="грн" value={data.ez.np} onChange={(v) => update(["ez", "np"], v)} />
-        <Field readOnly={readOnly} label="Еквайринг" suffix="грн" value={data.ez.acquiring} onChange={(v) => update(["ez", "acquiring"], v)} />
-        <Field readOnly={readOnly} label="Податки" suffix="грн" value={data.ez.taxes} onChange={(v) => update(["ez", "taxes"], v)} />
-        {showAmounts && (
-          <div className="ez-sub">
-            <span>Чистий прибуток: {fmt(calc.ez.netProfit)}</span>
-            <span>ЕЗ: {fmt(calc.ez.ezValue)}</span>
-          </div>
+        {calc.ez.auto ? (
+          <>
+            <p className="hint">
+              Рахується автоматично з опрацьованих продажів ЕЗ вашої території за місяць — вносити руками нічого не треба.
+            </p>
+            {showAmounts && (
+              <div className="ez-sub ez-sub-auto">
+                <span>Чистий прибуток: <b>{fmt(calc.ez.netProfit)}</b></span>
+                <span>На команди магазинів (20%): {fmt(calc.ez.teamShare)}</span>
+                <span>Прибуток мережі: <b>{fmt(calc.ez.network)}</b></span>
+                <span>Ваш бонус (10% від мережі): <b>{fmt(calc.ez.bonus)}</b></span>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <Field readOnly={readOnly} label="Сума продажів (оборот)" suffix="грн" value={data.ez.revenue} onChange={(v) => update(["ez", "revenue"], v)} />
+            <Field readOnly={readOnly} label="Рентабельність" suffix="%" value={data.ez.profitabilityPercent} onChange={(v) => update(["ez", "profitabilityPercent"], v)} />
+            <Field readOnly={readOnly} label="Витрати ОЧ (Оплата частинами)" suffix="грн" value={data.ez.och} onChange={(v) => update(["ez", "och"], v)} />
+            <Field readOnly={readOnly} label="Витрати НП (Нова Пошта)" suffix="грн" value={data.ez.np} onChange={(v) => update(["ez", "np"], v)} />
+            <Field readOnly={readOnly} label="Еквайринг" suffix="грн" value={data.ez.acquiring} onChange={(v) => update(["ez", "acquiring"], v)} />
+            <Field readOnly={readOnly} label="Податки" suffix="грн" value={data.ez.taxes} onChange={(v) => update(["ez", "taxes"], v)} />
+            {showAmounts && (
+              <div className="ez-sub">
+                <span>Чистий прибуток: {fmt(calc.ez.netProfit)}</span>
+                <span>ЕЗ: {fmt(calc.ez.ezValue)}</span>
+              </div>
+            )}
+          </>
         )}
       </TmItem>
     </div>
@@ -1509,7 +1527,12 @@ function SalarySummary({ data, grade, tmKey, ym, adj, qbonus, isLastMonthOfQuart
     { label: "3.5 Мерчандайзинг", amount: calc.b3.merch },
     { label: "3.6 Навчання", amount: calc.b3.training },
   ];
-  const ezItems = [
+  const ezItems = calc.ez.auto ? [
+    { label: "Чистий прибуток по опрацьованих", amount: calc.ez.netProfit },
+    { label: "На команди магазинів (20%)", amount: calc.ez.teamShare },
+    { label: "Прибуток мережі", amount: calc.ez.network },
+    { label: "Бонус (10% від мережі)", amount: calc.ez.bonus },
+  ] : [
     { label: "Чистий прибуток", amount: calc.ez.netProfit },
     { label: "ЕЗ (база)", amount: calc.ez.ezValue },
     { label: "Бонус (10% від ЕЗ)", amount: calc.ez.bonus },
@@ -12154,6 +12177,8 @@ select option{background:var(--surface);color:var(--ink);}
 .flag-list-comment{font-size:12.5px;color:var(--ink-soft);line-height:1.4;}
 
 .ez-sub{display:flex;flex-wrap:wrap;gap:8px 18px;width:100%;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);border-top:1px dashed var(--line-strong);padding-top:10px;margin-top:6px;}
+.ez-sub-auto{flex-direction:column;gap:5px;}
+.ez-sub-auto b{color:var(--gold);}
 .calls-hint{display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%;background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:7px 11px;font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;}
 .calls-hint-use{background:none;border:1px solid var(--gold);color:var(--gold-ink,var(--ink));border-radius:999px;padding:3px 11px;font-size:11px;font-family:inherit;cursor:pointer;}
 

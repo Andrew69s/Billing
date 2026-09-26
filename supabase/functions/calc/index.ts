@@ -147,13 +147,28 @@ function calcBlock3(b3: any, salonCount: number) {
   const rawSubtotal = staff + violations + schedule + smState + merch + training;
   return { staff, violations, schedule, smState, merch, training, rawSubtotal, subtotal: Math.min(rawSubtotal, 15000) };
 }
-function calcEz(ez: any) {
+/* ЕЗ у мотивації ТМ — 10% від прибутку МЕРЕЖІ по опрацьованих продажах.
+   Чистий прибуток кожного продажу ТМ уже порахував під час опрацювання
+   (вхідна ціна, доставка, еквайринг, ПДВ), 20% з нього йде команді магазину,
+   решта лишається мережі — саме з неї рахується бонус ТМ.
+   autoNet — сума net_profit підтверджених продажів території за місяць.
+   Для старих місяців, де продажів у системі ще не вели, лишається ручний
+   розрахунок із полів форми, щоб уже подані ЗП не змінились заднім числом. */
+function calcEz(ez: any, autoNet?: number | null) {
+  if (autoNet != null && autoNet > 0) {
+    const teamShare = Math.round(autoNet * 0.2);
+    const network = autoNet - teamShare;
+    return {
+      auto: true, netProfit: autoNet, teamShare, network,
+      ezValue: network, bonus: Math.max(0, Math.round(network * 0.10)),
+    };
+  }
   const netProfit = (ez.revenue || 0) * ((ez.profitabilityPercent || 0) / 100);
   const ezValue = netProfit - (ez.och || 0) - (ez.np || 0) - (ez.acquiring || 0) - (ez.taxes || 0);
   // бонус лише додатний — відʼємне ЕЗ не віднімається від ЗП
-  return { netProfit, ezValue, bonus: Math.max(0, ezValue * 0.10) };
+  return { auto: false, netProfit, ezValue, bonus: Math.max(0, ezValue * 0.10) };
 }
-function calcTmAll(data: any, grade: number, tmKey: string, ym: string, reass: any[]) {
+function calcTmAll(data: any, grade: number, tmKey: string, ym: string, reass: any[], autoEzNet?: number | null) {
   const salonKeys = salonsOfTm(tmKey || TM_KEYS[0], ym, reass);
   const salonCount = salonKeys.length;
 
@@ -172,7 +187,7 @@ function calcTmAll(data: any, grade: number, tmKey: string, ym: string, reass: a
   const staff = calcStaff(data.block3);
   b3.d = { staff };
 
-  const ez = calcEz(data.ez);
+  const ez = calcEz(data.ez, autoEzNet);
   const beforeFloor = b1.subtotal + b2.subtotal + b3.subtotal + ez.bonus;
   const min = TM_GRADE_MIN[grade] || TM_GRADE_MIN[2];
   const floored = Math.max(beforeFloor, min);
@@ -392,7 +407,35 @@ Deno.serve(async (req) => {
         (me.cabinet_type === "tm" && me.cabinet_key === it.tmKey);
       if (!allowed) return json({ error: "forbidden" }, 403);
     }
-    const out = items.map((it: any) => calcTmAll(it.data, it.grade, it.tmKey, it.ym, reass));
+    // Чистий прибуток по ОПРАЦЬОВАНИХ продажах ЕЗ кожної території за місяць —
+    // з нього рахується бонус ТМ (10% від частки мережі). Беремо одним запитом
+    // на всі позиції батча.
+    const ezNeed = items.map((it: any) => ({
+      key: `${it.tmKey}|${it.ym}`,
+      salons: salonsOfTm(it.tmKey || TM_KEYS[0], it.ym, reass),
+      ym: it.ym,
+    }));
+    const ezSalonKeys = [...new Set(ezNeed.flatMap((x) => x.salons))];
+    const ezYms = [...new Set(ezNeed.map((x) => x.ym))];
+    const ezBySalonYm: Record<string, number> = {};
+    if (ezSalonKeys.length && ezYms.length) {
+      const { data: ezRows } = await svc.from("ez_sales")
+        .select("salon_key, ym, net_profit")
+        .eq("status", "confirmed")
+        .in("salon_key", ezSalonKeys)
+        .in("ym", ezYms);
+      for (const r of ezRows || []) {
+        const k = `${r.salon_key}|${r.ym}`;
+        ezBySalonYm[k] = (ezBySalonYm[k] || 0) + (Number(r.net_profit) || 0);
+      }
+    }
+    const autoEzFor = (tmKey: string, ym: string) => {
+      const row = ezNeed.find((x) => x.key === `${tmKey}|${ym}`);
+      if (!row) return null;
+      return row.salons.reduce((s: number, k: string) => s + (ezBySalonYm[`${k}|${ym}`] || 0), 0);
+    };
+
+    const out = items.map((it: any) => calcTmAll(it.data, it.grade, it.tmKey, it.ym, reass, autoEzFor(it.tmKey, it.ym)));
     return json(op === "tm" ? out[0] : out);
   }
 
