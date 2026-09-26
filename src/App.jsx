@@ -9875,9 +9875,12 @@ function ExpenseCreateModal({ salons, defaultSalon, onClose, onSaved }) {
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal exp-modal" onClick={(e) => e.stopPropagation()}>
-        <button className="modal-close" onClick={onClose} aria-label="Закрити"><X size={18} /></button>
-        <h3>Нова витрата</h3>
+      <div className="modal task-modal exp-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Нова витрата</h3>
+          <button className="modal-x" onClick={onClose} aria-label="Закрити"><X size={18} /></button>
+        </div>
+        <div className="modal-body">
 
         {salons.length > 1 && (
           <label className="exp-f">
@@ -9934,8 +9937,8 @@ function ExpenseCreateModal({ salons, defaultSalon, onClose, onSaved }) {
         </div>
 
         {err && <p className="hint" style={{ color: "var(--negative-bright)" }}>{err}</p>}
-
-        <div className="modal-actions">
+        </div>
+        <div className="modal-foot">
           <button className="btn-secondary" onClick={onClose} disabled={busy}>Скасувати</button>
           <button className="btn-primary" onClick={save} disabled={busy}>{busy ? "Зберігаємо…" : "Зберегти витрату"}</button>
         </div>
@@ -9960,8 +9963,8 @@ function ExpensesModule({ cab }) {
   const [pb, setPb] = useState(months[0]);
   const [manual, setManual] = useState(null);        // витрати, внесені вручну
   const [mode, setMode] = useState("month");         // month | quarter | range
-  const [rFrom, setRFrom] = useState(`${months[0]}-01`);
-  const [rTo, setRTo] = useState(`${months[0]}-${pad2(daysInMonth(months[0]))}`);
+  const [rFrom, setRFrom] = useState(() => new Date(`${months[0]}-01T12:00:00`).toISOString());
+  const [rTo, setRTo] = useState(() => new Date(`${months[0]}-${pad2(daysInMonth(months[0]))}T12:00:00`).toISOString());
   const [addOpen, setAddOpen] = useState(false);
   const [reload, setReload] = useState(0);
   const [receipt, setReceipt] = useState("");
@@ -10010,23 +10013,10 @@ function ExpensesModule({ cab }) {
     .filter((a) => a.total > 0)
     .sort((a, b) => b.total - a.total);
 
-  const byMonth = {};
-  for (const l of lines) {
-    const ym = (l.act?.created_at || "").slice(0, 7);
-    if (!ym) continue;
-    (byMonth[ym] = byMonth[ym] || { total: 0, items: {} });
-    const v = Number(l.qty) * Number(l.unit_cost);
-    byMonth[ym].total += v;
-    const it = byMonth[ym].items[l.item_id] = byMonth[ym].items[l.item_id] || { qty: 0, sum: 0 };
-    it.qty += Number(l.qty); it.sum += v;
-  }
-  const periodItems = (m) => Object.entries(byMonth[m]?.items || {})
-    .map(([id, x]) => ({ name: items[id]?.name || "?", ...x }))
-    .sort((a, b) => b.sum - a.sum);
-
   // Період аналізу: місяць / квартал / довільний діапазон
   const qm = quarterMonths(ymToQuarter(ym));
-  const [pFrom, pTo] = mode === "range" ? [rFrom, rTo]
+  const dayOf = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+  const [pFrom, pTo] = mode === "range" ? [dayOf(rFrom), dayOf(rTo)]
     : mode === "quarter" ? [`${qm[0]}-01`, `${qm[2]}-${pad2(daysInMonth(qm[2]))}`]
       : [`${ym}-01`, `${ym}-${pad2(daysInMonth(ym))}`];
   const inPeriod = (d) => !!d && d >= pFrom && d <= pTo;
@@ -10061,7 +10051,22 @@ function ExpensesModule({ cab }) {
     .sort((a, b) => b.total - a.total);
   const catTotal = categories.reduce((s, c) => s + c.total, 0);
   const shown = categories.filter((c) => c.total > 0);
-  const emptyCats = categories.length - shown.length;
+
+  // суми по ВСІХ категоріях за довільний місяць — для вкладки «Порівняти»
+  const totalsForMonth = (m) => {
+    const a = `${m}-01`;
+    const b = `${m}-${pad2(daysInMonth(m))}`;
+    const inM = (d) => !!d && d >= a && d <= b;
+    const out = {
+      supply: lines.filter((l) => inM((l.act?.created_at || "").slice(0, 10)))
+        .reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost), 0),
+    };
+    for (const c of MANUAL_CATEGORIES) {
+      out[c.key] = manual.filter((r) => r.category === c.key && inM(r.spent_on))
+        .reduce((s, r) => s + Number(r.amount), 0);
+    }
+    return out;
+  };
 
   const removeRow = async (r) => {
     if (!window.confirm(`Видалити витрату «${r.title}» на ${suah(r.amount)}?`)) return;
@@ -10107,16 +10112,19 @@ function ExpensesModule({ cab }) {
             </div>
             {mode === "range" ? (
               <span className="exp-period-range">
-                <input type="date" className="inv-in" value={rFrom} onChange={(e) => setRFrom(e.target.value)} aria-label="Період від" />
+                <DateTimeField value={rFrom} onChange={setRFrom} dateOnly placeholder="Від" />
                 <span>—</span>
-                <input type="date" className="inv-in" value={rTo} onChange={(e) => setRTo(e.target.value)} aria-label="Період до" />
+                <DateTimeField value={rTo} onChange={setRTo} dateOnly placeholder="До" />
               </span>
             ) : (
               <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
                 {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
               </select>
             )}
-            <span className="exp-period-sum">{periodLabel} · <b>{suah(catTotal)}</b></span>
+          </div>
+          <div className="exp-hero">
+            <span className="exp-hero-l">Витрачено за {periodLabel}</span>
+            <b className="exp-hero-v">{suah(catTotal)}</b>
           </div>
           <div className="exp-months">
             {shown.length === 0 && <div className="admin-empty">За цей період витрат немає.</div>}
@@ -10153,8 +10161,6 @@ function ExpensesModule({ cab }) {
                 )}
               </div>
             ))}
-            {emptyCats > 0 && <div className="exp-row"><span className="hint">Решта категорій — порожньо</span><span className="mono hint">0 ₴</span></div>}
-            <div className="exp-row exp-total"><span>Всього за {periodLabel}</span><b>{suah(catTotal)}</b></div>
           </div>
         </>
       ) : view === "articles" ? (
@@ -10185,24 +10191,46 @@ function ExpensesModule({ cab }) {
             <span>vs</span>
             <select className="inv-toolbar-sel" value={pb} onChange={(e) => setPb(e.target.value)}>{months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select>
           </div>
-          <div className="exp-cmp-cols">
-            {[pa, pb].map((pm) => (
-              <div className="exp-col" key={pm}>
-                <div className="exp-col-h">{monthLabel(pm)}<b>{suah(byMonth[pm]?.total || 0)}</b></div>
-                {periodItems(pm).length === 0 ? <p className="hint">немає списань</p> : periodItems(pm).map((r) => (
-                  <div className="exp-row" key={r.name}><span>{r.name}</span><span className="mono">{r.qty} · {suahN(r.sum)} ₴</span></div>
+          {(() => {
+            const ta = totalsForMonth(pa);
+            const tb = totalsForMonth(pb);
+            const sum = (t) => Object.values(t).reduce((s, v) => s + v, 0);
+            const rows = EXPENSE_CATEGORIES
+              .map((c) => ({ ...c, a: ta[c.key] || 0, b: tb[c.key] || 0 }))
+              .filter((r) => r.a || r.b)
+              .sort((x, y) => (y.a + y.b) - (x.a + x.b));
+            const dCell = (a, b) => {
+              const d = b - a;
+              if (!d) return <span className="exp-cmp-d">—</span>;
+              return <span className={`exp-cmp-d ${d > 0 ? "up" : "down"}`}>{d > 0 ? "+" : "−"}{suahN(Math.abs(d))} ₴</span>;
+            };
+            return (
+              <div className="exp-cmp-tab">
+                <div className="exp-cmp-hrow">
+                  <span />
+                  <span>{monthLabel(pa)}</span>
+                  <span>{monthLabel(pb)}</span>
+                  <span>різниця</span>
+                </div>
+                {rows.length === 0 ? <div className="admin-empty">За обидва місяці витрат немає.</div> : rows.map((r) => (
+                  <div className="exp-cmp-row" key={r.key}>
+                    <span className="exp-cmp-n"><i className="exp-dot" style={{ background: r.color }} />{r.label}</span>
+                    <span className="mono">{suahN(r.a)} ₴</span>
+                    <span className="mono">{suahN(r.b)} ₴</span>
+                    {dCell(r.a, r.b)}
+                  </div>
                 ))}
+                <div className="exp-cmp-row exp-cmp-sum">
+                  <span className="exp-cmp-n">Разом</span>
+                  <span className="mono">{suahN(sum(ta))} ₴</span>
+                  <span className="mono">{suahN(sum(tb))} ₴</span>
+                  {dCell(sum(ta), sum(tb))}
+                </div>
               </div>
-            ))}
-          </div>
+            );
+          })()}
         </div>
       ) : null}
-      <p className="hint" style={{ marginTop: 14 }}>
-        «Витрати» — за обраний період у розрізі категорій. «Хоз-забезпечення» тягнеться зі складських актів списання
-        (статті, що йдуть у витрати), за собівартістю на момент списання — його не вносять руками. Решта категорій —
-        те, що магазин, ТМ або керівник вніс кнопкою «Витрата». «За статтями» — усі списання складу за всіма статтями.
-      </p>
-
       {addOpen && (
         <ExpenseCreateModal
           salons={own ? scopeSalons.filter((s) => s.key === own) : scopeSalons}
@@ -13751,9 +13779,20 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .exp-period-seg button{height:28px;padding:0 12px;border:none;border-radius:var(--radius-sm);background:none;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;}
 .exp-period-seg button.on{background:var(--surface-sink);color:var(--ink);font-weight:600;}
 .exp-period-range{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);}
-.exp-period-range .inv-in{width:150px;}
-.exp-period-sum{margin-left:auto;font-size:12.5px;color:var(--muted);}
-.exp-period-sum b{font-family:'IBM Plex Mono',monospace;color:var(--ink);}
+.exp-hero{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:16px 18px;margin-bottom:12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);}
+.exp-hero-l{font-size:12.5px;color:var(--muted);}
+.exp-hero-v{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:28px;font-weight:600;line-height:1;color:var(--gold);letter-spacing:-.01em;}
+.exp-cmp-tab{display:flex;flex-direction:column;}
+.exp-cmp-hrow,.exp-cmp-row{display:grid;grid-template-columns:1fr 110px 110px 120px;gap:10px;align-items:center;padding:9px 14px;}
+.exp-cmp-hrow{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+.exp-cmp-hrow span:not(:first-child){text-align:right;}
+.exp-cmp-row{border-top:1px solid var(--line);font-size:13px;color:var(--ink-soft);}
+.exp-cmp-row .mono{font-family:'IBM Plex Mono',monospace;text-align:right;color:var(--ink);}
+.exp-cmp-n{display:flex;align-items:center;gap:9px;color:var(--ink);}
+.exp-cmp-d{text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--muted);}
+.exp-cmp-d.up{color:var(--negative-bright);}
+.exp-cmp-d.down{color:var(--positive-bright);}
+.exp-cmp-sum{border-top:1px solid var(--line-strong);font-weight:600;background:var(--surface-alt);border-radius:0 0 var(--radius-md) var(--radius-md);}
 .exp-entry{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:12.5px;color:var(--ink-soft);}
 .exp-entry:last-child{border-bottom:none;}
 .exp-entry-d{width:78px;flex-shrink:0;color:var(--muted);font-size:11.5px;}
@@ -13761,8 +13800,8 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .exp-entry-a{margin-left:auto;font-family:'IBM Plex Mono',monospace;color:var(--ink);}
 .exp-entry-x{width:24px;height:24px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:var(--radius-sm);background:none;color:var(--faint);cursor:pointer;}
 .exp-entry-x:hover{background:rgba(160,58,42,.12);color:var(--negative-bright);}
-.exp-modal{max-width:560px;}
-.exp-f{display:flex;flex-direction:column;gap:7px;margin-bottom:14px;}
+.exp-modal{width:min(560px,100%);}
+.exp-f{display:flex;flex-direction:column;gap:7px;}
 .exp-f>span{font-size:11.5px;color:var(--muted);}
 .exp-f-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .exp-cats-pick{display:flex;flex-wrap:wrap;gap:7px;}
