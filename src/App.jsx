@@ -9081,6 +9081,11 @@ function EzSaleForm({ salonKey, ym: ymProp, cabKey, sale, onClose, onCreated }) 
     transfer: sale?.payment_breakdown?.transfer || "", installment: sale?.payment_breakdown?.installment || "",
   });
   const [npDeliveryPaid, setNpDeliveryPaid] = useState(sale?.np_delivery_paid || false);
+  // дата самого продажу; місяць нарахування (ym) підтягується з неї, але його
+  // можна лишити іншим — для внесення заднім числом у вже закритий місяць
+  const [soldOn, setSoldOn] = useState(() => (sale?.sold_on
+    ? new Date(`${sale.sold_on}T12:00:00`).toISOString()
+    : new Date().toISOString()));
   const [busy, setBusy] = useState(false);
 
   const combined = paymentMethod === "combined";
@@ -9093,7 +9098,11 @@ function EzSaleForm({ salonKey, ym: ymProp, cabKey, sale, onClose, onCreated }) 
   const submit = async () => {
     if (!valid) return;
     setBusy(true);
-    const core = { nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown: breakdown, npDeliveryPaid };
+    const d = new Date(soldOn);
+    const core = {
+      nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown: breakdown, npDeliveryPaid,
+      soldOn: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+    };
     try {
       if (editing) {
         await updateEzSale(sale.id, core);
@@ -9118,8 +9127,19 @@ function EzSaleForm({ salonKey, ym: ymProp, cabKey, sale, onClose, onCreated }) 
           <p className="hint" style={{ padding: "0 20px", color: "var(--gold-bright)" }}>Продаж буде враховано в ЗП за {monthLabel(ym).toLowerCase()}, а не за поточний місяць.</p>
         )}
         <div className="modal-body">
+          <label className="over-field" style={{ maxWidth: "100%" }}><span>Дата продажу</span>
+            <DateTimeField value={soldOn} dateOnly placeholder="Оберіть дату"
+              onChange={(v) => {
+                setSoldOn(v);
+                if (!editing && v) {
+                  const d = new Date(v);
+                  const m = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+                  if (months.includes(m)) setYm(m);
+                }
+              }} />
+          </label>
           {!editing && (
-            <label className="over-field" style={{ maxWidth: "100%" }}><span>Місяць продажу</span>
+            <label className="over-field" style={{ maxWidth: "100%" }}><span>Місяць нарахування</span>
               <select value={ym} onChange={(e) => setYm(e.target.value)}>
                 {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
               </select>
@@ -9271,6 +9291,7 @@ function EzSalonSalesModal({ salon, ym, sales, onClose }) {
                     <div className="ez-card-main">
                       <div className="ez-card-title">{s.nomenclature || "Без номенклатури"}</div>
                       <div className="ez-card-sub">
+                        {s.sold_on && <span className="ez-card-date">{new Date(`${s.sold_on}T12:00:00`).toLocaleDateString("uk-UA")}</span>}
                         {s.article && <span>{s.article}</span>}
                         {s.order_no && <span>№ {s.order_no}</span>}
                         <span>{EZ_PAYMENT_METHODS[s.payment_method]}</span>
@@ -9459,6 +9480,7 @@ function EzSalesModule({ cab }) {
                 <div className="ez-card-main">
                   <div className="ez-card-title">{s.nomenclature || "Без номенклатури"}</div>
                   <div className="ez-card-sub">
+                    {s.sold_on && <span className="ez-card-date">{new Date(`${s.sold_on}T12:00:00`).toLocaleDateString("uk-UA")}</span>}
                     {s.article && <span>{s.article}</span>}
                     {s.order_no && <span>№ {s.order_no}</span>}
                     <span>{EZ_PAYMENT_METHODS[s.payment_method]}</span>
@@ -12808,6 +12830,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .ez-card-main{flex:1;min-width:0;}
 .ez-card-title{font-weight:600;font-size:13.5px;color:var(--ink);}
 .ez-card-sub{display:flex;gap:8px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:2px;}
+.ez-card-date{font-family:'IBM Plex Mono',monospace;color:var(--gold-bright);}
 .ez-card-nums{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;text-align:right;}
 .ez-card-amt{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;color:var(--ink);}
 .ez-card-team{font-size:11.5px;color:var(--muted);}

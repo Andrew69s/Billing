@@ -17,7 +17,7 @@ export async function listEzSales({ salonKey, salonKeys, ym } = {}) {
 
 /* paymentBreakdown — {cash,card,transfer,installment} при paymentMethod==="combined";
    сума продажу тоді рахується як сума всіх непорожніх складових. */
-function ezCoreFields({ nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown, npDeliveryPaid }) {
+function ezCoreFields({ nomenclature, article, orderNo, amount, paymentMethod, paymentBreakdown, npDeliveryPaid, soldOn }) {
   const combined = paymentMethod === "combined";
   const breakdown = combined
     ? Object.fromEntries(Object.entries(paymentBreakdown || {}).map(([k, v]) => [k, Number(v) || 0]).filter(([, v]) => v > 0))
@@ -27,6 +27,7 @@ function ezCoreFields({ nomenclature, article, orderNo, amount, paymentMethod, p
     nomenclature: (nomenclature || "").trim(), article: (article || "").trim(), order_no: (orderNo || "").trim(),
     amount: totalAmount, payment_method: paymentMethod, payment_breakdown: breakdown,
     np_delivery_paid: !!npDeliveryPaid,
+    ...(soldOn ? { sold_on: soldOn } : {}),
   };
 }
 
