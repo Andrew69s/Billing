@@ -38,7 +38,7 @@ import {
 import { TASK_STATUS, listTasks, createTasks, setTaskStatus, deleteTask, deleteTaskBatch, groupTasks, markSeen, markTaskAck, subscribeTasks } from "./lib/tasks.js";
 import {
   INVOICE_STATUS, INVOICE_FLOW, nextStatus, deriveVat,
-  listInvoices, createInvoice, createManualInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice, getInvoice,
+  listInvoices, createInvoice, createManualInvoice, setInvoiceStatus, updateInvoice, deleteInvoice, subscribeInvoices, extractInvoice, getInvoice, loadInvoiceShot,
   listCounterparties,
 } from "./lib/invoices.js";
 import {
@@ -5097,6 +5097,14 @@ function InvoiceCreateModal({ cab, inv, onClose, onCreated }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // при редагуванні скрін у списку не приходить — дістаємо його окремо
+  useEffect(() => {
+    if (!editing || !inv?.has_shot) return undefined;
+    let alive = true;
+    loadInvoiceShot(inv.id).then((s) => { if (alive && s) setShot(s); }).catch(() => {});
+    return () => { alive = false; };
+  }, [editing, inv?.id, inv?.has_shot]);
+
   const onImage = async (url) => {
     setShot(url); setAi("run"); setErr("");
     try {
@@ -5210,8 +5218,22 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, onEdit,
   const [cmt, setCmt] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [shotBusy, setShotBusy] = useState(false);
   const owner = inv.created_by === cab.key;
   const nx = nextStatus(inv.status);
+
+  // скрін вантажимо лише коли його справді відкривають — у списку його немає
+  const openShot = async () => {
+    if (shotBusy) return;
+    setShotBusy(true);
+    try {
+      const s = await loadInvoiceShot(inv.id);
+      if (s) onPreview(s);
+      else pushToast({ title: "Скрін уже видалено" });
+    } catch (e) {
+      pushToast({ title: "Не вдалося відкрити скрін", body: String(e.message || e) });
+    } finally { setShotBusy(false); }
+  };
   const prevIdx = INVOICE_FLOW.indexOf(inv.status) - 1;
   const prev = prevIdx >= 0 ? INVOICE_FLOW[prevIdx] : null;
   const active = inv.status !== "cancelled" && inv.status !== "documented";
@@ -5282,8 +5304,8 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, onEdit,
             ? <span className="badge badge-off inv-badge inv-badge-over">прострочено {invDaysOld(inv)} дн.</span>
             : <span className={`badge ${INV_TONE[inv.status]} inv-badge`}>{INVOICE_STATUS[inv.status]}</span>}
         </button>
-        {inv.screenshot && (
-          <button className="inv-shot-btn" title="Відкрити скрін рахунку" onClick={() => onPreview(inv.screenshot)}>
+        {inv.has_shot && (
+          <button className="inv-shot-btn" title="Відкрити скрін рахунку" onClick={openShot} disabled={shotBusy}>
             <ImageIcon size={15} />
           </button>
         )}
@@ -5312,10 +5334,10 @@ function InvoiceCard({ inv, cab, canManage, medok, onPreview, onChanged, onEdit,
             </div>
           )}
 
-          {inv.screenshot && (
-            <button className="inv-thumb-btn" onClick={() => onPreview(inv.screenshot)}>
-              <img className="inv-thumb" src={inv.screenshot} alt="скрін рахунку" />
-              <span className="inv-thumb-hint"><ImageIcon size={13} /> Відкрити рахунок</span>
+          {inv.has_shot && (
+            <button className="inv-thumb-btn inv-thumb-lazy" onClick={openShot} disabled={shotBusy}>
+              <ImageIcon size={18} />
+              <span className="inv-thumb-hint">{shotBusy ? "Завантажуємо…" : "Відкрити скрін рахунку"}</span>
             </button>
           )}
           {inv.comment && <p className="task-comment">💬 {inv.comment}</p>}
@@ -5793,7 +5815,10 @@ function InvoiceDocsControl({ rows, cab, onChanged, onPreview }) {
                     <div className="dc-name">{inv.counterparty || "Без назви"}</div>
                     <div className="dc-sub">
                       {cabName(inv.created_by)}{inv.invoice_no ? ` · рахунок № ${inv.invoice_no}` : ""} · {inv.manual ? `від ${ymdUa(inv.invoice_date)}` : `пропечатано ${fmtDate(docsStamp(inv))}`}
-                      {inv.screenshot && <> · <button className="wh-link" onClick={() => onPreview(inv.screenshot)}>рахунок</button></>}
+                      {inv.has_shot && <> · <button className="wh-link" onClick={async () => {
+                        try { const s = await loadInvoiceShot(inv.id); if (s) onPreview(s); else pushToast({ title: "Скрін уже видалено" }); }
+                        catch (e) { pushToast({ title: "Не вдалося відкрити скрін", body: String(e.message || e) }); }
+                      }}>рахунок</button></>}
                     </div>
                     {inv.comment && inv.manual && <div className="dc-sub">{inv.comment}</div>}
                   </div>
@@ -13231,6 +13256,10 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .inv-item-qty{text-align:right;font-family:'IBM Plex Mono',monospace;}
 .inv-thumb-btn{display:inline-block;max-width:100%;border:none;background:none;padding:0;cursor:zoom-in;position:relative;margin-top:2px;}
 .inv-thumb{max-width:100%;max-height:240px;border:1px solid var(--line);border-radius:var(--radius-sm);display:block;}
+.inv-thumb-lazy{display:flex;align-items:center;gap:9px;padding:11px 14px;border:1px dashed var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);color:var(--ink-soft);font-family:inherit;font-size:12.5px;cursor:pointer;}
+.inv-thumb-lazy:hover{border-color:var(--gold);color:var(--ink);}
+.inv-thumb-lazy svg{color:var(--gold);}
+.inv-thumb-lazy .inv-thumb-hint{position:static;padding:0;background:none;}
 .inv-thumb-hint{position:absolute;left:8px;bottom:8px;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;background:rgba(20,25,32,.82);color:#f4f1ea;padding:3px 8px;border-radius:999px;opacity:0;transition:opacity .15s var(--ease);}
 .inv-thumb-btn:hover .inv-thumb-hint{opacity:1;}
 .inv-items{border:1px solid var(--line-strong);border-radius:var(--radius-sm);overflow:hidden;}

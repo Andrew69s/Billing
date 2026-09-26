@@ -14,13 +14,27 @@ export const nextStatus = (s) => {
   return i >= 0 && i < INVOICE_FLOW.length - 1 ? INVOICE_FLOW[i + 1] : null;
 };
 
+/* УВАГА: поле screenshot тут свідомо НЕ вибирається. Скрін з 1С важить близько
+   127 КБ у base64, і `select("*")` тягнув усі скріни при кожному відкритті
+   списку — це був головний пожирач egress. Замість нього беремо has_shot
+   (генерована колонка), а саме фото вантажимо лише коли його відкривають —
+   через loadInvoiceShot(). */
+const INVOICE_LIST_COLS = "id, created_by, counterparty, issuer, vat, items, amount, invoice_no, status, comment, history, created_at, updated_at, has_shot";
+
 export async function listInvoices() {
   const { data, error } = await supabase
     .from("invoices")
-    .select("*")
+    .select(INVOICE_LIST_COLS)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data || [];
+}
+
+/* Скрін конкретного рахунку — на вимогу, коли користувач його відкриває. */
+export async function loadInvoiceShot(id) {
+  const { data, error } = await supabase.from("invoices").select("screenshot").eq("id", id).single();
+  if (error) throw error;
+  return data?.screenshot || "";
 }
 
 export async function createInvoice({ counterparty, issuer, vat, items, amount, invoice_no, screenshot, comment, created_by }) {
