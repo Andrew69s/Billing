@@ -84,6 +84,10 @@ import {
   subscribeSupply,
 } from "./lib/supply.js";
 import {
+  EXPENSE_CATEGORIES, MANUAL_CATEGORIES, catOf,
+  listExpenses, createExpense, deleteExpense, uploadReceipt, receiptUrl,
+} from "./lib/expenses.js";
+import {
   listTrainings, createTraining, updateTraining, deleteTraining,
   listTrainingResults, upsertTrainingResult, extractTrainingScreenshot,
   subscribeTrainings, daysToDeadline, salonMonthAvg,
@@ -4695,7 +4699,7 @@ function AssigneePicker({ cab, selected, setSelected }) {
 
 /* Сучасний вибір дати+часу — власний календар, однаковий у всіх кабінетах.
    value: ISO-таймстамп або ""; onChange(iso|""). */
-function DateTimeField({ value, onChange }) {
+function DateTimeField({ value, onChange, dateOnly, placeholder }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState({ left: 0 });
   const btnRef = React.useRef(null);
@@ -4722,7 +4726,7 @@ function DateTimeField({ value, onChange }) {
     setOpen(true);
   };
   const emit = (y, mo, d, hh, mm) => onChange(new Date(y, mo, d, hh, mm, 0, 0).toISOString());
-  const pickDay = (d) => emit(view.getFullYear(), view.getMonth(), d, h, m);
+  const pickDay = (d) => { emit(view.getFullYear(), view.getMonth(), d, h, m); if (dateOnly) setOpen(false); };
   const pickTime = (hh, mm) => {
     const base = sel || new Date();
     emit(base.getFullYear(), base.getMonth(), base.getDate(), hh, mm);
@@ -4740,7 +4744,7 @@ function DateTimeField({ value, onChange }) {
     <div className="dtf">
       <button type="button" ref={btnRef} className={`dtf-trigger ${value ? "has" : ""}`} onClick={toggle}>
         <Calendar size={14} />
-        <span>{value ? fmtDeadline(value) : "Без дедлайну"}</span>
+        <span>{value ? (dateOnly ? new Date(value).toLocaleDateString("uk-UA") : fmtDeadline(value)) : (placeholder || "Без дедлайну")}</span>
         {value && <span className="dtf-clear" onClick={(e) => { e.stopPropagation(); onChange(""); setOpen(false); }}><X size={13} /></span>}
       </button>
       {open && createPortal(
@@ -4748,9 +4752,19 @@ function DateTimeField({ value, onChange }) {
           <div className="dtf-backdrop" onClick={() => setOpen(false)} />
           <div className="dtf-pop" style={{ top: pos.top, bottom: pos.bottom, left: pos.left }}>
             <div className="dtf-quick">
-              <button type="button" onClick={() => quick(0, 18)}>Сьогодні</button>
-              <button type="button" onClick={() => quick(1, 10)}>Завтра</button>
-              <button type="button" onClick={() => quick(7, 10)}>+7 днів</button>
+              {dateOnly ? (
+                <>
+                  <button type="button" onClick={() => quick(0, 12)}>Сьогодні</button>
+                  <button type="button" onClick={() => quick(-1, 12)}>Вчора</button>
+                  <button type="button" onClick={() => quick(-7, 12)}>−7 днів</button>
+                </>
+              ) : (
+                <>
+                  <button type="button" onClick={() => quick(0, 18)}>Сьогодні</button>
+                  <button type="button" onClick={() => quick(1, 10)}>Завтра</button>
+                  <button type="button" onClick={() => quick(7, 10)}>+7 днів</button>
+                </>
+              )}
             </div>
             <div className="dtf-calhead">
               <button type="button" onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}><ChevronLeft size={16} /></button>
@@ -4765,7 +4779,7 @@ function DateTimeField({ value, onChange }) {
                   onClick={() => pickDay(d)}>{d}</button>
               ))}
             </div>
-            <div className="dtf-time">
+            {!dateOnly && <div className="dtf-time">
               <Clock size={13} />
               <select value={h} onChange={(e) => pickTime(Number(e.target.value), m)}>
                 {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{pad2(i)}</option>)}
@@ -4775,7 +4789,7 @@ function DateTimeField({ value, onChange }) {
                 {[0, 15, 30, 45].map((mm) => <option key={mm} value={mm}>{pad2(mm)}</option>)}
               </select>
               <button type="button" className="dtf-ok" onClick={() => setOpen(false)}>Готово</button>
-            </div>
+            </div>}
           </div>
         </>,
         document.body,
@@ -9820,6 +9834,117 @@ function BonusModule({ cab }) {
 }
 
 /* ==================== ВИТРАТИ ПО СМ ==================== */
+/* Внесення витрати вручну. Доступна СМ (свій магазин), ТМ (своя територія)
+   і керівнику — тому магазин обирається, якщо в області видимості їх кілька. */
+function ExpenseCreateModal({ salons, defaultSalon, onClose, onSaved }) {
+  const [salonKey, setSalonKey] = useState(defaultSalon || salons[0]?.key || "");
+  const [category, setCategory] = useState(MANUAL_CATEGORIES[0].key);
+  const [title, setTitle] = useState("");
+  const [amount, setAmount] = useState(0);
+  const [when, setWhen] = useState(() => new Date().toISOString());
+  const [file, setFile] = useState(null);
+  const [shot, setShot] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const fileRef = React.useRef(null);
+
+  const pickFile = async (f) => {
+    if (!f) return;
+    setFile(f);
+    try { setShot(await resizeImage(f)); } catch { setShot(""); }
+  };
+
+  const save = async () => {
+    setErr(""); setBusy(true);
+    try {
+      let receiptPath = "";
+      if (file) receiptPath = await uploadReceipt(salonKey, file);
+      await createExpense({
+        salonKey, category, title, amount,
+        spentOn: when.slice(0, 10),
+        receiptPath,
+      });
+      pushToast({ title: "Витрату внесено", body: `${catOf(category).label} · ${suah(amount)}` });
+      onSaved();
+      onClose();
+    } catch (e) {
+      setErr(String(e.message || e));
+      setBusy(false);
+    }
+  };
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal exp-modal" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose} aria-label="Закрити"><X size={18} /></button>
+        <h3>Нова витрата</h3>
+
+        {salons.length > 1 && (
+          <label className="exp-f">
+            <span>Магазин</span>
+            <select className="inv-toolbar-sel" value={salonKey} onChange={(e) => setSalonKey(e.target.value)}>
+              {salons.map((s) => <option key={s.key} value={s.key}>{salonShortName(s)}</option>)}
+            </select>
+          </label>
+        )}
+
+        <div className="exp-f">
+          <span>Категорія</span>
+          <div className="exp-cats-pick">
+            {MANUAL_CATEGORIES.map((c) => (
+              <button type="button" key={c.key} className={`exp-cat-chip ${category === c.key ? "on" : ""}`}
+                onClick={() => setCategory(c.key)}>
+                <i style={{ background: c.color }} />{c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="exp-f">
+          <span>Що саме</span>
+          <input className="inv-in" value={title} onChange={(e) => setTitle(e.target.value)}
+            placeholder="Напр.: інтернет за вересень, Київстар" />
+        </label>
+
+        <div className="exp-f-row">
+          <label className="exp-f">
+            <span>Сума, ₴</span>
+            <NumInput className="inv-in" value={amount} onChange={setAmount} aria-label="Сума витрати" />
+          </label>
+          <label className="exp-f">
+            <span>Дата витрати</span>
+            <DateTimeField value={when} onChange={setWhen} dateOnly placeholder="Оберіть дату" />
+          </label>
+        </div>
+
+        <div className="exp-f">
+          <span>Чек <em className="hint">— необов'язково</em></span>
+          <div className="exp-shot">
+            <div className="exp-shot-box">
+              {shot ? <img src={shot} alt="чек" /> : <Camera size={22} />}
+            </div>
+            <div className="exp-shot-act">
+              <button type="button" className="btn-secondary small" onClick={() => fileRef.current?.click()}>
+                <Camera size={13} /> {shot ? "Змінити фото" : "Додати фото"}
+              </button>
+              {shot && <button type="button" className="wh-link" onClick={() => { setFile(null); setShot(""); }}>прибрати</button>}
+              <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => pickFile(e.target.files?.[0])} />
+            </div>
+          </div>
+        </div>
+
+        {err && <p className="hint" style={{ color: "var(--negative-bright)" }}>{err}</p>}
+
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onClose} disabled={busy}>Скасувати</button>
+          <button className="btn-primary" onClick={save} disabled={busy}>{busy ? "Зберігаємо…" : "Зберегти витрату"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ExpensesModule({ cab }) {
   const own = cab.type === "sm" ? cab.key : null;
   const scopeSalons = cab.type === "tm" ? salonsOfTm(cab.tmKey || cab.key) : (own ? [salonByKey(own)].filter(Boolean) : SALONS);
@@ -9833,6 +9958,13 @@ function ExpensesModule({ cab }) {
   const [ym, setYm] = useState(months[0]);
   const [pa, setPa] = useState(months[1]);
   const [pb, setPb] = useState(months[0]);
+  const [manual, setManual] = useState(null);        // витрати, внесені вручну
+  const [mode, setMode] = useState("month");         // month | quarter | range
+  const [rFrom, setRFrom] = useState(`${months[0]}-01`);
+  const [rTo, setRTo] = useState(`${months[0]}-${pad2(daysInMonth(months[0]))}`);
+  const [addOpen, setAddOpen] = useState(false);
+  const [reload, setReload] = useState(0);
+  const [receipt, setReceipt] = useState("");
 
   useEffect(() => {
     listItems({ includeArchived: true }).then((it) => setItems(Object.fromEntries(it.map((i) => [i.id, i]))));
@@ -9848,8 +9980,15 @@ function ExpensesModule({ cab }) {
       .then(setAllLines).catch(() => setAllLines([]));
     // eslint-disable-next-line
   }, [pick]);
+  useEffect(() => {
+    const from = `${months[months.length - 1]}-01`;
+    listExpenses({ from, salonKey: pick === "all" ? undefined : pick })
+      .then((rows) => (pick === "all" ? rows.filter((r) => scopeSalons.some((s) => s.key === r.salon_key)) : rows))
+      .then(setManual).catch(() => setManual([]));
+    // eslint-disable-next-line
+  }, [pick, reload]);
 
-  if (allLines === null) return <div className="loading">Завантаження…</div>;
+  if (allLines === null || manual === null) return <div className="loading">Завантаження…</div>;
 
   const expenseKeys = new Set(articles.filter((a) => a.expense).map((a) => a.key));
   const lines = allLines.filter((l) => expenseKeys.has(l.act?.article || "store"));
@@ -9885,15 +10024,66 @@ function ExpensesModule({ cab }) {
     .map(([id, x]) => ({ name: items[id]?.name || "?", ...x }))
     .sort((a, b) => b.sum - a.sum);
 
-  // категорії витрат за обраний місяць (поки одна — «Хоз-забезпечення»; далі додаватимемо)
-  const categories = [
-    { key: "supply", label: "Хоз-забезпечення", total: byMonth[ym]?.total || 0, items: periodItems(ym) },
-  ];
+  // Період аналізу: місяць / квартал / довільний діапазон
+  const qm = quarterMonths(ymToQuarter(ym));
+  const [pFrom, pTo] = mode === "range" ? [rFrom, rTo]
+    : mode === "quarter" ? [`${qm[0]}-01`, `${qm[2]}-${pad2(daysInMonth(qm[2]))}`]
+      : [`${ym}-01`, `${ym}-${pad2(daysInMonth(ym))}`];
+  const inPeriod = (d) => !!d && d >= pFrom && d <= pTo;
+  const fmtD = (d) => (d ? new Date(d).toLocaleDateString("uk-UA") : "");
+  const periodLabel = mode === "range" ? `${fmtD(pFrom)} — ${fmtD(pTo)}`
+    : mode === "quarter" ? `${monthLabel(qm[0])} — ${monthLabel(qm[2])}` : monthLabel(ym);
+
+  // Джерело 1 — склад: фактичний розхід за статтями, що йдуть у витрати магазину
+  const supplyLines = lines.filter((l) => inPeriod((l.act?.created_at || "").slice(0, 10)));
+  const supplyTotal = supplyLines.reduce((s, l) => s + Number(l.qty) * Number(l.unit_cost), 0);
+  const supplyItems = (() => {
+    const by = {};
+    for (const l of supplyLines) {
+      const it = by[l.item_id] = by[l.item_id] || { qty: 0, sum: 0 };
+      it.qty += Number(l.qty);
+      it.sum += Number(l.qty) * Number(l.unit_cost);
+    }
+    return Object.entries(by).map(([id, x]) => ({ name: items[id]?.name || "?", ...x })).sort((a, b) => b.sum - a.sum);
+  })();
+
+  // Джерело 2 — внесене вручну магазином, ТМ або керівником
+  const manualInP = manual.filter((r) => inPeriod(r.spent_on));
+  const categories = EXPENSE_CATEGORIES
+    .map((c) => (c.key === "supply"
+      ? { ...c, total: supplyTotal, items: supplyItems, rows: [] }
+      : {
+        ...c,
+        total: manualInP.filter((r) => r.category === c.key).reduce((s, r) => s + Number(r.amount), 0),
+        items: [],
+        rows: manualInP.filter((r) => r.category === c.key).sort((a, b) => (a.spent_on < b.spent_on ? 1 : -1)),
+      }))
+    .sort((a, b) => b.total - a.total);
   const catTotal = categories.reduce((s, c) => s + c.total, 0);
+  const shown = categories.filter((c) => c.total > 0);
+  const emptyCats = categories.length - shown.length;
+
+  const removeRow = async (r) => {
+    if (!window.confirm(`Видалити витрату «${r.title}» на ${suah(r.amount)}?`)) return;
+    try {
+      await deleteExpense(r.id, r.receipt_path);
+      pushToast({ title: "Витрату видалено" });
+      setReload((v) => v + 1);
+    } catch (e) { pushToast({ title: "Не вдалося видалити", body: String(e.message || e) }); }
+  };
+  const openReceipt = async (r) => {
+    try { setReceipt(await receiptUrl(r.receipt_path)); }
+    catch { pushToast({ title: "Не вдалося відкрити чек" }); }
+  };
 
   return (
     <div className="tasks-mod">
-      <div className="tasks-head"><h3 className="ov-h">Витрати по СМ</h3></div>
+      <div className="tasks-head">
+        <h3 className="ov-h">Витрати по СМ</h3>
+        <button className="btn-primary small" onClick={() => setAddOpen(true)}>
+          <Plus size={14} /> {own ? "Витрата" : "Витрата за магазин"}
+        </button>
+      </div>
 
       {scopeSalons.length > 1 && (
         <div className="tm-salon-chips" style={{ marginBottom: 12 }}>
@@ -9909,29 +10099,62 @@ function ExpensesModule({ cab }) {
 
       {view === "cats" ? (
         <>
-          <div className="exp-cmp-pick" style={{ marginBottom: 10 }}>
-            <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
-              {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
-            </select>
+          <div className="exp-period">
+            <div className="exp-period-seg">
+              {[["month", "Місяць"], ["quarter", "Квартал"], ["range", "Період"]].map(([k, t]) => (
+                <button key={k} type="button" className={mode === k ? "on" : ""} onClick={() => setMode(k)}>{t}</button>
+              ))}
+            </div>
+            {mode === "range" ? (
+              <span className="exp-period-range">
+                <input type="date" className="inv-in" value={rFrom} onChange={(e) => setRFrom(e.target.value)} aria-label="Період від" />
+                <span>—</span>
+                <input type="date" className="inv-in" value={rTo} onChange={(e) => setRTo(e.target.value)} aria-label="Період до" />
+              </span>
+            ) : (
+              <select className="inv-toolbar-sel" value={ym} onChange={(e) => setYm(e.target.value)}>
+                {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+              </select>
+            )}
+            <span className="exp-period-sum">{periodLabel} · <b>{suah(catTotal)}</b></span>
           </div>
           <div className="exp-months">
-            {categories.map((c) => (
+            {shown.length === 0 && <div className="admin-empty">За цей період витрат немає.</div>}
+            {shown.map((c) => (
               <div className="exp-month" key={c.key}>
                 <button className="exp-month-h" onClick={() => setOpenM(openM === c.key ? null : c.key)}>
-                  <span>{c.label}</span>
+                  <i className="exp-dot" style={{ background: c.color }} />
+                  <span>{c.label}{c.auto && <em className="exp-art-tag">зі складу</em>}</span>
+                  <i className="exp-share"><i style={{ width: `${catTotal ? Math.round((c.total / catTotal) * 100) : 0}%`, background: c.color }} /></i>
                   <b>{suah(c.total)}</b>
                   <ChevronRight size={15} style={{ transform: openM === c.key ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
                 </button>
                 {openM === c.key && (
                   <div className="exp-month-b">
-                    {c.items.length === 0 ? <p className="hint">За цей місяць порожньо.</p> : c.items.map((r) => (
-                      <div className="exp-row" key={r.name}><span>{r.name}</span><span className="mono">{r.qty} · {suahN(r.sum)} ₴</span></div>
+                    {c.auto ? (
+                      c.items.length === 0 ? <p className="hint">За цей період списань немає.</p> : c.items.map((r) => (
+                        <div className="exp-row" key={r.name}><span>{r.name}</span><span className="mono">{r.qty} · {suahN(r.sum)} ₴</span></div>
+                      ))
+                    ) : c.rows.length === 0 ? <p className="hint">За цей період порожньо.</p> : c.rows.map((r) => (
+                      <div className="exp-entry" key={r.id}>
+                        <span className="exp-entry-d mono">{fmtD(r.spent_on)}</span>
+                        <span className="exp-entry-t">
+                          {r.title}
+                          {pick === "all" && <em className="hint"> · {salonShortName(salonByKey(r.salon_key)) || r.salon_key}</em>}
+                        </span>
+                        {r.receipt_path
+                          ? <button type="button" className="wh-link" onClick={() => openReceipt(r)}>чек</button>
+                          : <span className="hint">без чека</span>}
+                        <span className="mono exp-entry-a">{suahN(r.amount)} ₴</span>
+                        <button type="button" className="exp-entry-x" onClick={() => removeRow(r)} aria-label="Видалити витрату"><X size={13} /></button>
+                      </div>
                     ))}
                   </div>
                 )}
               </div>
             ))}
-            <div className="exp-row exp-total"><span>Всього за {monthLabel(ym)}</span><b>{suah(catTotal)}</b></div>
+            {emptyCats > 0 && <div className="exp-row"><span className="hint">Решта категорій — порожньо</span><span className="mono hint">0 ₴</span></div>}
+            <div className="exp-row exp-total"><span>Всього за {periodLabel}</span><b>{suah(catTotal)}</b></div>
           </div>
         </>
       ) : view === "articles" ? (
@@ -9975,9 +10198,20 @@ function ExpensesModule({ cab }) {
         </div>
       ) : null}
       <p className="hint" style={{ marginTop: 14 }}>
-        «Витрати» — по обраному місяцю за категоріями. «Хоз-забезпечення» тягнеться зі складських актів списання
-        (статті, що йдуть у витрати), за собівартістю на момент списання. «За статтями» — усі списання складу за всіма статтями.
+        «Витрати» — за обраний період у розрізі категорій. «Хоз-забезпечення» тягнеться зі складських актів списання
+        (статті, що йдуть у витрати), за собівартістю на момент списання — його не вносять руками. Решта категорій —
+        те, що магазин, ТМ або керівник вніс кнопкою «Витрата». «За статтями» — усі списання складу за всіма статтями.
       </p>
+
+      {addOpen && (
+        <ExpenseCreateModal
+          salons={own ? scopeSalons.filter((s) => s.key === own) : scopeSalons}
+          defaultSalon={own || (pick !== "all" ? pick : scopeSalons[0]?.key)}
+          onClose={() => setAddOpen(false)}
+          onSaved={() => setReload((v) => v + 1)}
+        />
+      )}
+      {receipt && <ImageModal src={receipt} onClose={() => setReceipt("")} />}
     </div>
   );
 }
@@ -13508,6 +13742,37 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .exp-total{margin-top:6px;padding:10px 15px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);font-size:13px;font-weight:600;color:var(--ink);}
 .exp-total b{font-family:'IBM Plex Mono',monospace;}
 .exp-row .mono{font-family:'IBM Plex Mono',monospace;color:var(--muted);}
+.exp-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.exp-share{flex-grow:1;height:5px;border-radius:3px;background:var(--surface-sink);overflow:hidden;min-width:40px;}
+.exp-share i{display:block;height:5px;border-radius:3px;}
+.exp-month-h b{margin-left:0;}
+.exp-period{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+.exp-period-seg{display:flex;gap:3px;padding:3px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
+.exp-period-seg button{height:28px;padding:0 12px;border:none;border-radius:var(--radius-sm);background:none;font-family:inherit;font-size:12px;color:var(--muted);cursor:pointer;}
+.exp-period-seg button.on{background:var(--surface-sink);color:var(--ink);font-weight:600;}
+.exp-period-range{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);}
+.exp-period-range .inv-in{width:150px;}
+.exp-period-sum{margin-left:auto;font-size:12.5px;color:var(--muted);}
+.exp-period-sum b{font-family:'IBM Plex Mono',monospace;color:var(--ink);}
+.exp-entry{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:12.5px;color:var(--ink-soft);}
+.exp-entry:last-child{border-bottom:none;}
+.exp-entry-d{width:78px;flex-shrink:0;color:var(--muted);font-size:11.5px;}
+.exp-entry-t{flex-grow:1;min-width:0;}
+.exp-entry-a{margin-left:auto;font-family:'IBM Plex Mono',monospace;color:var(--ink);}
+.exp-entry-x{width:24px;height:24px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:var(--radius-sm);background:none;color:var(--faint);cursor:pointer;}
+.exp-entry-x:hover{background:rgba(160,58,42,.12);color:var(--negative-bright);}
+.exp-modal{max-width:560px;}
+.exp-f{display:flex;flex-direction:column;gap:7px;margin-bottom:14px;}
+.exp-f>span{font-size:11.5px;color:var(--muted);}
+.exp-f-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.exp-cats-pick{display:flex;flex-wrap:wrap;gap:7px;}
+.exp-cat-chip{display:flex;align-items:center;gap:7px;height:34px;padding:0 13px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);font-family:inherit;font-size:12.5px;color:var(--muted);cursor:pointer;}
+.exp-cat-chip i{width:8px;height:8px;border-radius:50%;}
+.exp-cat-chip.on{border-color:var(--gold);color:var(--ink);font-weight:600;background:rgba(190,138,46,.10);}
+.exp-shot{display:flex;gap:12px;align-items:center;}
+.exp-shot-box{width:84px;height:84px;flex-shrink:0;border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--surface-alt);display:flex;align-items:center;justify-content:center;color:var(--faint);overflow:hidden;}
+.exp-shot-box img{width:100%;height:100%;object-fit:cover;}
+.exp-shot-act{display:flex;flex-direction:column;align-items:flex-start;gap:8px;}
 .exp-cmp-pick{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;color:var(--muted);}
 .exp-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 @media(max-width:640px){.exp-cmp-cols{grid-template-columns:1fr;}}
