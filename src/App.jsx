@@ -1108,7 +1108,11 @@ function NotificationCenter({ cabKey }) {
   const reload = () => listNotifications(60).then(setItems).catch(() => {});
   const showToast = (t) => {
     const id = t.id || `l${Date.now()}${Math.random()}`;
-    setToasts((prev) => [...prev.slice(-3), { id, title: t.title, body: t.body }]);
+    // у тості теж показуємо, чий це магазин: у локальних тостів actor немає — вони не зміняться
+    const s = t.actor && t.actor !== cabKey ? salonByKey(t.actor) : null;
+    const from = t.actor && t.actor !== cabKey ? (s ? salonShortName(s) : cabName(t.actor)) : "";
+    const body = [from, t.body].filter(Boolean).join(" · ");
+    setToasts((prev) => [...prev.slice(-3), { id, title: t.title, body }]);
     setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 6000);
   };
   useEffect(() => {
@@ -1178,6 +1182,13 @@ function NotificationCenter({ cabKey }) {
                       <span className="notif-ic">{notifIcon(n.kind)}</span>
                       <div className="notif-body">
                         <b>{n.title}</b>
+                        {/* хто саме це зробив — інакше «Взято в роботу» не каже, який магазин */}
+                        {n.actor && n.actor !== cabKey && (
+                          <span className="notif-from">{(() => {
+                            const s = salonByKey(n.actor);
+                            return s ? salonShortName(s) : cabName(n.actor);
+                          })()}</span>
+                        )}
                         {n.body && <p>{n.body}</p>}
                         <time>{relTime(n.created_at)}{target ? " · відкрити →" : ""}</time>
                       </div>
@@ -12440,6 +12451,7 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .notif-body b{display:block;font-size:13px;color:var(--ink);font-weight:600;}
 .notif-body p{margin:2px 0 0;font-size:12.5px;color:var(--ink-soft);}
 .notif-body time{font-size:11px;color:var(--muted);}
+.notif-from{display:block;margin-top:2px;font-size:11px;font-weight:600;letter-spacing:.02em;color:var(--gold-bright);}
 .toast-stack{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:10px;align-items:center;pointer-events:none;width:max-content;max-width:92vw;}
 .taskgate-overlay{position:fixed;inset:0;z-index:10050;display:flex;align-items:center;justify-content:center;background:rgba(6,10,14,.72);backdrop-filter:blur(3px);padding:20px;animation:fadeIn .2s ease both;}
 .taskgate{width:50vw;min-width:min(340px,92vw);max-width:620px;min-height:42vh;display:flex;flex-direction:column;justify-content:center;gap:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 40px 120px -20px rgba(0,0,0,.7);padding:34px 32px;color:var(--ink);text-align:center;}
