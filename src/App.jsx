@@ -80,7 +80,7 @@ import {
   listItems, upsertItem, deleteItem, setPrice, listStock, stockMap, stockState,
   listActs, actLines, writeoffLines, salonSupplyExpenseLines, actSalon, receipt as whReceipt, writeoff as whWriteoff, adjust as whAdjust,
   shipOrder, receiveOrder, listOrders, orderLines, createOrder, saveOrderLines, submitOrder, deleteOrder,
-  markOrderedFromSupplier, extractNakladna,
+  setOrderShipNote, extractNakladna,
   subscribeSupply,
 } from "./lib/supply.js";
 import {
@@ -8731,18 +8731,6 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
   if (!orders.length) return <div className="admin-empty">Замовлень немає.</div>;
 
   const openOrder = async (o) => setOpen({ order: o, lines: o._lines || await orderLines(o.id) });
-  const markOrdered = async (o) => {
-    if (!confirm(`Замовлення для «${salonLabel(salonByKey(o.salon_key))}»: позначити, що замовлено в постачальників?`)) return;
-    setBusyId(o.id);
-    try {
-      await markOrderedFromSupplier(o.id);
-      pushToast({ title: "Позначено «Їде»", body: salonLabel(salonByKey(o.salon_key)) });
-      notify({ recipient: o.salon_key, kind: "supply", title: "Ваше замовлення в дорозі 🚚", body: "Оля замовила товар у постачальників", actor: cabKey || "", link: "warehouse" });
-      notifyWhManagers(cabKey, { kind: "supply", title: `Замовлення в дорозі: ${salonLabel(salonByKey(o.salon_key))}`, body: "Оля замовила в постачальників", actor: cabKey || "", link: "warehouse" });
-      load(); onReload && onReload();
-    } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
-    setBusyId("");
-  };
   const receiptForOrder = async (o) => {
     const ls = o._lines || await orderLines(o.id).catch(() => []);
     setRcpt({ orderId: o.id, prefill: ls.map((l) => ({ item_id: l.item_id, qty: String(l.qty_req || ""), unit_cost: "" })) });
@@ -8779,23 +8767,26 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
                 {ORDER_ST[o.status]}
               </span>
             </div>
+            {o.ship_note && (
+              <div className="wh-ord-note"><MessageSquare size={12} /> {o.ship_note}</div>
+            )}
             <div className="wh-ord-act">
               <button className="wh-link" onClick={() => openOrder(o)}>позиції</button>
               {scope === "mine" && o.status === "draft" && <button className="wh-link" onClick={() => onEditDraft(o)}>редагувати</button>}
               {scope === "mine" && o.status === "draft" && <button className="wh-link" onClick={() => { if (confirm("Видалити чернетку?")) deleteOrder(o.id).then(load); }}>видалити</button>}
               {scope === "mine" && o.status === "shipped" && <button className="btn-primary small" onClick={() => receive(o)}>Прийняти</button>}
               {scope === "incoming" && o.status === "submitted" && (
-                <button className="btn-glow small" disabled={busyId === o.id} onClick={() => markOrdered(o)}>
-                  <Truck size={13} /> Замовлено в постачальників
+                <button className="btn-primary small" onClick={() => setShip(o)}>
+                  <ClipboardList size={13} /> Зібрати замовлення
                 </button>
               )}
+              {/* старі замовлення, що вже стоять у статусі «Їде» — добираємо як і раніше */}
               {scope === "incoming" && o.status === "ordered" && (
                 <>
                   <button className="btn-secondary small" onClick={() => receiptForOrder(o)}>Створити прихід</button>
-                  <button className="btn-primary small" onClick={() => setShip(o)}>Відправити салону</button>
+                  <button className="btn-primary small" onClick={() => setShip(o)}>Зібрати замовлення</button>
                 </>
               )}
-              {scope === "incoming" && o.status === "submitted" && <button className="wh-link" onClick={() => setShip(o)}>відправити одразу</button>}
             </div>
           </div>
         ))}
@@ -8834,6 +8825,7 @@ function SupplyOrders({ scope, salonKey, tmKey, cabKey, items, stock, onReload, 
 function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
   const [lines, setLines] = useState(null);
   const [qty, setQty] = useState({});
+  const [note, setNote] = useState(order.ship_note || "");
   const [busy, setBusy] = useState(false);
   const cs = stockMap(stock, CENTRAL);
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
@@ -8845,11 +8837,12 @@ function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
     setBusy(true);
     try {
       await shipOrder(order.id, order.salon_key, ls);
-      pushToast({ title: "Відправлено", body: salonLabel(salonByKey(order.salon_key)) });
+      if ((note || "").trim() !== (order.ship_note || "")) await setOrderShipNote(order.id, note).catch(() => {});
+      pushToast({ title: "Зібрано й відправлено", body: salonLabel(salonByKey(order.salon_key)) });
       notify({
         recipient: order.salon_key, kind: "supply",
-        title: "Замовлення зі складу відправлено",
-        body: `${ls.length} поз.${partial ? " · є розбіжності з замовленням" : ""} — прийміть у «Мої замовлення»`,
+        title: "Замовлення зі складу зібрано",
+        body: `${ls.length} поз.${partial ? " · є розбіжності з замовленням" : ""}${note.trim() ? ` · ${note.trim()}` : ""} — прийміть у «Мої замовлення»`,
         actor: cabKey || "", link: "warehouse",
       });
       notifyWhManagers(cabKey, {
@@ -8862,7 +8855,7 @@ function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
   return createPortal(
     <div className="modal-overlay" onClick={() => !busy && onClose()}>
       <div className="wh-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="wh-modal-h"><span>Відправити → {salonLabel(salonByKey(order.salon_key))}</span><button className="modal-close" onClick={onClose}><X size={16} /></button></div>
+        <div className="wh-modal-h"><span>Зібрати замовлення → {salonLabel(salonByKey(order.salon_key))}</span><button className="modal-close" onClick={onClose}><X size={16} /></button></div>
         <div className="wh-modal-b">
           <table className="wh-tbl"><thead><tr><th>Позиція</th><th>Замовлено</th><th>На складі</th><th>Відправити</th></tr></thead>
             <tbody>{lines.map((l) => (
@@ -8872,7 +8865,12 @@ function SupplyShip({ order, items, stock, cabKey, onClose, onDone }) {
                 <td className="num"><NumInput className="wh-price" value={qty[l.item_id] ?? ""} onChange={(v) => setQty((x) => ({ ...x, [l.item_id]: v }))} /></td></tr>
             ))}</tbody>
           </table>
-          <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "…" : "Відправити й списати з центрального"}</button>
+          <label className="over-field wh-ship-note">
+            <span>Коментар до замовлення <em className="hint">— побачить магазин</em></span>
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="Напр.: мікрофібри поки немає, довеземо наступним завозом" />
+          </label>
+          <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "…" : "Зібрано — відправити салону"}</button>
         </div>
       </div>
     </div>, document.body);
@@ -13957,6 +13955,10 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .wh-ocr-note.run{color:var(--gold-bright);}
 .wh-ord-at{margin-left:auto;font-size:11px;color:var(--faint);font-family:'IBM Plex Mono',monospace;}
 .wh-ord-act{display:flex;gap:10px;align-items:center;margin-top:7px;}
+.wh-ord-note{display:flex;align-items:flex-start;gap:7px;margin-top:7px;padding:8px 11px;border-radius:var(--radius-sm);background:var(--surface-alt);border:1px solid var(--line);font-size:12px;color:var(--ink-soft);line-height:1.45;}
+.wh-ord-note svg{flex-shrink:0;margin-top:2px;color:var(--gold);}
+.wh-ship-note{max-width:none;margin:12px 0 10px;}
+.wh-ship-note textarea{padding:9px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--input-bg);font-family:inherit;font-size:13px;color:var(--ink);resize:vertical;}
 .wh-mismatch>td{background:rgba(179,58,58,.09);color:var(--negative);}
 .wh-mismatch-note{display:flex;align-items:center;gap:6px;color:var(--negative);}
 .wh-arch{opacity:.5;}

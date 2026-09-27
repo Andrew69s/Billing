@@ -197,6 +197,13 @@ export const shipOrder = (orderId, warehouseFromCentral, lines) =>
 export const receiveOrder = (orderId, salonKey, lines) =>
   doAct({ kind: "receive", warehouse: salonKey, counterparty: CENTRAL, order_id: orderId, lines });
 
+/* Коментар складу до зібраного замовлення — його бачить магазин.
+   Окреме поле, щоб не затерти note, який лишає сам магазин при створенні. */
+export async function setOrderShipNote(orderId, note) {
+  const { error } = await supabase.from("supply_orders").update({ ship_note: (note || "").trim() }).eq("id", orderId);
+  if (error) throw error;
+}
+
 /* ---------- замовлення салону ---------- */
 export async function listOrders({ salonKey, status } = {}) {
   let q = supabase.from("supply_orders").select("*").order("created_at", { ascending: false });
