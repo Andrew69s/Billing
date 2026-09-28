@@ -143,6 +143,14 @@ const plural = (n, one, few, many) => {
   return many;
 };
 const salonWord = (n) => plural(n, "салон", "салони", "салонів");
+/* Графік змін складають наперед, тому там, на відміну від решти модулів,
+   потрібен і наступний місяць: інакше жовтневий графік не поставити,
+   поки не настане жовтень. */
+const scheduleMonths = (back = 11) => {
+  const d = new Date();
+  const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  return [`${next.getFullYear()}-${pad(next.getMonth() + 1)}`, ...recentMonths(back)];
+};
 const recentMonths = (n = 12) => {
   const now = new Date();
   const y = now.getFullYear();
@@ -6834,7 +6842,7 @@ function ShiftScheduleModule({ cab }) {
   const [employees, setEmployees] = useState(null);
   const [shifts, storeDays, reload] = useShiftMonth(ym);
   const [locks, setLocks] = useState([]);
-  const months = useMemo(() => recentMonths(12), []);
+  const months = useMemo(() => scheduleMonths(11), []);
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
   const reloadLocks = React.useCallback(() => { listScheduleLocks().then(setLocks).catch(() => setLocks([])); }, []);
