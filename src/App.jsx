@@ -9561,19 +9561,24 @@ function EzAnalytics({ salons, sales }) {
     const monthsToSum = monthF === "all" ? months : [monthF];
     let count = 0, amount = 0, profit = 0;
     monthsToSum.forEach((ym) => { const r = byKeyYm[`${sl.key}|${ym}`]; if (r) { count += r.count; amount += r.amount; profit += r.profit; } });
-    // прибуток ділиться: 20% команді магазину, решта лишається мережі
+    // Прибуток ділиться по черзі: 20% команді магазину, потім 10% від решти —
+    // бонус ТМ (той самий, що в п. 2.5 його мотивації), і вже далі — мережа.
     const team = Math.round(profit * 0.2);
-    return { sl, count, amount, profit, team, network: profit - team };
+    const afterTeam = profit - team;
+    const tm = Math.round(afterTeam * 0.1);
+    return { sl, count, amount, profit, team, tm, network: afterTeam - tm };
   }).sort((a, b) => b.profit - a.profit);
   const totals = rowsAll.reduce((a, r) => ({
     count: a.count + r.count, amount: a.amount + r.amount,
-    profit: a.profit + r.profit, team: a.team + r.team, network: a.network + r.network,
-  }), { count: 0, amount: 0, profit: 0, team: 0, network: 0 });
+    profit: a.profit + r.profit, team: a.team + r.team, tm: a.tm + r.tm, network: a.network + r.network,
+  }), { count: 0, amount: 0, profit: 0, team: 0, tm: 0, network: 0 });
 
   const chartData = monthsAsc.map((ym) => {
     const r = byKeyYm[`${salonKey}|${ym}`];
     const team = r ? Math.round(r.profit * 0.2) : 0;
-    return { label: monthLabel(ym).replace(" 20", " '"), "На команду": team, Мережі: r ? r.profit - team : 0 };
+    const afterTeam = r ? r.profit - team : 0;
+    const tm = Math.round(afterTeam * 0.1);
+    return { label: monthLabel(ym).replace(" 20", " '"), "На команду": team, "Бонус ТМ": tm, Мережі: afterTeam - tm };
   });
 
   return (
@@ -9589,10 +9594,15 @@ function EzAnalytics({ salons, sales }) {
           <b>{suah(totals.team)}</b>
           <i>20% чистого прибутку</i>
         </div>
+        <div className="ez-kpi ez-kpi-tm">
+          <span>Бонус ТМ</span>
+          <b>{suah(totals.tm)}</b>
+          <i>10% від решти після команди</i>
+        </div>
         <div className="ez-kpi ez-kpi-net">
           <span>Прибуток мережі</span>
           <b>{suah(totals.network)}</b>
-          <i>решта після бонусу команді</i>
+          <i>після бонусів команді й ТМ</i>
         </div>
       </div>
 
@@ -9612,6 +9622,7 @@ function EzAnalytics({ salons, sales }) {
               <Tooltip formatter={(v) => suah(v)} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar dataKey="На команду" stackId="p" fill="#DCA94A" />
+              <Bar dataKey="Бонус ТМ" stackId="p" fill="#C98F6B" />
               <Bar dataKey="Мережі" stackId="p" fill="#5F8E93" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -9627,7 +9638,7 @@ function EzAnalytics({ salons, sales }) {
       </div>
       <div className="grid-scroll">
         <table className="open-log">
-          <thead><tr><th>Магазин</th><th>Продажів</th><th>Виторг</th><th>Прибуток</th><th>На команду</th><th>Мережі</th></tr></thead>
+          <thead><tr><th>Магазин</th><th>Продажів</th><th>Виторг</th><th>Прибуток</th><th>На команду</th><th>Бонус ТМ</th><th>Мережі</th></tr></thead>
           <tbody>
             {rowsAll.map((r) => (
               <tr key={r.sl.key} className={r.sl.key === salonKey ? "trn-row-active" : ""} onClick={() => setSalonKey(r.sl.key)} style={{ cursor: "pointer" }}>
@@ -9636,10 +9647,11 @@ function EzAnalytics({ salons, sales }) {
                 <td className="open-log-t">{suah(r.amount)}</td>
                 <td className="open-log-t">{suah(r.profit)}</td>
                 <td className="open-log-t"><b>{suah(r.team)}</b></td>
+                <td className="open-log-t">{suah(r.tm)}</td>
                 <td className="open-log-t">{suah(r.network)}</td>
               </tr>
             ))}
-            <tr className="open-log-total"><td><b>Разом</b></td><td className="open-log-t"><b>{totals.count}</b></td><td className="open-log-t"><b>{suah(totals.amount)}</b></td><td className="open-log-t"><b>{suah(totals.profit)}</b></td><td className="open-log-t"><b>{suah(totals.team)}</b></td><td className="open-log-t"><b>{suah(totals.network)}</b></td></tr>
+            <tr className="open-log-total"><td><b>Разом</b></td><td className="open-log-t"><b>{totals.count}</b></td><td className="open-log-t"><b>{suah(totals.amount)}</b></td><td className="open-log-t"><b>{suah(totals.profit)}</b></td><td className="open-log-t"><b>{suah(totals.team)}</b></td><td className="open-log-t"><b>{suah(totals.tm)}</b></td><td className="open-log-t"><b>{suah(totals.network)}</b></td></tr>
           </tbody>
         </table>
       </div>
@@ -13106,13 +13118,14 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 /* --- Продажі ЕЗ: картки (СМ) --- */
 .ez-cards{display:flex;flex-direction:column;gap:10px;}
 .ez-month-kpi{display:flex;align-items:baseline;gap:10px;padding:12px 16px;border-radius:var(--radius-md);background:rgba(190,138,46,.1);border:1px solid rgba(190,138,46,.3);margin-bottom:2px;}
-.ez-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px;}
+.ez-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;}
 .ez-kpi{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);}
 .ez-kpi>span{font-size:11.5px;color:var(--muted);}
 .ez-kpi>b{font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:600;line-height:1;color:var(--ink);}
 .ez-kpi>i{font-style:normal;font-size:10.5px;color:var(--faint);}
 .ez-kpi-team>b{color:var(--gold);}
 .ez-kpi-net>b{color:#5F8E93;}
+.ez-kpi-tm>b{color:#C98F6B;}
 @media (max-width:720px){.ez-kpis{grid-template-columns:1fr;}}
 .ez-month-kpi b{font-family:'IBM Plex Mono',monospace;font-size:19px;color:var(--gold);}
 :root[data-theme="dark"] .ez-month-kpi b{color:var(--gold-bright);}
