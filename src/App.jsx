@@ -5033,10 +5033,21 @@ function TasksModule({ cab }) {
   };
   const visibleGroups = scoped.filter(matchQ).filter(matchFilter);
 
-  const bucketed = BUCKETS
-    .map((b) => ({
-      ...b,
-      items: visibleGroups.filter((g) => bucketOf(g) === b.key).sort((a, z) => {
+  // У «Виконаних» групувати за дедлайном немає сенсу — він уже минув.
+  // Ділимо за тим самим принципом, що й активні: мої та ті, що я поставив.
+  const DONE_BUCKETS = [
+    { key: "dmine", title: "Мої виконані", tone: "", match: forMe },
+    { key: "dsent", title: "Я поставив — виконали", tone: "muted", match: byMe },
+  ];
+  const byDoneAt = (a, z) => String(z.items[0]?.done_at || "").localeCompare(String(a.items[0]?.done_at || ""));
+  const bucketed = scope === "done"
+    ? DONE_BUCKETS
+      .map((b) => ({ ...b, items: visibleGroups.filter(b.match).sort(byDoneAt) }))
+      .filter((b) => b.items.length > 0)
+    : BUCKETS
+      .map((b) => ({
+        ...b,
+        items: visibleGroups.filter((g) => bucketOf(g) === b.key).sort((a, z) => {
         const pa = a.items.some((it) => it.priority) ? 0 : 1;
         const pz = z.items.some((it) => it.priority) ? 0 : 1;
         if (pa !== pz) return pa - pz;
