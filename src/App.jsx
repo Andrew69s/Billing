@@ -4993,9 +4993,15 @@ function TasksModule({ cab }) {
   // Якщо серед отримувачів є я, задача моя, навіть коли я ж її і створив.
   const forMe = (g) => g.items.some((it) => it.assignee === cab.key);
   const byMe = (g) => !forMe(g) && g.items[0]?.created_by === cab.key;
-  const mineGroups = allGroups.filter((g) => forMe(g) && !isDoneGroup(g));
+  // У «Мені» важить стан САМЕ мого рядка: задачу часто ставлять одразу на
+  // кілька кабінетів, і якщо я свою частину закрив, вона має піти у виконані,
+  // навіть поки інші ще не зробили. Для «Я поставив» навпаки — група закрита,
+  // лише коли виконали всі.
+  const myItem = (g) => g.items.find((it) => it.assignee === cab.key);
+  const mineDone = (g) => myItem(g)?.status === "done";
+  const mineGroups = allGroups.filter((g) => forMe(g) && !mineDone(g));
   const sentGroups = allGroups.filter((g) => byMe(g) && !isDoneGroup(g));
-  const doneGroups = allGroups.filter(isDoneGroup);
+  const doneGroups = allGroups.filter((g) => (forMe(g) && mineDone(g)) || (byMe(g) && isDoneGroup(g)));
 
   const scoped = scope === "mine" ? mineGroups : scope === "sent" ? sentGroups : doneGroups;
 
@@ -5036,10 +5042,11 @@ function TasksModule({ cab }) {
   // У «Виконаних» групувати за дедлайном немає сенсу — він уже минув.
   // Ділимо за тим самим принципом, що й активні: мої та ті, що я поставив.
   const DONE_BUCKETS = [
-    { key: "dmine", title: "Мої виконані", tone: "", match: forMe },
-    { key: "dsent", title: "Я поставив — виконали", tone: "muted", match: byMe },
+    { key: "dmine", title: "Мої виконані", tone: "", match: (g) => forMe(g) && mineDone(g) },
+    { key: "dsent", title: "Я поставив — виконали всі", tone: "muted", match: (g) => byMe(g) && isDoneGroup(g) },
   ];
-  const byDoneAt = (a, z) => String(z.items[0]?.done_at || "").localeCompare(String(a.items[0]?.done_at || ""));
+  const doneAt = (g) => (forMe(g) ? myItem(g)?.done_at : g.items[0]?.done_at) || "";
+  const byDoneAt = (a, z) => String(doneAt(z)).localeCompare(String(doneAt(a)));
   const bucketed = scope === "done"
     ? DONE_BUCKETS
       .map((b) => ({ ...b, items: visibleGroups.filter(b.match).sort(byDoneAt) }))
