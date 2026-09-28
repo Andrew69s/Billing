@@ -13543,8 +13543,14 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .bn-roll tr.on td{background:rgba(190,138,46,.13);}
 .bn-roll td.bn-roll-nm{text-align:left;color:var(--ink);font-weight:600;font-family:inherit;position:sticky;left:0;background:var(--surface);}
 .bn-roll tr.on td.bn-roll-nm{background:rgba(190,138,46,.13);}
-.bn-roll td.neg{color:var(--negative);}
-.bn-roll td.pos{color:var(--positive);}
+/* У «Русі бонусів» знак читається навпаки, ніж деінде: мінус — це списані
+   бонуси, тобто клієнт прийшов і купив, а плюс — нарахований борг мережі.
+   Тому тут мінус зелений, плюс червоний. Класи лишаються за знаком числа,
+   інвертується лише колір, і лише в межах цього модуля. */
+.bn-roll td.neg{color:var(--positive);}
+.bn-roll td.pos{color:var(--negative);}
+.bn-grid td.neg{color:var(--positive);}
+.bn-grid td.pos{color:var(--negative);}
 .bn-roll td.muted{color:var(--faint);}
 .bn-roll td.bn-roll-yr{font-weight:700;border-left:2px solid var(--line-strong);}
 .bn-roll tfoot td{border-top:2px solid var(--line-strong);border-bottom:none;font-weight:700;background:var(--surface-alt);}
@@ -13560,9 +13566,10 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .bn-sum-cell span{display:block;font-size:11px;color:var(--muted);}
 .bn-sum-cell b{font-family:'IBM Plex Mono',monospace;font-size:1.15rem;color:var(--ink);font-variant-numeric:tabular-nums;}
 .bn-sum-cell.hero{border-left:3px solid var(--gold);}
-.bn-sum-cell.hero.neg{border-left-color:var(--negative);}
-.bn-sum-cell.hero.neg b{color:var(--negative);}
-.bn-sum-cell.hero.pos b{color:var(--positive);}
+.bn-sum-cell.hero.neg{border-left-color:var(--positive);}
+.bn-sum-cell.hero.neg b{color:var(--positive);}
+.bn-sum-cell.hero.pos{border-left-color:var(--negative);}
+.bn-sum-cell.hero.pos b{color:var(--negative);}
 .bn-grid .tm-in{width:92px;}
 @media(max-width:640px){.bn-sum{grid-template-columns:repeat(2,1fr);}}
 
