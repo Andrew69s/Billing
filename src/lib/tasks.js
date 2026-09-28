@@ -3,7 +3,13 @@ import { supabase, rtChannel } from "./supabase.js";
 export const TASK_STATUS = { open: "Відкрита", in_progress: "В роботі", done: "Виконана" };
 
 export async function listTasks() {
-  const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
+  // Активні тягнемо всі, виконані — лише за 30 днів. Раніше тут був голий
+  // select("*"), тож кожне відкриття модуля качало весь архів задач за всю
+  // історію, і з часом це росло без обмежень.
+  const cutoff = new Date(Date.now() - 30 * 864e5).toISOString();
+  const { data, error } = await supabase.from("tasks").select("*")
+    .or(`status.neq.done,done_at.gte.${cutoff}`)
+    .order("created_at", { ascending: false });
   if (error) throw error;
   return data || [];
 }

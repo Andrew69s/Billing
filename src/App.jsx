@@ -4952,8 +4952,9 @@ function TaskCreateModal({ cab, onClose, onCreated }) {
 function TasksModule({ cab }) {
   const [tasks, reload] = useMyTasks();
   const [showModal, setShowModal] = useState(false);
-  const [showDone, setShowDone] = useState(false);
-  const [onlyPriority, setOnlyPriority] = useState(false);
+  const [scope, setScope] = useState("mine");   // mine | sent | done
+  const [filter, setFilter] = useState("all");  // all | late | progress | nodue | priority
+  const [q, setQ] = useState("");
   const [focusId] = useState(() => takeFocusTaskId()); // перехід зі сповіщення на конкретну задачу
   const focusRef = useRef(null);
 
@@ -4973,7 +4974,7 @@ function TasksModule({ cab }) {
   };
   const onDelete = async (id) => {
     try { await deleteTask(id); reload(); }
-    catch (e) { alert("Не вдалося видалити: " + (e.message || e)); }
+    catch (e) { pushToast({ title: "Не вдалося видалити", body: String(e.message || e) }); }
   };
   const onDeleteBatch = async (ids) => {
     try { await deleteTaskBatch(ids); reload(); }
@@ -4982,14 +4983,75 @@ function TasksModule({ cab }) {
 
   if (tasks === null) return <div className="loading">Завантаження…</div>;
 
-  const visible = onlyPriority ? tasks.filter((t) => t.priority) : tasks;
   // задачі, поставлені кільком отримувачам одразу (спільний batch_id), рендеримо
-  // однією карткою — розгортається на «хто виконав / хто ні»; в «виконані» падає,
+  // однією карткою — розгортається на «хто виконав / хто ні»; у «виконані» падає,
   // лише коли виконали абсолютно всі.
-  const groups = groupTasks(visible);
-  const activeGroups = groups.filter((g) => g.items.some((it) => it.status !== "done"));
-  const doneGroups = groups.filter((g) => g.items.every((it) => it.status === "done"));
   const allGroups = groupTasks(tasks);
+  const isDoneGroup = (g) => g.items.every((it) => it.status === "done");
+
+  // Область: що поставили мені і що я поставив іншим — це різна робота.
+  // Якщо серед отримувачів є я, задача моя, навіть коли я ж її і створив.
+  const forMe = (g) => g.items.some((it) => it.assignee === cab.key);
+  const byMe = (g) => !forMe(g) && g.items[0]?.created_by === cab.key;
+  const mineGroups = allGroups.filter((g) => forMe(g) && !isDoneGroup(g));
+  const sentGroups = allGroups.filter((g) => byMe(g) && !isDoneGroup(g));
+  const doneGroups = allGroups.filter(isDoneGroup);
+
+  const scoped = scope === "mine" ? mineGroups : scope === "sent" ? sentGroups : doneGroups;
+
+  // ---- терміновість: чим ближче дедлайн, тим вище ----
+  const dayStart = (v) => { const x = new Date(v); x.setHours(0, 0, 0, 0); return x.getTime(); };
+  const groupDue = (g) => g.items.map(taskDue).filter(Boolean).sort()[0] || null;
+  const groupLate = (g) => g.items.some(isOverdue);
+  const groupProgress = (g) => ({ done: g.items.filter((it) => it.status === "done").length, total: g.items.length });
+  const BUCKETS = [
+    { key: "late", title: "Прострочені", tone: "late" },
+    { key: "today", title: "Сьогодні", tone: "soon" },
+    { key: "tomorrow", title: "Завтра", tone: "soon" },
+    { key: "week", title: "Цього тижня", tone: "" },
+    { key: "later", title: "Пізніше", tone: "" },
+    { key: "nodue", title: "Без терміну", tone: "muted" },
+  ];
+  const bucketOf = (g) => {
+    if (groupLate(g)) return "late";
+    const due = groupDue(g);
+    if (!due) return "nodue";
+    const diff = Math.round((dayStart(due) - dayStart(new Date())) / 864e5);
+    if (diff <= 0) return "today";
+    if (diff === 1) return "tomorrow";
+    if (diff <= 7) return "week";
+    return "later";
+  };
+
+  const matchQ = (g) => !q.trim() || g.items[0]?.title?.toLowerCase().includes(q.trim().toLowerCase());
+  const matchFilter = (g) => {
+    if (filter === "late") return groupLate(g);
+    if (filter === "progress") { const p = groupProgress(g); return p.total > 1 && p.done > 0 && p.done < p.total; }
+    if (filter === "nodue") return !groupDue(g);
+    if (filter === "priority") return g.items.some((it) => it.priority);
+    return true;
+  };
+  const visibleGroups = scoped.filter(matchQ).filter(matchFilter);
+
+  const bucketed = BUCKETS
+    .map((b) => ({
+      ...b,
+      items: visibleGroups.filter((g) => bucketOf(g) === b.key).sort((a, z) => {
+        const pa = a.items.some((it) => it.priority) ? 0 : 1;
+        const pz = z.items.some((it) => it.priority) ? 0 : 1;
+        if (pa !== pz) return pa - pz;
+        return String(groupDue(a) || "9999").localeCompare(String(groupDue(z) || "9999"));
+      }),
+    }))
+    .filter((b) => b.items.length > 0);
+
+  const CHIPS = [
+    { key: "all", label: "Усі", n: scoped.length },
+    { key: "late", label: "Прострочені", n: scoped.filter(groupLate).length, alert: true },
+    { key: "progress", label: "Частково виконані", n: scoped.filter((g) => { const p = groupProgress(g); return p.total > 1 && p.done > 0 && p.done < p.total; }).length },
+    { key: "nodue", label: "Без терміну", n: scoped.filter((g) => !groupDue(g)).length },
+    { key: "priority", label: "Пріоритетні", n: scoped.filter((g) => g.items.some((it) => it.priority)).length },
+  ].filter((c) => c.key === "all" || c.n > 0);
   const renderGroup = (g) => {
     const focusHere = g.items.some((it) => it.id === focusId);
     if (g.items.length > 1) {
@@ -5002,8 +5064,6 @@ function TasksModule({ cab }) {
     return <TaskCard key={t.id} t={t} cabKey={cab.key} onStatus={onStatus} onDelete={onDelete} autoOpen={t.id === focusId} cardRef={t.id === focusId ? focusRef : undefined} />;
   };
 
-  const inWork = tasks.filter((t) => t.status === "in_progress").length;
-  const unfinished = allGroups.filter((g) => g.items.some((it) => it.status !== "done")).length;
   const unseen = tasks.filter((t) => t.assignee === cab.key && t.status !== "done" && !(t.seen || {})[cab.key]).length;
 
   return (
@@ -5015,35 +5075,52 @@ function TasksModule({ cab }) {
         </button>
       </div>
 
-      <div className="tasks-dash">
-        <span><b>{inWork}</b> в роботі</span>
-        <span><b>{unfinished}</b> невиконані</span>
-        {unseen > 0 && <span className="tasks-dash-alert"><b>{unseen}</b> нових для вас</span>}
-        <button className={`tasks-filter ${onlyPriority ? "on" : ""}`} onClick={() => setOnlyPriority((v) => !v)}>
-          <Star size={13} /> Тільки пріоритетні
-        </button>
+      <div className="tasks-scope">
+        {[
+          ["mine", "Мені", mineGroups.length],
+          ["sent", "Я поставив", sentGroups.length],
+          ["done", "Виконані", doneGroups.length],
+        ].map(([k, label, n]) => (
+          <button key={k} type="button" className={scope === k ? "on" : ""} onClick={() => { setScope(k); setFilter("all"); }}>
+            {label} <b>{n}</b>
+            {k === "mine" && unseen > 0 && <i className="tasks-scope-new">{unseen}</i>}
+          </button>
+        ))}
       </div>
 
-      {activeGroups.length === 0 ? (
-        <div className="admin-empty">{onlyPriority ? "Пріоритетних задач немає." : "Активних задач немає."}</div>
-      ) : (
-        <div className="task-list">
-          {activeGroups.map(renderGroup)}
-        </div>
-      )}
-
-      {doneGroups.length > 0 && (
-        <>
-          <button className="task-done-toggle" onClick={() => setShowDone((v) => !v)}>
-            Виконані ({doneGroups.length}) {showDone ? "▾" : "▸"}
+      <div className="tasks-bar">
+        {CHIPS.map((c) => (
+          <button key={c.key} type="button"
+            className={`tasks-chip ${filter === c.key ? "on" : ""} ${c.alert && c.n > 0 ? "alert" : ""}`}
+            onClick={() => setFilter(filter === c.key ? "all" : c.key)}>
+            {c.label} <b>{c.n}</b>
           </button>
-          {showDone && (
-            <div className="task-list">
-              {doneGroups.map(renderGroup)}
-            </div>
-          )}
-        </>
-      )}
+        ))}
+        <span className="tasks-bar-sp" />
+        <label className="tasks-search">
+          <Search size={14} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Пошук за назвою" aria-label="Пошук задачі" />
+          {q && <button type="button" className="tasks-search-x" onClick={() => setQ("")} aria-label="Очистити"><X size={13} /></button>}
+        </label>
+      </div>
+
+      {bucketed.length === 0 ? (
+        <div className="admin-empty">
+          {q.trim() ? "За цим запитом нічого не знайдено."
+            : scope === "mine" ? "Вам зараз нічого не поставлено."
+              : scope === "sent" ? "Ви нікому не ставили активних задач."
+                : "Виконаних задач за останні 30 днів немає."}
+        </div>
+      ) : bucketed.map((b) => (
+        <div className="tasks-bucket" key={b.key}>
+          <div className={`tasks-bucket-h ${b.tone}`}>
+            <span>{b.title}</span>
+            <i>{b.items.length}</i>
+            <span className="tasks-bucket-line" />
+          </div>
+          <div className="task-list">{b.items.map(renderGroup)}</div>
+        </div>
+      ))}
 
       {showModal && <TaskCreateModal cab={cab} onClose={() => setShowModal(false)} onCreated={reload} />}
     </div>
@@ -12667,6 +12744,30 @@ button.deck-tile:hover,.deck-orow:hover,.deck-tm-top:hover{transform:translateY(
 .task-input{width:100%;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);font-family:inherit;font-size:13px;background:var(--input-bg);resize:vertical;}
 
 /* міні-дашборд + фільтр */
+.tasks-scope{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:12px;}
+.tasks-scope button{position:relative;height:38px;padding:0 15px;border:0;border-bottom:2px solid transparent;background:none;font-family:inherit;font-size:13.5px;color:var(--muted);cursor:pointer;}
+.tasks-scope button b{font-family:'IBM Plex Mono',monospace;font-weight:600;margin-left:4px;}
+.tasks-scope button.on{border-bottom-color:var(--gold);color:var(--ink);font-weight:600;}
+.tasks-scope button.on b{color:var(--gold);}
+.tasks-scope-new{position:absolute;top:4px;right:2px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--negative);color:#fff;font-style:normal;font-size:10px;font-weight:700;line-height:16px;text-align:center;}
+.tasks-bar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:14px;}
+.tasks-bar-sp{flex-grow:1;}
+.tasks-chip{height:32px;padding:0 13px;border-radius:999px;border:1px solid var(--line-strong);background:transparent;font-family:inherit;font-size:12.5px;color:var(--muted);cursor:pointer;}
+.tasks-chip b{font-family:'IBM Plex Mono',monospace;margin-left:4px;}
+.tasks-chip.on{border-color:var(--gold);background:rgba(190,138,46,.10);color:var(--ink);font-weight:600;}
+.tasks-chip.alert{border-color:var(--negative);color:var(--negative-bright);font-weight:600;}
+.tasks-chip.alert.on{background:rgba(160,58,42,.14);}
+.tasks-search{display:flex;align-items:center;gap:8px;height:34px;padding:0 11px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--input-bg);width:220px;}
+.tasks-search svg{color:var(--faint);flex-shrink:0;}
+.tasks-search input{flex-grow:1;min-width:0;border:0;background:none;outline:none;font-family:inherit;font-size:12.5px;color:var(--ink);}
+.tasks-search-x{border:0;background:none;color:var(--muted);cursor:pointer;padding:0;display:flex;}
+.tasks-bucket{margin-bottom:16px;}
+.tasks-bucket-h{display:flex;align-items:center;gap:9px;margin-bottom:7px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+.tasks-bucket-h i{font-style:normal;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--faint);letter-spacing:0;}
+.tasks-bucket-h.late{color:var(--negative-bright);}
+.tasks-bucket-h.soon{color:var(--gold-bright);}
+.tasks-bucket-h.muted{color:var(--faint);}
+.tasks-bucket-line{flex-grow:1;height:1px;background:var(--line);}
 .tasks-dash{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-bottom:14px;padding:10px 14px;background:rgba(var(--sf),.03);border:1px solid var(--line-dark);border-radius:var(--radius-md);font-size:12px;color:var(--on-dark-2);}
 .tasks-dash b{color:var(--on-dark);font-size:14px;font-weight:700;margin-right:3px;}
 .tasks-dash-alert{color:var(--gold-bright);}
