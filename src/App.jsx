@@ -14460,6 +14460,21 @@ function AppMain() {
     return () => { active = false; };
   }, []);
 
+  // Кеш перепризначень магазинів (_reassign) вантажиться один раз тут, при вході,
+  // а сесія лишається живою до явного «Вийти» — сторінку можуть не закривати
+  // тижнями. Без періодичного оновлення після зміни території у вже відкритій
+  // вкладці canEdit/salonsOfTm ще довго вважають магазин чужим (чи навпаки),
+  // хоча сервер (RLS) уже рахує правильно — звідси і «не можу відредагувати»,
+  // і «row-level security» при спробі щось зберегти.
+  useEffect(() => {
+    if (!session) return undefined;
+    const refresh = () => loadReassignCache().then(bumpRefs).catch(() => {});
+    const t = setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 5 * 60 * 1000);
+    const onVis = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
+  }, [session]);
+
   const enter = (cab) => {
     setSession(cab);
     setPending(null);
