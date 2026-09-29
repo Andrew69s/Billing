@@ -6212,7 +6212,17 @@ function EmployeeForm({ cab, salons, emp, onClose, onSaved }) {
         pushToast({ title: "Прийнято на роботу", body: `${name.trim()} · ${cabName(salonKey)}` });
       }
       onSaved(); onClose();
-    } catch (e) { setErr(e.message || "Не вдалося зберегти"); setBusy(false); }
+    } catch (e) {
+      // «row-level security» — сирий текст Postgres; найчастіша причина тут:
+      // магазин щойно перепризначили іншому ТМ, і клієнтський список територій
+      // (кешований при вході) ще не встиг це підхопити.
+      const raw = e.message || "";
+      const friendly = /row-level security/i.test(raw)
+        ? `Немає прав редагувати «${cabName(salonKey)}» — можливо, магазин щойно перепризначили іншому ТМ. Перезайдіть у кабінет і спробуйте ще раз.`
+        : raw || "Не вдалося зберегти";
+      setErr(friendly);
+      setBusy(false);
+    }
   };
 
   return createPortal(
