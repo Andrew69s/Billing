@@ -45,9 +45,12 @@ export async function listMetricsRange(from, to) {
 export const daysBetween = (from, to) =>
   Math.max(1, Math.round((new Date(to) - new Date(from)) / 86400000) + 1);
 
-/* актуальні місячні плани салонів (territory_plans); fallback — SALON_MONTH_PLAN */
-export async function listPlans() {
-  const { data, error } = await supabase.from("territory_plans").select("salon_key,plan");
+/* плани салонів ЗА КОНКРЕТНИЙ місяць (territory_plans, знімок по ym);
+   fallback — SALON_MONTH_PLAN, якщо на цей місяць ще нічого не синхронізовано
+   («Оновити з планера» на екрані за той місяць заповнює історичний знімок). */
+export async function listPlans(ym) {
+  const targetYm = ym || new Date().toISOString().slice(0, 7);
+  const { data, error } = await supabase.from("territory_plans").select("salon_key,plan").eq("ym", targetYm);
   if (error) throw error;
   const out = { ...SALON_MONTH_PLAN };
   for (const r of data || []) out[r.salon_key] = r.plan || SALON_MONTH_PLAN[r.salon_key] || {};
@@ -100,9 +103,12 @@ export async function resetManual(salonKey, workDate) {
 
 /* оновити дані з планера (Edge Function) */
 export async function syncFromPlanner(months) {
-  const { data, error } = await supabase.functions.invoke("planner-sync", {
-    body: months && months.length ? { months } : {},
-  });
+  // planMonths — явний сигнал «людина свідомо натиснула синхронізацію саме за
+  // ці місяці» (на відміну від щоденного автоматичного pg_cron, який тягне
+  // ще й минулий місяць лише заради щоденних показників, а план ЗП СМ не чіпає,
+  // щоб не перезаписувати вже закриті місяці живим поточним планом щоночі).
+  const body = months && months.length ? { months, planMonths: months } : {};
+  const { data, error } = await supabase.functions.invoke("planner-sync", { body });
   if (error) {
     let msg = error.message || "sync error";
     try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch { /* */ }

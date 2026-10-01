@@ -95,6 +95,15 @@ Deno.serve(async (req) => {
   const months: string[] = Array.isArray(body.months) && body.months.length
     ? body.months.filter((m: string) => /^\d{4}-\d{2}$/.test(m))
     : [new Date().toISOString().slice(0, 7)];
+  // planMonths — ОКРЕМИЙ, явний список місяців для плану (territory_plans +
+  // sm_plans). Планер не має історії планів по місяцях — лише «живе» поточне
+  // значення, тож писати його в минулий місяць можна лише свідомо (людина
+  // натиснула «Оновити з планера», переглядаючи саме той місяць — тоді клієнт
+  // шле planMonths явно). Щоденний автоматичний pg_cron його НЕ шле, тож
+  // планом СМ/аналітики мовчки рухає лише поточний місяць, не минулі.
+  const planMonths: string[] = Array.isArray(body.planMonths) && body.planMonths.length
+    ? body.planMonths.filter((m: string) => /^\d{4}-\d{2}$/.test(m))
+    : [new Date().toISOString().slice(0, 7)];
 
   const svc = createClient(SUPABASE_URL, SERVICE_KEY);
   const perMonth: Record<string, number> = {};
@@ -125,15 +134,18 @@ Deno.serve(async (req) => {
         },
       };
     });
-    const { data: pn } = await svc.rpc("tplan_apply", { rows: planRows });
-    plansApplied = Number(pn) || planRows.length;
+    // territory_plans тепер знімок ПО МІСЯЦЮ (salon_key, ym) — пишемо його під
+    // кожен ym з planMonths, а не одним "живим" рядком на магазин, інакше
+    // перегляд минулого місяця завжди показував би сьогоднішній план.
+    const tplanRows = planMonths.flatMap((ym) => planRows.map((p) => ({ salon_key: p.salon_key, ym, plan: p.plan })));
+    const { data: pn } = await svc.rpc("tplan_apply", { rows: tplanRows });
+    plansApplied = Number(pn) || tplanRows.length;
 
-    // той самий план обороту (assort) і план ЕЗ — одразу і в sm_plans на ПОТОЧНИЙ
-    // місяць, бо саме ці поля рухають розрахунок ЗП СМ (основна група = без ЕЗ,
-    // плюс окрема % виконання плану ЕЗ). ТМ більше не вносить їх вручну; минулі
-    // місяці (вже закриті/заблоковані) ця функція не чіпає.
-    const currentYm = new Date().toISOString().slice(0, 7);
-    const smPlanRows = planRows.map((p) => ({ salon_key: p.salon_key, ym: currentYm, turnover_plan: p.plan.assort, ez_plan: p.plan.ez }));
+    // той самий план обороту (assort) і план ЕЗ — одразу і в sm_plans під ті
+    // самі planMonths, бо саме ці поля рухають розрахунок ЗП СМ. Локнуті
+    // місяці (sm_plans.locked) функція не чіпає.
+    const smPlanRows = planMonths.flatMap((ym) =>
+      planRows.map((p) => ({ salon_key: p.salon_key, ym, turnover_plan: p.plan.assort, ez_plan: p.plan.ez })));
     try { await svc.rpc("smplan_apply_planner", { rows: smPlanRows }); } catch { /* не критично для цього виклику */ }
   } catch { /* плани не критичні */ }
 

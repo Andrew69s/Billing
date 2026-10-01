@@ -7662,9 +7662,9 @@ function TerritoryModule({ cab }) {
     setRowsMap(m);
     setLoading(false);
   };
-  useEffect(() => { listPlans().then(setPlans).catch(() => {}); }, []);
+  useEffect(() => { listPlans(ym).then(setPlans).catch(() => {}); }, [ym]);
   useEffect(() => { setLoading(true); reload(); /* eslint-disable-next-line */ }, [ym]);
-  useEffect(() => subscribeMetrics(() => { reload(); listPlans().then(setPlans).catch(() => {}); }), [ym]); // eslint-disable-line
+  useEffect(() => subscribeMetrics(() => { reload(); listPlans(ym).then(setPlans).catch(() => {}); }), [ym]); // eslint-disable-line
 
   const patchLocal = () => {};
 
@@ -7957,7 +7957,7 @@ function TurnoverRings({ scopeSalons, single: singleProp, onDayDrill }) {
       ? listMetricsRange(rFrom, rTo)
       : listMetrics(ym);
     p.then(setRows).catch(() => setRows([]));
-    listPlans().then(setPlans).catch(() => {});
+    listPlans(ym).then(setPlans).catch(() => {});
   };
   useEffect(() => {
     reload();
@@ -8143,7 +8143,7 @@ function AllSalonsRingsToday({ highlight }) {
   useEffect(() => {
     const reload = () => {
       listMetrics(ym).then(setRows).catch(() => setRows([]));
-      listPlans().then(setPlans).catch(() => {});
+      listPlans(ym).then(setPlans).catch(() => {});
     };
     reload();
     return subscribeMetrics(reload);
@@ -14523,7 +14523,7 @@ function TerritoryWidget() {
 
   const load = async () => {
     try {
-      const [rows, plans] = await Promise.all([listMetrics(ym), listPlans()]);
+      const [rows, plans] = await Promise.all([listMetrics(ym), listPlans(ym)]);
       setData(widgetTerritoryStats(rows, plans, ym));
       setAt(new Date());
       setState("ready");
