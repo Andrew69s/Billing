@@ -2519,7 +2519,7 @@ const ST_COND = {
   "PPI": ["4.1"], "Премії": ["5.1", "5.2"], "Керуючий": ["2.2", "2.3"], "Інше": ["3.2", "5.3"],
 };
 const StInfoCtx = React.createContext(null);
-function StRow({ g, gs, label, inp, cells, cls, labelExtra, groupExtra }) {
+function StRow({ g, gs, label, inp, cells, cls, labelExtra }) {
   const openInfo = React.useContext(StInfoCtx);
   return (
     <tr className={`${g ? "st-gt " : ""}${cls || ""}`}>
@@ -2527,7 +2527,6 @@ function StRow({ g, gs, label, inp, cells, cls, labelExtra, groupExtra }) {
         <td className="st-g" rowSpan={gs}>
           <span className="st-g-in">
             {g}
-            {groupExtra}
             {ST_COND[g] && openInfo && (
               <span role="button" tabIndex={0} className="st-info" title="Умови мотивації" aria-label={`Умови: ${g}`}
                 onClick={() => openInfo(g)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openInfo(g); } }}><Info size={11} /></span>
@@ -2535,7 +2534,7 @@ function StRow({ g, gs, label, inp, cells, cls, labelExtra, groupExtra }) {
           </span>
         </td>
       )}
-      <td className="st-lab">{label}{labelExtra}</td>
+      <td className="st-lab"><span className="st-lab-in">{label}{labelExtra}</span></td>
       <td className="st-inp">{inp}</td>
       {cells.map((x, i) => <td key={i} className="st-num">{x}</td>)}
     </tr>
@@ -2556,23 +2555,36 @@ function StTotalRow({ label, hint, cells, cls }) {
 /* Шестерня біля кожного командного пункту — усі ведуть до того самого пікера.
    inGroup: рядок, на якому в тій самій комірці вже є значок «Умови» (Дзвінки,
    Сайт і БН, PPI) — тоді шестерня стає лівіше нього, а не ліпиться поверх. */
-function TeamGear({ onClick, title = "Хто ділить командні бонуси", inGroup }) {
+/* Звичайний інлайн-елемент одразу після тексту — свідомо НЕ absolute, як
+   «Умови»: той ламався на вузькому екрані, де ширина колонки з підписами
+   пливе залежно від кількості співробітників, і налазив на текст, що
+   перенісся на другий рядок. Інлайн сам підлаштовується під будь-яку ширину. */
+function TeamGear({ onClick, title = "Хто ділить командні бонуси" }) {
   return (
-    <span role="button" tabIndex={0} className={`st-info${inGroup ? " st-info-l2" : ""}`} title={title} aria-label={title}
-      onClick={onClick} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); onClick(); } }}>
+    <button type="button" className="st-gear" title={title} aria-label={title} onClick={onClick}>
       <Settings size={11} />
-    </span>
+    </button>
   );
 }
 
-function TeamBonusPicker({ salon, ym, emps, excluded, onClose }) {
+function TeamBonusPicker({ salon, ym, emps, excluded, team, onClose }) {
   const [busy, setBusy] = useState("");
+  // Оптимістично: не чекаємо запис у базу → realtime → перезавантаження, щоб
+  // галочка не «висіла» невідомо в якому стані — одразу показуємо, що клікнули.
+  // Якщо запис у базу не вдасться, відкочуємо назад і пояснюємо чому.
+  const [local, setLocal] = useState(excluded);
+  useEffect(() => { setLocal(excluded); }, [excluded]);
   const toggle = async (empId, isExcluded) => {
     setBusy(empId);
+    setLocal((prev) => (isExcluded ? prev.filter((id) => id !== empId) : [...prev, empId]));
     try { await setBonusTeamExclude(salon.key, ym, empId, !isExcluded); }
-    catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    catch (e) {
+      setLocal(excluded); // відкат до того, що реально в базі
+      pushToast({ title: "Не вдалося", body: String(e.message || e) });
+    }
     setBusy("");
   };
+  const activeCount = emps.length - local.length;
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
@@ -2585,9 +2597,12 @@ function TeamBonusPicker({ salon, ym, emps, excluded, onClose }) {
             Стосується дзвінків, сайту/БН, PPI, рекорду й ЕЗ за {monthLabel(ym).toLowerCase()}. Хто без галочки —
             той не отримує особисту частку, а решта команди ділить пул без нього.
           </p>
+          <p className="team-pick-count">
+            Зараз ділять на <b>{activeCount}</b>{team != null && team !== activeCount ? <> · у розрахунку поки <b>{team}</b> (оновиться за кілька секунд)</> : null}
+          </p>
           <div className="team-pick-list">
             {emps.map((e) => {
-              const isExcluded = excluded.includes(e.id);
+              const isExcluded = local.includes(e.id);
               return (
                 <label key={e.id} className={`team-pick-row ${busy === e.id ? "busy" : ""}`}>
                   <input type="checkbox" checked={!isExcluded} disabled={busy === e.id}
@@ -2758,12 +2773,12 @@ function SmStoreSalary({ salon, review, ymProp }) {
   const touch = () => { touched.current = true; };
   const setShared = (path) => (v) => { touch(); setDrafts((d) => _.mapValues(d, (x) => _.set(_.cloneDeep(x), path, v))); };
   const setEmp = (id, path) => (v) => { touch(); setDrafts((d) => ({ ...d, [id]: _.set(_.cloneDeep(d[id]), path, v) })); };
+  // «Рекордний показник» навмисно НЕ підтягується з факту обороту: за замовчуванням
+  // поле пусте, і хтось має усвідомлено внести число, лише коли справді йде на рекорд.
   const setFact = (v) => {
     touch();
     setDrafts((d) => _.mapValues(d, (x) => {
       const y = _.cloneDeep(x);
-      const old = y.base.monthFact || 0;
-      if (!y.record.monthlyTo || y.record.monthlyTo === old) y.record.monthlyTo = v; // оборот для рекорду = факт, поки не змінено вручну
       y.base.monthFact = v;
       return y;
     }));
@@ -3075,8 +3090,8 @@ function SmStoreSalary({ salon, review, ymProp }) {
               <tbody>
                 <StRow g="Основа" gs={1} label="Ставка ЗП" inp={<span className="st-pill">{c0.category} · {planBracketLabel(c0.bracket)}</span>} cells={each((e) => stMoney(c(e).baseAdjusted))} />
                 <StRow g="Дзвінки" gs={1} label="Обіг з дзвінків"
-                  groupExtra={<TeamGear inGroup onClick={() => setTeamPickerOpen(true)} />}
-                  inp={<span className="st-two"><StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" /><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /></span>}
+                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
+                  inp={<span className="st-two"><StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" /><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /><span className="st-hint">на {c0.bonus.team}</span></span>}
                   cells={each((e) => stMoney(c(e).bonus.calls))} />
                 <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>}
                   cells={each((e) => <span className="st-ck"><StChk on={d(e).manager.attestationAll} set={setEmp(e.id, ["manager", "attestationAll"])} label={`Атестація — ${e.full_name}`} /> {stMoney(c(e).mgr.attest)}</span>)} />
@@ -3088,14 +3103,14 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     })} />
                 ))}
                 <StRow g="Сайт і БН" gs={2} label="Продажі із сайту (НП)"
-                  groupExtra={<TeamGear inGroup onClick={() => setTeamPickerOpen(true)} />}
-                  inp={<StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" />} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
+                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
+                  inp={<span className="st-two"><StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" /><span className="st-hint">на {c0.bonus.team}</span></span>} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
                 <StRow label="Продажі по БН"
                   labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
-                  inp={<StIn v={d0.bonus.bnRevenue} set={setShared(["bonus", "bnRevenue"])} label="Продажі по БН" />} cells={each((e) => stMoney(c(e).bonus.bn))} />
+                  inp={<span className="st-two"><StIn v={d0.bonus.bnRevenue} set={setShared(["bonus", "bnRevenue"])} label="Продажі по БН" /><span className="st-hint">на {c0.bonus.team}</span></span>} cells={each((e) => stMoney(c(e).bonus.bn))} />
                 <StRow g="PPI" gs={1} label="Оборот PPI"
-                  groupExtra={<TeamGear inGroup onClick={() => setTeamPickerOpen(true)} />}
-                  inp={<span className="st-two"><StIn v={d0.ppi.ppiRevenue} set={setShared(["ppi", "ppiRevenue"])} label="Оборот PPI" /><StSeg items={[["3%", !!d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(true)], ["1%", !d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(false)]]} /></span>}
+                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
+                  inp={<span className="st-two"><StIn v={d0.ppi.ppiRevenue} set={setShared(["ppi", "ppiRevenue"])} label="Оборот PPI" /><StSeg items={[["3%", !!d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(true)], ["1%", !d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(false)]]} /><span className="st-hint">на {c0.ppi.team}</span></span>}
                   cells={each((e) => stMoney(c(e).ppi.bonus))} />
                 <StRow g="Премії" gs={2} cls={isQuarterEnd ? "" : "st-dim"} label="Квартальна премія"
                   inp={isQuarterEnd ? <span className="st-hint">сума 3 ЗП і «3/3 плани» →</span> : null}
@@ -3104,7 +3119,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     : stMoney(0)))} />
                 <StRow label="Рекордний показник"
                   labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
-                  inp={<span className="st-two"><StIn v={d0.record.monthlyTo} set={setShared(["record", "monthlyTo"])} label="Оборот ТО за місяць (команда)" /><StIn v={d0.record.prevRecord} set={setShared(["record", "prevRecord"])} label="Попередній рекорд ТО" /></span>}
+                  inp={<span className="st-two"><StIn v={d0.record.monthlyTo} set={setShared(["record", "monthlyTo"])} label="Оборот ТО за місяць (команда)" /><StIn v={d0.record.prevRecord} set={setShared(["record", "prevRecord"])} label="Попередній рекорд ТО" /><span className="st-hint">на {c0.record.team}</span></span>}
                   cells={each((e) => stMoney(c(e).record.bonus))} />
                 <StRow g="Керуючий" gs={2} label="Стандарти"
                   inp={mgrEmp ? (
@@ -3139,7 +3154,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                   })} />
                 <StRow label="ЕЗ"
                   labelExtra={<TeamGear title="Хто ділить бонус ЕЗ" onClick={() => setTeamPickerOpen(true)} />}
-                  inp={<button type="button" className="wh-link" onClick={() => setEzOpen(true)}>{ez.list.length} прод. за місяць · переглянути →</button>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
+                  inp={<span className="st-two"><button type="button" className="wh-link" onClick={() => setEzOpen(true)}>{ez.list.length} прод. за місяць · переглянути →</button><span className="st-hint">на {c0.bonus.team}</span></span>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
                 <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>}
                   cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
                 {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>}
@@ -3236,7 +3251,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
       {ezOpen && <EzSalonSalesModal salon={salon} ym={ym} sales={ez.list} onClose={() => setEzOpen(false)} />}
       {teamPickerOpen && (
-        <TeamBonusPicker salon={salon} ym={ym} emps={emps} excluded={excluded} onClose={() => setTeamPickerOpen(false)} />
+        <TeamBonusPicker salon={salon} ym={ym} emps={emps} excluded={excluded} team={c0.bonus.team} onClose={() => setTeamPickerOpen(false)} />
       )}
       {infoGroup && (() => {
         const conds = (ST_COND[infoGroup] || []).map((n) => smCond(n)).filter(Boolean);
@@ -13104,7 +13119,7 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-warn{color:var(--st-neg);}
 .st-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow-x:auto;}
 .st{width:100%;min-width:calc(572px + var(--st-n,3) * 190px);border-collapse:collapse;table-layout:fixed;font-size:13.5px;color:var(--ink);}
-.st td,.st th{padding:0 14px;height:40px;border-bottom:1px solid var(--line);vertical-align:middle;}
+.st td,.st th{padding:9px 14px;min-height:40px;border-bottom:1px solid var(--line);vertical-align:middle;}
 .st th{height:auto;padding:14px 14px 14px;text-align:left;font-weight:500;border-bottom:1px solid var(--line-strong);}
 .st-hl{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);vertical-align:bottom;}
 .st-he{text-align:right !important;}
@@ -13114,11 +13129,16 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-g-in{display:block;white-space:nowrap;}
 .st-g{position:relative;vertical-align:top !important;padding-top:12px !important;line-height:16px;}
 .st-info{position:absolute;top:11px;right:9px;display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;border:1.3px solid var(--st-cap);color:var(--st-cap);cursor:pointer;flex-shrink:0;text-transform:none;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
-.st-info.st-info-l2{right:30px;} /* шестерня лівіше значка «Умови», коли обидва в одній комірці */
 .st-info:hover,.st-info:focus-visible{color:var(--st-gold);border-color:var(--st-gold);background:rgba(190,138,46,.12);outline:none;}
 .cond-h{margin:16px 0 6px;font-family:'Fraunces',serif;font-size:14.5px;font-weight:600;color:var(--ink);}
 .st-g{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--surface-alt);border-right:1px solid var(--line);}
-.st-lab{font-weight:500;position:relative;}
+.st-lab{font-weight:500;}
+/* шестерня командних бонусів — звичайний інлайн-елемент одразу після тексту,
+   свідомо не absolute: ширина цієї колонки пливе залежно від кількості
+   співробітників, і фіксовані координати на вузькому екрані налазили на текст. */
+.st-lab-in{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.st-gear{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;flex-shrink:0;border:1.3px solid var(--st-cap);border-radius:50%;background:none;color:var(--st-cap);cursor:pointer;padding:0;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
+.st-gear:hover,.st-gear:focus-visible{color:var(--st-gold);border-color:var(--st-gold);background:rgba(190,138,46,.12);outline:none;}
 .st-rule{color:var(--muted);font-size:12.5px;line-height:1.35;}
 .st-num{text-align:right;font-size:14.5px;font-family:'IBM Plex Mono',monospace;font-weight:500;font-variant-numeric:tabular-nums;}
 .st-mute{color:var(--faint);}
@@ -13483,6 +13503,8 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .emp-group{border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;background:var(--surface);box-shadow:var(--sh-1);}
 .emp-group-head{padding:9px 14px;background:var(--surface-alt);font-family:'Fraunces',serif;font-size:14px;font-weight:600;color:var(--ink);}
 .emp-group-head span{color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px;}
+.team-pick-count{font-size:12.5px;color:var(--ink-soft);margin:2px 0 10px;}
+.team-pick-count b{color:var(--gold);font-family:'IBM Plex Mono',monospace;}
 .team-pick-list{display:flex;flex-direction:column;gap:2px;}
 .team-pick-row{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer;}
 .team-pick-row:last-child{border-bottom:none;}
