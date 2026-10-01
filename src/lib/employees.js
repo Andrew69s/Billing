@@ -67,8 +67,23 @@ export async function transferEmployee(emp, salon_key, by) {
   await updateEmployee(emp, { salon_key }, by, "transferred");
 }
 
+/* Жорстке видалення — ЛИШЕ для помилково створених записів без жодної історії ЗП.
+   Звільнення (навіть остаточне) має йти через fireEmployee: з людиною ще треба
+   розрахуватися, тож запис і її розрахунки ЗП мають лишатись у системі назавжди. */
 export async function deleteEmployee(id) {
-  const { error } = await supabase.from("employees").delete().eq("id", id);
+  const empId = typeof id === "object" ? id.id : id;
+  const { data: emp, error: fetchErr } = await supabase.from("employees").select("*").eq("id", empId).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  const salonKeys = new Set();
+  if (emp?.salon_key) salonKeys.add(emp.salon_key);
+  for (const h of emp?.history || []) { const sk = h.salon_key || h.salon; if (sk) salonKeys.add(sk); }
+  for (const sk of salonKeys) {
+    const r = await window.storage.list(`smdata:${sk}:${empId}:`).catch(() => null);
+    if (r?.keys?.length) {
+      throw new Error("У співробітника вже є збережені розрахунки ЗП — видалення заблоковано. Для звільнення використовуйте «Звільнити» (запис лишається в архіві, з людиною можна розрахуватись).");
+    }
+  }
+  const { error } = await supabase.from("employees").delete().eq("id", empId);
   if (error) throw error;
 }
 

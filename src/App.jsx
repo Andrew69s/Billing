@@ -3011,7 +3011,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
           <fieldset className="st-fs" disabled={isReview && !editMode}>
           <div className="st-strip">
             <div className="st-cell">
-              <div className="st-cap">План · факт · виконання</div>
+              <div className="st-cap">Виконання по основній групі</div>
               <div className="st-plan">
                 <span><em>План</em> <b>{stNum(c0.monthPlan)}</b></span>
                 <label><em>Факт з ЕЗ</em> <StIn v={d0.base.monthFact} set={setFact} label="Факт з ЕЗ за місяць" cls="st-in-w" /></label>
@@ -3030,10 +3030,11 @@ function SmStoreSalary({ salon, review, ymProp }) {
             </div>
             <div className="st-cell">
               <div className="st-cap">Виконання без ЕЗ</div>
-              <div className="st-rate st-ez-sum">{stNum(c0.factAdjusted - ez.total)} ₴</div>
-              <div className="st-hint">
-                <span className={`st-pct-sm ${pctNoEz >= 100 ? "ok" : ""}`}>{pctNoEz.toFixed(0)}%</span> від плану {stNum(c0.monthPlan)}
+              <div className="st-plan">
+                <span><em>Скориг. факт без ЕЗ</em> <b>{stNum(c0.factAdjusted - ez.total)}</b></span>
+                <span className={`st-pct ${pctNoEz >= 100 ? "ok" : ""}`}>{pctNoEz.toFixed(0)}%</span>
               </div>
+              <div className="st-hint">від плану {stNum(c0.monthPlan)}</div>
             </div>
             <div className="st-cell">
               <div className="st-cap">Категорія · {d0.base.categoryOverride ? "вручну" : "авто"}</div>
@@ -3387,6 +3388,7 @@ function SmPlanForm({ salon, ym, tmKey, onBack }) {
   }, [salon.key, ym]);
 
   const upd = (k) => (v) => setPlan((p) => ({ ...p, [k]: v }));
+  const fromPlanner = plan.updated_by === "planner";
   const save = async () => {
     setSaving(true);
     try {
@@ -3413,8 +3415,11 @@ function SmPlanForm({ salon, ym, tmKey, onBack }) {
       )}
       <div className="criteria-form">
         <div className="item-fields">
-          <Field label="План обороту на місяць" suffix="грн" value={plan.turnover_plan} onChange={upd("turnover_plan")} readOnly={plan.locked} />
+          <Field label="План обороту на місяць" suffix="грн" value={plan.turnover_plan} onChange={upd("turnover_plan")} readOnly={plan.locked || fromPlanner} />
         </div>
+        {fromPlanner && !plan.locked && (
+          <p className="hint">План обороту підтягнуто з планера автоматично (щодня) — вручну не редагується.</p>
+        )}
         <div className="hint" style={{ margin: "14px 0 6px" }}>Пороги середнього чека — три градації бонусу (700 / 1 500 / 2 000 грн)</div>
         <div className="item-fields">
           <Field label="Поріг 1 → 700 грн" value={plan.avg_check_t1} onChange={upd("avg_check_t1")} readOnly={plan.locked} />

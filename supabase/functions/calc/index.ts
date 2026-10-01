@@ -56,6 +56,16 @@ function salonTmOn(salonKey: string, ym: string, reass: any[]): string | null {
 function salonsOfTm(tmKey: string, ym: string, reass: any[]): string[] {
   return Object.keys(SALONS).filter((k) => salonTmOn(k, ym, reass) === tmKey);
 }
+// у якому магазині співробітник вважається «своїм» на місяць ym — дзеркало
+// src/lib/employees.js:empSalonOn, бо при переведенні серед місяця поточний
+// salon_key уже не той, де людина фактично рахувалась того місяця.
+function empSalonOn(emp: any, ym: string): string {
+  const events = (emp.history || [])
+    .map((h: any) => ({ ym: String(h?.at || "").slice(0, 7), salon_key: h?.salon_key || h?.salon }))
+    .filter((h: any) => h.salon_key && h.ym && h.ym <= ym)
+    .sort((a: any, b: any) => (a.ym < b.ym ? -1 : a.ym > b.ym ? 1 : 0));
+  return events.length ? events[events.length - 1].salon_key : emp.salon_key;
+}
 
 // =========================================================
 //  РУШІЙ МОТИВАЦІЇ ТМ  (перенесено з src/App.jsx — таємниця)
@@ -331,11 +341,16 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
   const mgr = calcManagerBlock(data.manager, baseAdjusted);
   // Пороги середнього чека/довжини чека — теж із плану ТМ, якщо він уже внесений
   // (fallback на самовведені СМ значення для місяців до впровадження плану).
+  // monthlyToPlan для гейта 3.1 (бонус за дзвінки) — завжди той самий план ТО,
+  // що й основний monthPlan вище (план ТМ, sm_plans), а не старе самовведене поле
+  // data.bonus.monthlyToPlan — інакше гейт на 10% порівнювався з неактуальним числом
+  // і бонус майже завжди лишався на 3% навіть при виконаному плані дзвінків.
   const effectiveBonusInput = planRow ? {
     ...data.bonus,
+    monthlyToPlan: monthPlan,
     scN1: planRow.avg_check_t1, scN2: planRow.avg_check_t2, scN3: planRow.avg_check_t3,
     clN1: planRow.check_len_t1, clN2: planRow.check_len_t2, clN3: planRow.check_len_t3,
-  } : data.bonus;
+  } : { ...data.bonus, monthlyToPlan: monthPlan };
   const bonus = calcBonusBlock(effectiveBonusInput, dailyRate, teamSize, excludedFromTeam);
   // 20% чистого прибутку по підтверджених ТМ продажах ЕЗ цього магазину за місяць — на команду
   const ezTeam = excludedFromTeam ? 0 : Math.round(((ezProfitSum || 0) * 0.20) / Math.max(1, teamSize || 1));
@@ -459,11 +474,18 @@ Deno.serve(async (req) => {
     // місяця — тоді і дільник, і особиста частка цієї людини зменшуються разом.
     const salonKeys = [...new Set(items.map((it: any) => it.salonKey).filter(Boolean))];
     const pairKeys = [...new Set(items.map((it: any) => `${it.salonKey}|${it.ym}`))];
-    const empsBySalon: Record<string, string[]> = {};
-    if (salonKeys.length) {
+    // команда рахується по магазину, де співробітник числився САМЕ в місяці ym
+    // (empSalonOn), а не по поточному salon_key — інакше переведений серед
+    // місяця співробітник або губиться з дільника, або лишається в ньому
+    // назавжди на старому місці.
+    const empsBySalonYm: Record<string, string[]> = {};
+    if (pairKeys.length) {
       const { data: emps } = await svc.from("employees")
-        .select("id, salon_key").eq("status", "active").in("salon_key", salonKeys);
-      for (const e of emps || []) (empsBySalon[e.salon_key] ||= []).push(e.id);
+        .select("id, salon_key, history").eq("status", "active");
+      for (const key of pairKeys) {
+        const [sk, ym] = key.split("|");
+        empsBySalonYm[key] = (emps || []).filter((e: any) => empSalonOn(e, ym) === sk).map((e: any) => e.id);
+      }
     }
     const excludedByPair: Record<string, Set<string>> = {};
     if (salonKeys.length) {
@@ -477,8 +499,7 @@ Deno.serve(async (req) => {
     }
     const teamByPair: Record<string, number> = {};
     for (const key of pairKeys) {
-      const [sk] = key.split("|");
-      const all = empsBySalon[sk] || [];
+      const all = empsBySalonYm[key] || [];
       const excl = excludedByPair[key];
       teamByPair[key] = excl ? all.filter((id) => !excl.has(id)).length : all.length;
     }
