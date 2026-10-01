@@ -2519,7 +2519,7 @@ const ST_COND = {
   "PPI": ["4.1"], "Премії": ["5.1", "5.2"], "Керуючий": ["2.2", "2.3"], "Інше": ["3.2", "5.3"],
 };
 const StInfoCtx = React.createContext(null);
-function StRow({ g, gs, label, inp, cells, cls, labelExtra }) {
+function StRow({ g, gs, label, inp, cells, cls, labelExtra, groupExtra }) {
   const openInfo = React.useContext(StInfoCtx);
   return (
     <tr className={`${g ? "st-gt " : ""}${cls || ""}`}>
@@ -2527,6 +2527,7 @@ function StRow({ g, gs, label, inp, cells, cls, labelExtra }) {
         <td className="st-g" rowSpan={gs}>
           <span className="st-g-in">
             {g}
+            {groupExtra}
             {ST_COND[g] && openInfo && (
               <span role="button" tabIndex={0} className="st-info" title="Умови мотивації" aria-label={`Умови: ${g}`}
                 onClick={() => openInfo(g)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openInfo(g); } }}><Info size={11} /></span>
@@ -2552,10 +2553,12 @@ function StTotalRow({ label, hint, cells, cls }) {
 /* Шестерня біля командних бонусів / ЕЗ: керуючий вимикає зі спільного поділу
    тих, хто не має його отримувати (типово — стажери). За замовчуванням усі
    активні діляться порівну, тут лише позначаються винятки на цей місяць. */
-/* Шестерня біля кожного командного пункту — усі ведуть до того самого пікера. */
-function TeamGear({ onClick, title = "Хто ділить командні бонуси" }) {
+/* Шестерня біля кожного командного пункту — усі ведуть до того самого пікера.
+   inGroup: рядок, на якому в тій самій комірці вже є значок «Умови» (Дзвінки,
+   Сайт і БН, PPI) — тоді шестерня стає лівіше нього, а не ліпиться поверх. */
+function TeamGear({ onClick, title = "Хто ділить командні бонуси", inGroup }) {
   return (
-    <span role="button" tabIndex={0} className="st-info" title={title} aria-label={title}
+    <span role="button" tabIndex={0} className={`st-info${inGroup ? " st-info-l2" : ""}`} title={title} aria-label={title}
       onClick={onClick} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); onClick(); } }}>
       <Settings size={11} />
     </span>
@@ -3072,7 +3075,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
               <tbody>
                 <StRow g="Основа" gs={1} label="Ставка ЗП" inp={<span className="st-pill">{c0.category} · {planBracketLabel(c0.bracket)}</span>} cells={each((e) => stMoney(c(e).baseAdjusted))} />
                 <StRow g="Дзвінки" gs={1} label="Обіг з дзвінків"
-                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
+                  groupExtra={<TeamGear inGroup onClick={() => setTeamPickerOpen(true)} />}
                   inp={<span className="st-two"><StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" /><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /></span>}
                   cells={each((e) => stMoney(c(e).bonus.calls))} />
                 <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>}
@@ -3085,13 +3088,13 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     })} />
                 ))}
                 <StRow g="Сайт і БН" gs={2} label="Продажі із сайту (НП)"
-                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
+                  groupExtra={<TeamGear inGroup onClick={() => setTeamPickerOpen(true)} />}
                   inp={<StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" />} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
                 <StRow label="Продажі по БН"
                   labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
                   inp={<StIn v={d0.bonus.bnRevenue} set={setShared(["bonus", "bnRevenue"])} label="Продажі по БН" />} cells={each((e) => stMoney(c(e).bonus.bn))} />
                 <StRow g="PPI" gs={1} label="Оборот PPI"
-                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
+                  groupExtra={<TeamGear inGroup onClick={() => setTeamPickerOpen(true)} />}
                   inp={<span className="st-two"><StIn v={d0.ppi.ppiRevenue} set={setShared(["ppi", "ppiRevenue"])} label="Оборот PPI" /><StSeg items={[["3%", !!d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(true)], ["1%", !d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(false)]]} /></span>}
                   cells={each((e) => stMoney(c(e).ppi.bonus))} />
                 <StRow g="Премії" gs={2} cls={isQuarterEnd ? "" : "st-dim"} label="Квартальна премія"
@@ -13111,10 +13114,11 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 .st-g-in{display:block;white-space:nowrap;}
 .st-g{position:relative;vertical-align:top !important;padding-top:12px !important;line-height:16px;}
 .st-info{position:absolute;top:11px;right:9px;display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;border:1.3px solid var(--st-cap);color:var(--st-cap);cursor:pointer;flex-shrink:0;text-transform:none;transition:color .15s var(--ease),border-color .15s var(--ease),background .15s var(--ease);}
+.st-info.st-info-l2{right:30px;} /* шестерня лівіше значка «Умови», коли обидва в одній комірці */
 .st-info:hover,.st-info:focus-visible{color:var(--st-gold);border-color:var(--st-gold);background:rgba(190,138,46,.12);outline:none;}
 .cond-h{margin:16px 0 6px;font-family:'Fraunces',serif;font-size:14.5px;font-weight:600;color:var(--ink);}
 .st-g{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--surface-alt);border-right:1px solid var(--line);}
-.st-lab{font-weight:500;}
+.st-lab{font-weight:500;position:relative;}
 .st-rule{color:var(--muted);font-size:12.5px;line-height:1.35;}
 .st-num{text-align:right;font-size:14.5px;font-family:'IBM Plex Mono',monospace;font-weight:500;font-variant-numeric:tabular-nums;}
 .st-mute{color:var(--faint);}
