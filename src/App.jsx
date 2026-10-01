@@ -2519,7 +2519,7 @@ const ST_COND = {
   "PPI": ["4.1"], "Премії": ["5.1", "5.2"], "Керуючий": ["2.2", "2.3"], "Інше": ["3.2", "5.3"],
 };
 const StInfoCtx = React.createContext(null);
-function StRow({ g, gs, label, inp, cells, cls, labelExtra, groupExtra }) {
+function StRow({ g, gs, label, inp, cells, cls, labelExtra }) {
   const openInfo = React.useContext(StInfoCtx);
   return (
     <tr className={`${g ? "st-gt " : ""}${cls || ""}`}>
@@ -2531,7 +2531,6 @@ function StRow({ g, gs, label, inp, cells, cls, labelExtra, groupExtra }) {
               <span role="button" tabIndex={0} className="st-info" title="Умови мотивації" aria-label={`Умови: ${g}`}
                 onClick={() => openInfo(g)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openInfo(g); } }}><Info size={11} /></span>
             )}
-            {groupExtra}
           </span>
         </td>
       )}
@@ -2553,6 +2552,16 @@ function StTotalRow({ label, hint, cells, cls }) {
 /* Шестерня біля командних бонусів / ЕЗ: керуючий вимикає зі спільного поділу
    тих, хто не має його отримувати (типово — стажери). За замовчуванням усі
    активні діляться порівну, тут лише позначаються винятки на цей місяць. */
+/* Шестерня біля кожного командного пункту — усі ведуть до того самого пікера. */
+function TeamGear({ onClick, title = "Хто ділить командні бонуси" }) {
+  return (
+    <span role="button" tabIndex={0} className="st-info" title={title} aria-label={title}
+      onClick={onClick} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); onClick(); } }}>
+      <Settings size={11} />
+    </span>
+  );
+}
+
 function TeamBonusPicker({ salon, ym, emps, excluded, onClose }) {
   const [busy, setBusy] = useState("");
   const toggle = async (empId, isExcluded) => {
@@ -3062,14 +3071,8 @@ function SmStoreSalary({ salon, review, ymProp }) {
               </thead>
               <tbody>
                 <StRow g="Основа" gs={1} label="Ставка ЗП" inp={<span className="st-pill">{c0.category} · {planBracketLabel(c0.bracket)}</span>} cells={each((e) => stMoney(c(e).baseAdjusted))} />
-                <StRow g="Дзвінки" gs={1}
-                  groupExtra={(
-                    <span role="button" tabIndex={0} className="st-info" title="Хто ділить командні бонуси" aria-label="Хто ділить командні бонуси"
-                      onClick={() => setTeamPickerOpen(true)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setTeamPickerOpen(true); } }}>
-                      <Settings size={11} />
-                    </span>
-                  )}
-                  label="Обіг з дзвінків"
+                <StRow g="Дзвінки" gs={1} label="Обіг з дзвінків"
+                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
                   inp={<span className="st-two"><StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" /><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /></span>}
                   cells={each((e) => stMoney(c(e).bonus.calls))} />
                 <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>}
@@ -3081,9 +3084,14 @@ function SmStoreSalary({ salon, review, ymProp }) {
                       return <span className="st-ck"><StChk on={k.ok} set={(v) => setKpi(e, kind, { ok: v })} label={`${title} — ${e.full_name}, зарахувати`} /><StIn v={k.sum} set={(v) => setKpi(e, kind, { sum: v })} label={`${title} — ${e.full_name}, сума`} cls={`st-in-m ${k.ok ? "" : "off"}`} /></span>;
                     })} />
                 ))}
-                <StRow g="Сайт і БН" gs={2} label="Продажі із сайту (НП)" inp={<StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" />} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
-                <StRow label="Продажі по БН" inp={<StIn v={d0.bonus.bnRevenue} set={setShared(["bonus", "bnRevenue"])} label="Продажі по БН" />} cells={each((e) => stMoney(c(e).bonus.bn))} />
+                <StRow g="Сайт і БН" gs={2} label="Продажі із сайту (НП)"
+                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
+                  inp={<StIn v={d0.bonus.siteNpRevenue} set={setShared(["bonus", "siteNpRevenue"])} label="Продажі із сайту через НП" />} cells={each((e) => stMoney(c(e).bonus.siteNp))} />
+                <StRow label="Продажі по БН"
+                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
+                  inp={<StIn v={d0.bonus.bnRevenue} set={setShared(["bonus", "bnRevenue"])} label="Продажі по БН" />} cells={each((e) => stMoney(c(e).bonus.bn))} />
                 <StRow g="PPI" gs={1} label="Оборот PPI"
+                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
                   inp={<span className="st-two"><StIn v={d0.ppi.ppiRevenue} set={setShared(["ppi", "ppiRevenue"])} label="Оборот PPI" /><StSeg items={[["3%", !!d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(true)], ["1%", !d0.ppi.planClosed, () => setShared(["ppi", "planClosed"])(false)]]} /></span>}
                   cells={each((e) => stMoney(c(e).ppi.bonus))} />
                 <StRow g="Премії" gs={2} cls={isQuarterEnd ? "" : "st-dim"} label="Квартальна премія"
@@ -3092,6 +3100,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     ? <span className="st-ck"><StChk on={d(e).quarterly.threeOfThree} set={setEmp(e.id, ["quarterly", "threeOfThree"])} label={`3/3 плани — ${e.full_name}`} /><StIn v={d(e).quarterly.last3SalarySum} set={setEmp(e.id, ["quarterly", "last3SalarySum"])} label={`Сума 3 останніх ЗП — ${e.full_name}`} cls="st-in-m" /></span>
                     : stMoney(0)))} />
                 <StRow label="Рекордний показник"
+                  labelExtra={<TeamGear onClick={() => setTeamPickerOpen(true)} />}
                   inp={<span className="st-two"><StIn v={d0.record.monthlyTo} set={setShared(["record", "monthlyTo"])} label="Оборот ТО за місяць (команда)" /><StIn v={d0.record.prevRecord} set={setShared(["record", "prevRecord"])} label="Попередній рекорд ТО" /></span>}
                   cells={each((e) => stMoney(c(e).record.bonus))} />
                 <StRow g="Керуючий" gs={2} label="Стандарти"
@@ -3126,12 +3135,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                     );
                   })} />
                 <StRow label="ЕЗ"
-                  labelExtra={(
-                    <span role="button" tabIndex={0} className="st-info" title="Хто ділить бонус ЕЗ" aria-label="Хто ділить бонус ЕЗ"
-                      onClick={() => setTeamPickerOpen(true)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setTeamPickerOpen(true); } }}>
-                      <Settings size={11} />
-                    </span>
-                  )}
+                  labelExtra={<TeamGear title="Хто ділить бонус ЕЗ" onClick={() => setTeamPickerOpen(true)} />}
                   inp={<button type="button" className="wh-link" onClick={() => setEzOpen(true)}>{ez.list.length} прод. за місяць · переглянути →</button>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
                 <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>}
                   cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
