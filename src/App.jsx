@@ -2567,7 +2567,7 @@ function TeamGear({ onClick, title = "Хто ділить командні бо�
   );
 }
 
-function TeamBonusPicker({ salon, ym, emps, excluded, team, onClose }) {
+function TeamBonusPicker({ salon, ym, emps, excluded, onClose }) {
   const [busy, setBusy] = useState("");
   // Оптимістично: не чекаємо запис у базу → realtime → перезавантаження, щоб
   // галочка не «висіла» невідомо в якому стані — одразу показуємо, що клікнули.
@@ -2598,7 +2598,7 @@ function TeamBonusPicker({ salon, ym, emps, excluded, team, onClose }) {
             той не отримує особисту частку, а решта команди ділить пул без нього.
           </p>
           <p className="team-pick-count">
-            Зараз ділять на <b>{activeCount}</b>{team != null && team !== activeCount ? <> · у розрахунку поки <b>{team}</b> (оновиться за кілька секунд)</> : null}
+            Зараз ділять на <b>{activeCount}</b>
           </p>
           <div className="team-pick-list">
             {emps.map((e) => {
@@ -3252,7 +3252,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
       {ezOpen && <EzSalonSalesModal salon={salon} ym={ym} sales={ez.list} onClose={() => setEzOpen(false)} />}
       {teamPickerOpen && (
-        <TeamBonusPicker salon={salon} ym={ym} emps={emps} excluded={excluded} team={c0.bonus.team} onClose={() => setTeamPickerOpen(false)} />
+        <TeamBonusPicker salon={salon} ym={ym} emps={emps} excluded={excluded} onClose={() => setTeamPickerOpen(false)} />
       )}
       {infoGroup && (() => {
         const conds = (ST_COND[infoGroup] || []).map((n) => smCond(n)).filter(Boolean);

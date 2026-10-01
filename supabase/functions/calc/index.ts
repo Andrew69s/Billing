@@ -66,6 +66,18 @@ function empSalonOn(emp: any, ym: string): string {
     .sort((a: any, b: any) => (a.ym < b.ym ? -1 : a.ym > b.ym ? 1 : 0));
   return events.length ? events[events.length - 1].salon_key : emp.salon_key;
 }
+// дзеркало src/lib/employees.js:wasEmployedOn — звільнений/переведений і далі
+// рахується в дільнику командних бонусів за ті місяці, які застав; інакше
+// команда на сервері виходила меншою, ніж та, що бачить клієнт (SmStoreSalary),
+// і бонус рахувався на невірний дільник для всіх співробітників магазину.
+function wasEmployedOn(emp: any, ym: string): boolean {
+  if (!emp) return false;
+  const hired = String(emp.hired_at || "").slice(0, 7);
+  if (hired && hired > ym) return false;
+  if (emp.status === "active") return true;
+  const fired = String(emp.fired_at || "").slice(0, 7);
+  return !fired || fired >= ym;
+}
 
 // =========================================================
 //  РУШІЙ МОТИВАЦІЇ ТМ  (перенесено з src/App.jsx — таємниця)
@@ -308,7 +320,7 @@ function calcRecord(r: any, teamSize = 1, excluded = false) {
   return { threshold, beaten, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
 }
 function calcQuarterly(q: any) { if (!q.threeOfThree) return 0; return Math.round((q.last3SalarySum || 0) * 0.1); }
-function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: any, avg3FromHistory?: number | null, ezProfitSum = 0, excludedFromTeam = false) {
+function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: any, avg3FromHistory?: number | null, ezProfitSum = 0, excludedFromTeam = false, ezTotalSum = 0) {
   const daysInMonth = daysInMonthOf(ym);
   // «Середній ТО за 3 міс» — авто з реальної історії обороту (без ЕЗ), якщо вже
   // накопичилось достатньо місяців; поки історії нема (старі місяці/новий магазин) —
@@ -320,13 +332,18 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
   // план ТО на місяць — те саме число, що СМ вносить для бонусу за дзвінки (3.1);
   // факт коригується: чеки Віктора (фіктивні) мінусуються повністю,
   // низькорентабельні чеки рахуються в оборот лише на 50%.
+  // «Основна група» — це оборот БЕЗ ЕЗ (ЕЗ — окрема товарна категорія зі своїм
+  // окремим бонусом 20% від прибутку, рахується нижче через ezTeam); план ТМ
+  // (sm_plans.turnover_plan, і з планера так само) заданий саме без ЕЗ, тож і факт
+  // для порівняння з ним має бути без ЕЗ — інакше % і категорія/ставка ЗП
+  // виходили роздуті на суму продажів ЕЗ.
   // План ТО і пороги чека — тепер задає ТМ (sm_plans), а не сам СМ; якщо плану на
   // місяць ще не внесено — fallback на те, що СМ вписав у форму (старі місяці).
   const monthPlan = (planRow?.turnover_plan) || data.bonus?.monthlyToPlan || 0;
   const monthFact = data.base.monthFact || 0;
   const viktorChecks = data.base.viktorChecks || 0;
   const lowMarginChecks = data.base.lowMarginChecks || 0;
-  const factAdjusted = Math.max(0, monthFact - viktorChecks - lowMarginChecks * 0.5);
+  const factAdjusted = Math.max(0, monthFact - viktorChecks - lowMarginChecks * 0.5 - (ezTotalSum || 0));
   // старі місяці (до переходу на план/факт) мали ручне поле base.planPercent —
   // лишаємо його чинним, поки СМ не почав заповнювати нові поля цього місяця
   const usesNewFields = monthFact > 0 || viktorChecks > 0 || lowMarginChecks > 0;
@@ -481,10 +498,12 @@ Deno.serve(async (req) => {
     const empsBySalonYm: Record<string, string[]> = {};
     if (pairKeys.length) {
       const { data: emps } = await svc.from("employees")
-        .select("id, salon_key, history").eq("status", "active");
+        .select("id, salon_key, status, hired_at, fired_at, history");
       for (const key of pairKeys) {
         const [sk, ym] = key.split("|");
-        empsBySalonYm[key] = (emps || []).filter((e: any) => empSalonOn(e, ym) === sk).map((e: any) => e.id);
+        empsBySalonYm[key] = (emps || [])
+          .filter((e: any) => wasEmployedOn(e, ym) && empSalonOn(e, ym) === sk)
+          .map((e: any) => e.id);
       }
     }
     const excludedByPair: Record<string, Set<string>> = {};
