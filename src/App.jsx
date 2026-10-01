@@ -6389,10 +6389,11 @@ function EmployeeForm({ cab, salons, emp, onClose, onSaved }) {
 
 function FireModal({ emp, cab, onClose, onDone }) {
   const [reason, setReason] = useState("");
+  const [lastDay, setLastDay] = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
   const fire = async () => {
     setBusy(true);
-    try { await fireEmployee(emp, reason, cab.key); pushToast({ title: "Співробітника звільнено", body: emp.full_name }); onDone(); onClose(); }
+    try { await fireEmployee(emp, reason, cab.key, lastDay); pushToast({ title: "Співробітника звільнено", body: emp.full_name }); onDone(); onClose(); }
     catch (e) { alert(e.message || e); setBusy(false); }
   };
   return createPortal(
@@ -6400,10 +6401,13 @@ function FireModal({ emp, cab, onClose, onDone }) {
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: "min(420px,100%)" }}>
         <div className="modal-head"><h3>Звільнити: {emp.full_name}</h3><button className="modal-x" onClick={onClose}><X size={18} /></button></div>
         <div className="modal-body">
+          <label className="over-field"><span>Останній робочий день</span>
+            <input type="date" value={lastDay} onChange={(e) => setLastDay(e.target.value)} />
+          </label>
           <label className="over-field"><span>Причина / коментар</span>
             <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
           </label>
-          <p className="hint">Запис перейде в «Архів». Дані збережуться.</p>
+          <p className="hint">Запис перейде в «Архів». Дані за відпрацьовані місяці (графік, ЗП) лишаться доступні.</p>
         </div>
         <div className="modal-foot">
           <button className="btn-secondary" onClick={onClose}>Скасувати</button>

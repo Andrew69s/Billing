@@ -45,10 +45,10 @@ export async function updateEmployee(emp, patch, by, action) {
   if (error) throw error;
 }
 
-export async function fireEmployee(emp, reason, by) {
+export async function fireEmployee(emp, reason, by, lastWorkDay) {
   await updateEmployee(
     emp,
-    { status: "fired", fired_at: new Date().toISOString().slice(0, 10), fired_reason: (reason || "").trim() },
+    { status: "fired", fired_at: lastWorkDay || new Date().toISOString().slice(0, 10), fired_reason: (reason || "").trim() },
     by,
     "fired",
   );
