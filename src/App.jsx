@@ -12,7 +12,7 @@ import {
   Cake, UserPlus, UserMinus, Archive as ArchiveIcon, CalendarRange, ExternalLink, RefreshCw,
   Eye, EyeOff, GripVertical, SlidersHorizontal, Table,
   Wrench, MessageSquare, Send, Banknote, Menu,
-  Warehouse, Paperclip, Info, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search, Lock,
+  Warehouse, Paperclip, Info, PackagePlus, TrendingDown, Minus, Moon, Sun, Truck, ScanLine, ShieldCheck, BadgePercent, Search, Lock, Settings,
 } from "lucide-react";
 import {
   MANAGER, ACCOUNTANT, OFFICE, TMS, SALONS, salonLabel, salonByKey, salonsOfTm, salonTmOn, tmByKey, cabName,
@@ -68,6 +68,7 @@ import {
   bDaysInYm, bDateOf, bonusNet, listBonusYear, saveBonusDay, subscribeBonus, bonusYearAgg,
   listBonusMonthly, bonusMonthlyMap,
 } from "./lib/bonus.js";
+import { listBonusTeamExclude, setBonusTeamExclude, subscribeBonusTeamExclude } from "./lib/bonusTeam.js";
 import { pushState, enablePush, disablePush } from "./lib/push.js";
 import { soundOn, setSoundOn, desktopSupported, desktopPermission, desktopOn, setDesktopOff, enableDesktop, alertNew } from "./lib/alerts.js";
 import {
@@ -310,7 +311,7 @@ async function listSmMonths(salonKey, empId) {
 async function salonSalaryRows(salonKey, ym, employees) {
   const emps = (employees || []).filter((e) => e.status === "active" && empSalonOn(e, ym) === salonKey);
   const datas = await Promise.all(emps.map((e) => loadSmData(salonKey, e.id, ym)));
-  const calcs = emps.length ? await calcSmBatch(emps.map((e, i) => ({ data: datas[i], salonKey, ym }))) : [];
+  const calcs = emps.length ? await calcSmBatch(emps.map((e, i) => ({ data: datas[i], salonKey, ym, empId: e.id }))) : [];
   return emps.map((e, i) => ({ emp: e, data: datas[i], calc: calcs[i], total: calcs[i]?.total || 0 }));
 }
 
@@ -2518,7 +2519,7 @@ const ST_COND = {
   "PPI": ["4.1"], "Премії": ["5.1", "5.2"], "Керуючий": ["2.2", "2.3"], "Інше": ["3.2", "5.3"],
 };
 const StInfoCtx = React.createContext(null);
-function StRow({ g, gs, label, inp, cells, cls }) {
+function StRow({ g, gs, label, inp, cells, cls, labelExtra, groupExtra }) {
   const openInfo = React.useContext(StInfoCtx);
   return (
     <tr className={`${g ? "st-gt " : ""}${cls || ""}`}>
@@ -2530,10 +2531,11 @@ function StRow({ g, gs, label, inp, cells, cls }) {
               <span role="button" tabIndex={0} className="st-info" title="Умови мотивації" aria-label={`Умови: ${g}`}
                 onClick={() => openInfo(g)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openInfo(g); } }}><Info size={11} /></span>
             )}
+            {groupExtra}
           </span>
         </td>
       )}
-      <td className="st-lab">{label}</td>
+      <td className="st-lab">{label}{labelExtra}</td>
       <td className="st-inp">{inp}</td>
       {cells.map((x, i) => <td key={i} className="st-num">{x}</td>)}
     </tr>
@@ -2545,6 +2547,49 @@ function StTotalRow({ label, hint, cells, cls }) {
       <td colSpan={3} className="st-lab">{label} {hint && <span className="st-hint">{hint}</span>}</td>
       {cells.map((x, i) => <td key={i} className="st-num">{x}</td>)}
     </tr>
+  );
+}
+
+/* Шестерня біля командних бонусів / ЕЗ: керуючий вимикає зі спільного поділу
+   тих, хто не має його отримувати (типово — стажери). За замовчуванням усі
+   активні діляться порівну, тут лише позначаються винятки на цей місяць. */
+function TeamBonusPicker({ salon, ym, emps, excluded, onClose }) {
+  const [busy, setBusy] = useState("");
+  const toggle = async (empId, isExcluded) => {
+    setBusy(empId);
+    try { await setBonusTeamExclude(salon.key, ym, empId, !isExcluded); }
+    catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
+    setBusy("");
+  };
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal task-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>Хто ділить командні бонуси</h3>
+          <button className="modal-x" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <p className="hint">
+            Стосується дзвінків, сайту/БН, PPI, рекорду й ЕЗ за {monthLabel(ym).toLowerCase()}. Хто без галочки —
+            той не отримує особисту частку, а решта команди ділить пул без нього.
+          </p>
+          <div className="team-pick-list">
+            {emps.map((e) => {
+              const isExcluded = excluded.includes(e.id);
+              return (
+                <label key={e.id} className={`team-pick-row ${busy === e.id ? "busy" : ""}`}>
+                  <input type="checkbox" checked={!isExcluded} disabled={busy === e.id}
+                    onChange={() => toggle(e.id, isExcluded)} />
+                  <span>{e.full_name}</span>
+                  <span className={`badge ${empRoleTone[e.role]}`}>{EMP_ROLES[e.role]}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -2569,6 +2614,8 @@ function SmStoreSalary({ salon, review, ymProp }) {
   const [shotsOpen, setShotsOpen] = useState(false);
   const [ez, setEz] = useState({ total: 0, confirmed: 0, list: [] }); // оборот ЕЗ за місяць з модуля «ЕЗ»
   const [ezOpen, setEzOpen] = useState(false); // перегляд самих продажів ЕЗ за місяць
+  const [excluded, setExcluded] = useState([]); // id співробітників, виключених із командних бонусів/ЕЗ цього місяця
+  const [teamPickerOpen, setTeamPickerOpen] = useState(false);
   const [subAuto, setSubAuto] = useState({}); // empId → днів заміни на іншому магазині за графіком
   const [workAuto, setWorkAuto] = useState({}); // empId → відпрацьованих днів за графіком
   const [infoGroup, setInfoGroup] = useState(null); // блок, для якого відкрито умови мотивації
@@ -2653,13 +2700,22 @@ function SmStoreSalary({ salon, review, ymProp }) {
     let alive = true;
     const first = !Object.keys(calcs).length;
     const t = setTimeout(() => {
-      calcSmBatch(emps.map((e) => ({ data: drafts[e.id], salonKey: salon.key, ym })))
+      calcSmBatch(emps.map((e) => ({ data: drafts[e.id], salonKey: salon.key, ym, empId: e.id })))
         .then((cs) => { if (alive) { setCalcs(Object.fromEntries(emps.map((e, i) => [e.id, cs[i]]))); setCalcErr(""); } })
         .catch((err) => { if (alive) setCalcErr(String(err.message || err)); });
     }, first ? 0 : 350);
     return () => { alive = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drafts]);
+  }, [drafts, excluded]);
+
+  // хто виключений із командних бонусів/ЕЗ цього місяця — шестернею керуючого
+  useEffect(() => {
+    let alive = true;
+    const load = () => listBonusTeamExclude(salon.key, ym).then((ids) => { if (alive) setExcluded(ids); }).catch(() => {});
+    load();
+    const off = subscribeBonusTeamExclude(load);
+    return () => { alive = false; off(); };
+  }, [salon.key, ym]);
 
   const saveAll = async (src = draftsRef.current) => {
     if (!src) return;
@@ -3006,7 +3062,14 @@ function SmStoreSalary({ salon, review, ymProp }) {
               </thead>
               <tbody>
                 <StRow g="Основа" gs={1} label="Ставка ЗП" inp={<span className="st-pill">{c0.category} · {planBracketLabel(c0.bracket)}</span>} cells={each((e) => stMoney(c(e).baseAdjusted))} />
-                <StRow g="Дзвінки" gs={1} label="Обіг з дзвінків"
+                <StRow g="Дзвінки" gs={1}
+                  groupExtra={(
+                    <span role="button" tabIndex={0} className="st-info" title="Хто ділить командні бонуси" aria-label="Хто ділить командні бонуси"
+                      onClick={() => setTeamPickerOpen(true)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setTeamPickerOpen(true); } }}>
+                      <Settings size={11} />
+                    </span>
+                  )}
+                  label="Обіг з дзвінків"
                   inp={<span className="st-two"><StIn v={d0.bonus.callsRevenue} set={setShared(["bonus", "callsRevenue"])} label="Обіг з дзвінків" /><StSeg items={[["5%", c0.bonus.callsPct === 5], ["3%", c0.bonus.callsPct === 3]]} /></span>}
                   cells={each((e) => stMoney(c(e).bonus.calls))} />
                 <StRow g="Атестація" gs={1} label="Атестація ≥ 98%" inp={<span className="st-hint">галочка по кожному →</span>}
@@ -3062,7 +3125,14 @@ function SmStoreSalary({ salon, review, ymProp }) {
                       </span>
                     );
                   })} />
-                <StRow label="ЕЗ" inp={<button type="button" className="wh-link" onClick={() => setEzOpen(true)}>{ez.list.length} прод. за місяць · переглянути →</button>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
+                <StRow label="ЕЗ"
+                  labelExtra={(
+                    <span role="button" tabIndex={0} className="st-info" title="Хто ділить бонус ЕЗ" aria-label="Хто ділить бонус ЕЗ"
+                      onClick={() => setTeamPickerOpen(true)} onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setTeamPickerOpen(true); } }}>
+                      <Settings size={11} />
+                    </span>
+                  )}
+                  inp={<button type="button" className="wh-link" onClick={() => setEzOpen(true)}>{ez.list.length} прод. за місяць · переглянути →</button>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
                 <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>}
                   cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
                 {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>}
@@ -3158,6 +3228,9 @@ function SmStoreSalary({ salon, review, ymProp }) {
       )}
       {preview && <ImageModal src={preview} onClose={() => setPreview(null)} />}
       {ezOpen && <EzSalonSalesModal salon={salon} ym={ym} sales={ez.list} onClose={() => setEzOpen(false)} />}
+      {teamPickerOpen && (
+        <TeamBonusPicker salon={salon} ym={ym} emps={emps} excluded={excluded} onClose={() => setTeamPickerOpen(false)} />
+      )}
       {infoGroup && (() => {
         const conds = (ST_COND[infoGroup] || []).map((n) => smCond(n)).filter(Boolean);
         const blocks = conds.length === 1 ? conds[0].blocks : conds.flatMap((cd) => [{ h: cd.title }, ...cd.blocks]);
@@ -13402,6 +13475,12 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .emp-group{border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;background:var(--surface);box-shadow:var(--sh-1);}
 .emp-group-head{padding:9px 14px;background:var(--surface-alt);font-family:'Fraunces',serif;font-size:14px;font-weight:600;color:var(--ink);}
 .emp-group-head span{color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px;}
+.team-pick-list{display:flex;flex-direction:column;gap:2px;}
+.team-pick-row{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer;}
+.team-pick-row:last-child{border-bottom:none;}
+.team-pick-row.busy{opacity:.5;pointer-events:none;}
+.team-pick-row input{width:16px;height:16px;accent-color:var(--gold);flex-shrink:0;}
+.team-pick-row span:nth-child(2){flex-grow:1;font-size:13px;color:var(--ink);}
 .emp-row{padding:11px 14px;border-top:1px solid var(--line);}
 .emp-group .emp-row:first-of-type{border-top:none;}
 .emp-row.emp-fired{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);opacity:.85;}

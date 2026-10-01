@@ -249,15 +249,19 @@ function tierBonus(value: number, thresholds: number[], bonuses: number[]) {
   for (let i = thresholds.length - 1; i >= 0; i--) if (thresholds[i] && v >= thresholds[i]) return bonuses[i];
   return 0;
 }
-function calcBonusBlock(b: any, dailyRate: number, teamSize = 1) {
+// excluded=true — цей конкретний співробітник не бере участі в командних бонусах
+// цього місяця (напр. стажер): особиста частка 0, але сам пул і дільник (team)
+// рахує решта команди, тому ІНШІ отримують пропорційно більше, а не менше.
+function calcBonusBlock(b: any, dailyRate: number, teamSize = 1, excluded = false) {
   const team = Math.max(1, teamSize || 1);
   // 3.1 Обіг з дзвінків — план по дзвінках = 10% від плану ТО на місяць.
   // Закрив ≥10% плану ТО дзвінками → 5% від обороту з дзвінків на команду,
-  // менше → 3%. Командний бонус ділиться порівну на активний склад салону.
+  // менше → 3%. Командний бонус ділиться порівну на активний склад салону
+  // (мінус ті, кого керуючий виключив шестернею з командних бонусів).
   const callsPlanRevenue = (b.monthlyToPlan || 0) * 0.1;
   const callsPct = callsPlanRevenue > 0 && (b.callsRevenue || 0) >= callsPlanRevenue ? 5 : 3;
   const callsTeam = Math.round((b.callsRevenue || 0) * (callsPct / 100));
-  const calls = Math.round(callsTeam / team);
+  const calls = excluded ? 0 : Math.round(callsTeam / team);
   const replacement = Math.round((b.replacementDays || 0) * 0.2 * (dailyRate || 0));
   // KPI: якщо СМ вніс суму й поставив/зняв галочку (avgCheckOk / checkLenOk задані) — зараховуємо
   // вписану суму. Старі місяці (без цих полів) рахуються за порогами, як раніше.
@@ -271,30 +275,30 @@ function calcBonusBlock(b: any, dailyRate: number, teamSize = 1) {
   // 3.6 НП і 3.7 БН — командні: 4% від обороту ділиться на всю команду салону
   const siteNpTeam = Math.round((b.siteNpRevenue || 0) * 0.04);
   const bnTeam = Math.round((b.bnRevenue || 0) * 0.04);
-  const siteNp = Math.round(siteNpTeam / team);
-  const bn = Math.round(bnTeam / team);
+  const siteNp = excluded ? 0 : Math.round(siteNpTeam / team);
+  const bn = excluded ? 0 : Math.round(bnTeam / team);
   return {
     callsPct, callsPlanRevenue, calls, callsTeam, replacement, avgCheck, checkLen,
     siteNp, bn, siteNpTeam, bnTeam, team,
     subtotal: calls + replacement + avgCheck + checkLen + siteNp + bn,
   };
 }
-function calcPpi(p: any, teamSize = 1) {
+function calcPpi(p: any, teamSize = 1, excluded = false) {
   const team = Math.max(1, teamSize || 1);
   const pct = p.planClosed ? 3 : 1;
   const teamBonus = Math.round((p.ppiRevenue || 0) * (pct / 100));
-  return { pct, team, teamBonus, bonus: Math.round(teamBonus / team) };
+  return { pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
 }
 const recordThreshold = (prev: number) => Math.max(1_000_000, Math.round((prev || 0) * 1.1));
-function calcRecord(r: any, teamSize = 1) {
+function calcRecord(r: any, teamSize = 1, excluded = false) {
   const team = Math.max(1, teamSize || 1);
   const threshold = recordThreshold(r.prevRecord);
   const beaten = (r.monthlyTo || 0) >= threshold && (r.monthlyTo || 0) > 0;
   const teamBonus = beaten ? Math.round((r.monthlyTo || 0) * 0.01) : 0;
-  return { threshold, beaten, team, teamBonus, bonus: Math.round(teamBonus / team) };
+  return { threshold, beaten, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
 }
 function calcQuarterly(q: any) { if (!q.threeOfThree) return 0; return Math.round((q.last3SalarySum || 0) * 0.1); }
-function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: any, avg3FromHistory?: number | null, ezProfitSum = 0) {
+function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: any, avg3FromHistory?: number | null, ezProfitSum = 0, excludedFromTeam = false) {
   const daysInMonth = daysInMonthOf(ym);
   // «Середній ТО за 3 міс» — авто з реальної історії обороту (без ЕЗ), якщо вже
   // накопичилось достатньо місяців; поки історії нема (старі місяці/новий магазин) —
@@ -332,13 +336,13 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
     scN1: planRow.avg_check_t1, scN2: planRow.avg_check_t2, scN3: planRow.avg_check_t3,
     clN1: planRow.check_len_t1, clN2: planRow.check_len_t2, clN3: planRow.check_len_t3,
   } : data.bonus;
-  const bonus = calcBonusBlock(effectiveBonusInput, dailyRate, teamSize);
+  const bonus = calcBonusBlock(effectiveBonusInput, dailyRate, teamSize, excludedFromTeam);
   // 20% чистого прибутку по підтверджених ТМ продажах ЕЗ цього магазину за місяць — на команду
-  const ezTeam = Math.round(((ezProfitSum || 0) * 0.20) / Math.max(1, teamSize || 1));
+  const ezTeam = excludedFromTeam ? 0 : Math.round(((ezProfitSum || 0) * 0.20) / Math.max(1, teamSize || 1));
   bonus.ezTeam = ezTeam;
   bonus.subtotal += ezTeam;
-  const ppi = calcPpi(data.ppi, teamSize);
-  const record = calcRecord(data.record, teamSize);
+  const ppi = calcPpi(data.ppi, teamSize, excludedFromTeam);
+  const record = calcRecord(data.record, teamSize, excludedFromTeam);
   const quarterly = calcQuarterly(data.quarterly);
   const bonusExtra = data.bonusExtra?.amount || 0; // додатковий бонус СМ (напр. прибирання) — сам вносить
   const adj = data.adj?.amount || 0;
@@ -351,7 +355,7 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
   const deducted = advance + official + birthdays + inventory + ownUse;
   const total = grossTotal - deducted;
   return {
-    daysInMonth, teamSize: Math.max(1, teamSize || 1), category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate,
+    daysInMonth, teamSize: Math.max(1, teamSize || 1), excludedFromTeam, category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate,
     monthPlan, monthFact, viktorChecks, lowMarginChecks, factAdjusted, planPercent, avg3,
     hasPlan: !!planRow, hasHistory: avg3FromHistory != null,
     planThresholds: { scN1: effectiveBonusInput.scN1, scN2: effectiveBonusInput.scN2, scN3: effectiveBonusInput.scN3, clN1: effectiveBonusInput.clN1, clN2: effectiveBonusInput.clN2, clN3: effectiveBonusInput.clN3 },
@@ -450,13 +454,33 @@ Deno.serve(async (req) => {
         (me.cabinet_type === "tm" && salonTmOn(sk, it.ym, reass) === me.cabinet_key);
       if (!allowed) return json({ error: "forbidden" }, 403);
     }
-    // розмір команди по кожному салону (активні співробітники) — для командних бонусів
+    // розмір команди по кожному салону (активні співробітники) — для командних бонусів.
+    // Керуючий може шестернею виключити когось (напр. стажера) із конкретного
+    // місяця — тоді і дільник, і особиста частка цієї людини зменшуються разом.
     const salonKeys = [...new Set(items.map((it: any) => it.salonKey).filter(Boolean))];
-    const teamBySalon: Record<string, number> = {};
+    const pairKeys = [...new Set(items.map((it: any) => `${it.salonKey}|${it.ym}`))];
+    const empsBySalon: Record<string, string[]> = {};
     if (salonKeys.length) {
       const { data: emps } = await svc.from("employees")
-        .select("salon_key").eq("status", "active").in("salon_key", salonKeys);
-      for (const e of emps || []) teamBySalon[e.salon_key] = (teamBySalon[e.salon_key] || 0) + 1;
+        .select("id, salon_key").eq("status", "active").in("salon_key", salonKeys);
+      for (const e of emps || []) (empsBySalon[e.salon_key] ||= []).push(e.id);
+    }
+    const excludedByPair: Record<string, Set<string>> = {};
+    if (salonKeys.length) {
+      const { data: exRows } = await svc.from("bonus_team_exclude")
+        .select("salon_key, ym, employee_id").in("salon_key", salonKeys);
+      for (const r of exRows || []) {
+        const key = `${r.salon_key}|${r.ym}`;
+        if (!pairKeys.includes(key)) continue;
+        (excludedByPair[key] ||= new Set()).add(r.employee_id);
+      }
+    }
+    const teamByPair: Record<string, number> = {};
+    for (const key of pairKeys) {
+      const [sk] = key.split("|");
+      const all = empsBySalon[sk] || [];
+      const excl = excludedByPair[key];
+      teamByPair[key] = excl ? all.filter((id) => !excl.has(id)).length : all.length;
     }
 
     // план ТМ (оборот + пороги чека), підтверджені продажі ЕЗ, історія обороту — для авто-категоризації
@@ -501,10 +525,12 @@ Deno.serve(async (req) => {
 
     const out = items.map((it: any) => {
       const area = SALONS[it.salonKey]?.area || "область";
-      const planRow = planByPair[`${it.salonKey}|${it.ym}`];
+      const pairKey = `${it.salonKey}|${it.ym}`;
+      const planRow = planByPair[pairKey];
       const { avg: avg3, months: avg3Months } = avg3For(it.salonKey, it.ym);
-      const ezSum = ezByPair[`${it.salonKey}|${it.ym}`] || 0;
-      return { ...calcSmAll(it.data, it.ym, area, teamBySalon[it.salonKey] || 1, planRow, avg3, ezSum), avg3Months };
+      const ezSum = ezByPair[pairKey] || 0;
+      const excludedFromTeam = !!(it.empId && excludedByPair[pairKey]?.has(it.empId));
+      return { ...calcSmAll(it.data, it.ym, area, teamByPair[pairKey] || 1, planRow, avg3, ezSum, excludedFromTeam), avg3Months };
     });
     return json(op === "sm" ? out[0] : out);
   }
