@@ -109,43 +109,52 @@ Deno.serve(async (req) => {
   const perMonth: Record<string, number> = {};
   let total = 0;
 
-  // --- плани салонів: plans:Боровик (override) з fallback на BASE_PLAN ---
+  // --- плани салонів: plans:Боровик:<рік>-<місяць без нуля> (помісячний
+  // ключ планера — РІЗНІ числа щомісяця) з фолбеком на безмісячний
+  // plans:Боровик (старий/дефолтний override), потім на BASE_PLAN.
+  // Раніше читався лише безмісячний ключ — для частини магазинів він
+  // застарілий і відрізняється від реального плану конкретного місяця.
   let plansApplied = 0;
   try {
-    const pr = await fetch(
-      `${PLANNER_URL}/rest/v1/kv?select=value&key=eq.${encodeURIComponent(`plans:${PLANNER_TERRITORY}`)}`,
-      { headers: { apikey: PLANNER_KEY, Authorization: `Bearer ${PLANNER_KEY}` } },
-    );
-    let ov: any = (await pr.json())?.[0]?.value ?? {};
-    if (typeof ov === "string") { try { ov = JSON.parse(ov); } catch { ov = {}; } }
+    const fetchKv = async (key: string): Promise<any> => {
+      const r = await fetch(`${PLANNER_URL}/rest/v1/kv?select=value&key=eq.${encodeURIComponent(key)}`,
+        { headers: { apikey: PLANNER_KEY, Authorization: `Bearer ${PLANNER_KEY}` } });
+      let v: any = (await r.json())?.[0]?.value ?? null;
+      if (typeof v === "string") { try { v = JSON.parse(v); } catch { v = null; } }
+      return v && typeof v === "object" ? v : null;
+    };
     const nameToKey: Record<string, string> = STORE_MAP;
-    const planRows = Object.keys(BASE_PLAN).map((salonKey) => {
-      const storeName = Object.keys(nameToKey).find((n) => nameToKey[n] === salonKey);
-      const o = storeName && ov[storeName] ? ov[storeName] : null;
-      const src = o || BASE_PLAN[salonKey];
-      return {
-        salon_key: salonKey,
-        plan: {
+    const storeNameOf = (salonKey: string) => Object.keys(nameToKey).find((n) => nameToKey[n] === salonKey);
+    const flatOv: any = (await fetchKv(`plans:${PLANNER_TERRITORY}`)) || {};
+
+    const tplanRows: any[] = [];
+    const smPlanRows: any[] = [];
+    for (const ym of planMonths) {
+      const [y, m] = ym.split("-").map(Number);
+      const monthOv: any = (await fetchKv(`plans:${PLANNER_TERRITORY}:${y}-${m}`)) || {}; // місяць без нуля
+      for (const salonKey of Object.keys(BASE_PLAN)) {
+        const storeName = storeNameOf(salonKey);
+        const src = (storeName && monthOv[storeName]) || (storeName && flatOv[storeName]) || BASE_PLAN[salonKey];
+        const plan = {
           assort: Math.round(Number(src.assort) || 0),
           ez: Math.round(Number(src.ez) || 0),
           cheky: Math.round(Number(src.cheky) || 0),
           bn: Math.round(Number(src.bn) || 0),
           dzvinky: Math.round(Number(src.dzvinky) || 0),
-        },
-      };
-    });
-    // territory_plans тепер знімок ПО МІСЯЦЮ (salon_key, ym) — пишемо його під
-    // кожен ym з planMonths, а не одним "живим" рядком на магазин, інакше
-    // перегляд минулого місяця завжди показував би сьогоднішній план.
-    const tplanRows = planMonths.flatMap((ym) => planRows.map((p) => ({ salon_key: p.salon_key, ym, plan: p.plan })));
+        };
+        tplanRows.push({ salon_key: salonKey, ym, plan });
+        smPlanRows.push({ salon_key: salonKey, ym, turnover_plan: plan.assort, ez_plan: plan.ez });
+      }
+    }
+    // territory_plans — знімок ПО МІСЯЦЮ (salon_key, ym), не один "живий"
+    // рядок на магазин, інакше перегляд минулого місяця завжди показував би
+    // сьогоднішній план.
     const { data: pn } = await svc.rpc("tplan_apply", { rows: tplanRows });
     plansApplied = Number(pn) || tplanRows.length;
 
-    // той самий план обороту (assort) і план ЕЗ — одразу і в sm_plans під ті
-    // самі planMonths, бо саме ці поля рухають розрахунок ЗП СМ. Локнуті
-    // місяці (sm_plans.locked) функція не чіпає.
-    const smPlanRows = planMonths.flatMap((ym) =>
-      planRows.map((p) => ({ salon_key: p.salon_key, ym, turnover_plan: p.plan.assort, ez_plan: p.plan.ez })));
+    // той самий план обороту (assort) і план ЕЗ — одразу і в sm_plans, бо саме
+    // ці поля рухають розрахунок ЗП СМ. Локнуті місяці (sm_plans.locked)
+    // функція не чіпає.
     try { await svc.rpc("smplan_apply_planner", { rows: smPlanRows }); } catch { /* не критично для цього виклику */ }
   } catch { /* плани не критичні */ }
 
