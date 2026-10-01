@@ -4,6 +4,7 @@ import { supabase, rtChannel } from "./supabase.js";
 
 export const emptyPlan = () => ({
   turnover_plan: 0,
+  ez_plan: 0,
   avg_check_t1: 0, avg_check_t2: 0, avg_check_t3: 0,
   check_len_t1: 0, check_len_t2: 0, check_len_t3: 0,
   locked: false,
@@ -52,6 +53,7 @@ export async function saveSmPlan(salonKey, ym, plan, by) {
   const row = {
     salon_key: salonKey, ym,
     turnover_plan: Number(plan.turnover_plan) || 0,
+    ez_plan: Number(plan.ez_plan) || 0,
     avg_check_t1: Number(plan.avg_check_t1) || 0, avg_check_t2: Number(plan.avg_check_t2) || 0, avg_check_t3: Number(plan.avg_check_t3) || 0,
     check_len_t1: Number(plan.check_len_t1) || 0, check_len_t2: Number(plan.check_len_t2) || 0, check_len_t3: Number(plan.check_len_t3) || 0,
     updated_by: by || "",

@@ -2950,7 +2950,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
   const catOpts = smCategoryOptions();
   const onCat = (key) => setShared(["base", "categoryOverride"])(key === c0.autoCategory || key === d0.base.categoryOverride ? "" : key);
   const each = (fn) => emps.map(fn);
-  const pctNoEz = c0.monthPlan > 0 ? ((c0.factAdjusted - ez.total) / c0.monthPlan) * 100 : 0;
+  const ezPct = c0.ezPlan > 0 ? (ez.total / c0.ezPlan) * 100 : 0;
 
   return (
     <div className="embedded st-page" style={{ "--st-n": emps.length }}>
@@ -2990,13 +2990,6 @@ function SmStoreSalary({ salon, review, ymProp }) {
           {emps.filter((e) => d(e).smReplyComment).map((e) => <div key={e.id}><b>Відповідь салону ({e.full_name}):</b> {d(e).smReplyComment}</div>)}
         </div>
       )}
-      {!isReview && (
-        <div className="inner-tabs">
-          <button className={tab === "calc" ? "active" : ""} onClick={() => setTab("calc")}>Розрахунок</button>
-          <button className={tab === "corrections" ? "active" : ""} onClick={() => setTab("corrections")}>Корективи від ТМ{corrDot ? " •" : ""}</button>
-        </div>
-      )}
-
       {!isReview && tab === "corrections" ? (
         corrEmps.length === 0
           ? <div className="admin-empty">Корективів від ТМ поки немає.</div>
@@ -3008,33 +3001,40 @@ function SmStoreSalary({ salon, review, ymProp }) {
           ))
       ) : (
         <>
+          <div className="st-topbar">
+            {!isReview && (
+              <div className="inner-tabs">
+                <button className={tab === "calc" ? "active" : ""} onClick={() => setTab("calc")}>Розрахунок</button>
+                <button className={tab === "corrections" ? "active" : ""} onClick={() => setTab("corrections")}>Корективи від ТМ{corrDot ? " •" : ""}</button>
+              </div>
+            )}
+            <span className="st-spacer" />
+            <fieldset className="st-topbar-fields" disabled={isReview && !editMode}>
+              <label><em>Факт з ЕЗ</em> <StIn v={d0.base.monthFact} set={setFact} label="Факт з ЕЗ за місяць" cls="st-in-w" /></label>
+              <label><em>Чеки Віктора</em> <StIn v={d0.base.viktorChecks} set={setShared(["base", "viktorChecks"])} label="Чеки Віктора" cls="st-in-s" /></label>
+              <label><em>НРТ-Чеки</em> <StIn v={d0.base.lowMarginChecks} set={setShared(["base", "lowMarginChecks"])} label="НРТ-Чеки" cls="st-in-s" /></label>
+            </fieldset>
+          </div>
           <fieldset className="st-fs" disabled={isReview && !editMode}>
           <div className="st-strip">
             <div className="st-cell">
-              <div className="st-cap">Виконання по основній групі</div>
+              <div className="st-cap">Основна група (ОС, без ЕЗ)</div>
               <div className="st-plan">
                 <span><em>План</em> <b>{stNum(c0.monthPlan)}</b></span>
-                <label><em>Факт з ЕЗ</em> <StIn v={d0.base.monthFact} set={setFact} label="Факт з ЕЗ за місяць" cls="st-in-w" /></label>
                 <span className={`st-pct ${c0.planPercent >= 100 ? "ok" : ""}`}>{c0.planPercent.toFixed(0)}%</span>
               </div>
-              <div className="st-adjs">
+              <div className="st-hint">скориг. факт ОС {stNum(c0.factAdjusted)} — саме від нього рахується мотивація</div>
+              <div className="st-row-div" />
+              <div className="st-cap">ЕЗ</div>
+              <div className="st-plan">
+                <span><em>План ЕЗ</em> <b>{stNum(c0.ezPlan)}</b></span>
                 <button type="button" className="st-ez-btn" title="Перейти до продажів ЕЗ за місяць" onClick={() => setEzOpen(true)}>
-                  <em>ЕЗ</em> <b className="st-ezv">{stNum(ez.total)}</b>{ez.total !== ez.confirmed && <span className="st-hint"> · підтверджено ТМ {stNum(ez.confirmed)}</span>}{ez.total === 0 && <span className="st-hint"> · перевірте місяць у вкладці «ЕЗ»</span>}
+                  <em>Факт ЕЗ</em> <b className="st-ezv">{stNum(ez.total)}</b>{ez.total !== ez.confirmed && <span className="st-hint"> · підтверджено ТМ {stNum(ez.confirmed)}</span>}{ez.total === 0 && <span className="st-hint"> · перевірте місяць у вкладці «ЕЗ»</span>}
                   <ChevronRight size={13} />
                 </button>
-                <label><em>Чеки Віктора</em> <StIn v={d0.base.viktorChecks} set={setShared(["base", "viktorChecks"])} label="Чеки Віктора" cls="st-in-s" /></label>
-                <label><em>Низькорентабельні</em> <StIn v={d0.base.lowMarginChecks} set={setShared(["base", "lowMarginChecks"])} label="Низькорентабельні чеки" cls="st-in-s" /></label>
-                <span className="st-hint">скориг. факт {stNum(c0.factAdjusted)}</span>
+                <span className={`st-pct ${ezPct >= 100 ? "ok" : ""}`}>{ezPct.toFixed(0)}%</span>
               </div>
               <StSeg items={[0, 1, 2, 3, 4].map((i) => [planBracketLabel(i), c0.bracket === i])} />
-            </div>
-            <div className="st-cell">
-              <div className="st-cap">Виконання без ЕЗ</div>
-              <div className="st-plan">
-                <span><em>Скориг. факт без ЕЗ</em> <b>{stNum(c0.factAdjusted - ez.total)}</b></span>
-                <span className={`st-pct ${pctNoEz >= 100 ? "ok" : ""}`}>{pctNoEz.toFixed(0)}%</span>
-              </div>
-              <div className="st-hint">від плану {stNum(c0.monthPlan)}</div>
             </div>
             <div className="st-cell">
               <div className="st-cap">Категорія · {d0.base.categoryOverride ? "вручну" : "авто"}</div>
@@ -3415,10 +3415,11 @@ function SmPlanForm({ salon, ym, tmKey, onBack }) {
       )}
       <div className="criteria-form">
         <div className="item-fields">
-          <Field label="План обороту на місяць" suffix="грн" value={plan.turnover_plan} onChange={upd("turnover_plan")} readOnly={plan.locked || fromPlanner} />
+          <Field label="План обороту на місяць (основна група, без ЕЗ)" suffix="грн" value={plan.turnover_plan} onChange={upd("turnover_plan")} readOnly={plan.locked || fromPlanner} />
+          <Field label="План ЕЗ на місяць" suffix="грн" value={plan.ez_plan} onChange={upd("ez_plan")} readOnly={plan.locked || fromPlanner} />
         </div>
         {fromPlanner && !plan.locked && (
-          <p className="hint">План обороту підтягнуто з планера автоматично (щодня) — вручну не редагується.</p>
+          <p className="hint">Обидва плани підтягнуто з планера автоматично (щодня) — вручну не редагуються.</p>
         )}
         <div className="hint" style={{ margin: "14px 0 6px" }}>Пороги середнього чека — три градації бонусу (700 / 1 500 / 2 000 грн)</div>
         <div className="item-fields">
@@ -13123,12 +13124,17 @@ table.open-log .open-log-t{font-variant-numeric:tabular-nums;color:var(--negativ
 /* --- СМ: розрахунок ЗП магазину (одна таблиця) --- */
 .st-page{max-width:max(1400px,calc(578px + var(--st-n,3) * 190px));margin:0 auto;}
 .st-title{font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:var(--on-dark);}
+.st-topbar{display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap;}
+.st-topbar-fields{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:none;margin:0;padding:0;}
+.st-topbar-fields label{display:flex;align-items:center;gap:6px;background:var(--surface-alt);border:1px solid var(--line);border-radius:8px;padding:6px 10px;white-space:nowrap;}
+.st-topbar-fields label em{font-style:normal;font-family:'Inter',sans-serif;font-size:11px;color:var(--muted);}
 .st-strip{padding:14px 0;display:flex;flex-wrap:nowrap;align-items:stretch;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);margin-bottom:12px;}
 .st-cell{flex:0 0 auto;padding:0 18px;display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);min-width:0;}
-.st-cell:first-child{flex:1 1 470px;min-width:470px;padding-left:24px;}
+.st-cell:first-child{flex:1 1 560px;min-width:470px;padding-left:24px;}
+.st-row-div{height:1px;background:var(--line);margin:2px 0;}
 .st-plan,.st-plan label,.st-adjs label,.st-adjs span{white-space:nowrap;}
 .st-cell.st-total{border-right:none;margin-left:auto;align-items:flex-end;text-align:right;justify-content:center;}
-@media (max-width:1150px){.st-strip{flex-wrap:wrap;row-gap:14px;}.st-cell:first-child{flex:1 1 100%;}}
+@media (max-width:1150px){.st-strip{flex-wrap:wrap;row-gap:14px;}.st-cell:first-child{flex:1 1 100%;}.st-topbar{width:100%;}.st-topbar .inner-tabs{width:auto;}}
 .st-cap{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--st-cap);}
 .st-plan{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace;color:var(--ink);}
 .st-plan em,.st-adjs em{font-style:normal;font-family:'Inter',sans-serif;font-size:11px;color:var(--muted);margin-right:5px;}

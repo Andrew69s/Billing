@@ -128,11 +128,12 @@ Deno.serve(async (req) => {
     const { data: pn } = await svc.rpc("tplan_apply", { rows: planRows });
     plansApplied = Number(pn) || planRows.length;
 
-    // той самий план обороту (assort) — одразу і в sm_plans.turnover_plan на ПОТОЧНИЙ
-    // місяць, бо саме це поле рухає базовий розрахунок ЗП СМ. ТМ більше не вносить
-    // його вручну; минулі місяці (вже закриті/заблоковані) ця функція не чіпає.
+    // той самий план обороту (assort) і план ЕЗ — одразу і в sm_plans на ПОТОЧНИЙ
+    // місяць, бо саме ці поля рухають розрахунок ЗП СМ (основна група = без ЕЗ,
+    // плюс окрема % виконання плану ЕЗ). ТМ більше не вносить їх вручну; минулі
+    // місяці (вже закриті/заблоковані) ця функція не чіпає.
     const currentYm = new Date().toISOString().slice(0, 7);
-    const smPlanRows = planRows.map((p) => ({ salon_key: p.salon_key, ym: currentYm, turnover_plan: p.plan.assort }));
+    const smPlanRows = planRows.map((p) => ({ salon_key: p.salon_key, ym: currentYm, turnover_plan: p.plan.assort, ez_plan: p.plan.ez }));
     try { await svc.rpc("smplan_apply_planner", { rows: smPlanRows }); } catch { /* не критично для цього виклику */ }
   } catch { /* плани не критичні */ }
 

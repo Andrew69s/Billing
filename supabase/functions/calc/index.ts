@@ -389,6 +389,7 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
   return {
     daysInMonth, teamSize: Math.max(1, teamSize || 1), excludedFromTeam, category, autoCategory, bracket, baseRaw, factor, baseAdjusted, dailyRate,
     monthPlan, monthFact, viktorChecks, lowMarginChecks, factAdjusted, planPercent, avg3,
+    ezPlan: planRow?.ez_plan || 0, ezTotalSum,
     hasPlan: !!planRow, hasHistory: avg3FromHistory != null,
     planThresholds: { scN1: effectiveBonusInput.scN1, scN2: effectiveBonusInput.scN2, scN3: effectiveBonusInput.scN3, clN1: effectiveBonusInput.clN1, clN2: effectiveBonusInput.clN2, clN3: effectiveBonusInput.clN3 },
     mgr, bonus, ppi, record, quarterly, bonusExtra, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total,
@@ -526,16 +527,21 @@ Deno.serve(async (req) => {
     // план ТМ (оборот + пороги чека), підтверджені продажі ЕЗ, історія обороту — для авто-категоризації
     const planByPair: Record<string, any> = {};
     const ezByPair: Record<string, number> = {};
+    // сума ВСІХ продажів ЕЗ (незалежно від статусу pending/confirmed) — те саме
+    // число, що клієнт показує як «ЕЗ» (ez.total у SmStoreSalary): саме його
+    // віднімаємо з факту, щоб отримати оборот «основної групи» без ЕЗ.
+    const ezTotalByPair: Record<string, number> = {};
     const historyBySalon: Record<string, Record<string, number>> = {};
     if (salonKeys.length) {
       const { data: plans } = await svc.from("sm_plans").select("*").in("salon_key", salonKeys);
       for (const p of plans || []) planByPair[`${p.salon_key}|${p.ym}`] = p;
 
       const { data: ez } = await svc.from("ez_sales")
-        .select("salon_key, ym, net_profit").eq("status", "confirmed").in("salon_key", salonKeys);
+        .select("salon_key, ym, amount, status, net_profit").in("salon_key", salonKeys);
       for (const e of ez || []) {
         const key = `${e.salon_key}|${e.ym}`;
-        ezByPair[key] = (ezByPair[key] || 0) + (Number(e.net_profit) || 0);
+        ezTotalByPair[key] = (ezTotalByPair[key] || 0) + (Number(e.amount) || 0);
+        if (e.status === "confirmed") ezByPair[key] = (ezByPair[key] || 0) + (Number(e.net_profit) || 0);
       }
 
       const { data: hist } = await svc.from("store_turnover_history")
@@ -569,8 +575,9 @@ Deno.serve(async (req) => {
       const planRow = planByPair[pairKey];
       const { avg: avg3, months: avg3Months } = avg3For(it.salonKey, it.ym);
       const ezSum = ezByPair[pairKey] || 0;
+      const ezTotal = ezTotalByPair[pairKey] || 0;
       const excludedFromTeam = !!(it.empId && excludedByPair[pairKey]?.has(it.empId));
-      return { ...calcSmAll(it.data, it.ym, area, teamByPair[pairKey] || 1, planRow, avg3, ezSum, excludedFromTeam), avg3Months };
+      return { ...calcSmAll(it.data, it.ym, area, teamByPair[pairKey] || 1, planRow, avg3, ezSum, excludedFromTeam, ezTotal), avg3Months, ezTotal };
     });
     return json(op === "sm" ? out[0] : out);
   }
