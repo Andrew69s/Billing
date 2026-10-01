@@ -44,7 +44,7 @@ import {
 import {
   EMP_ROLES, EMP_ROLE_ORDER,
   listEmployees, createEmployee, updateEmployee, fireEmployee, rehireEmployee, transferEmployee, deleteEmployee, subscribeEmployees,
-  birthdayIn, tenure, empSalonOn,
+  birthdayIn, tenure, empSalonOn, wasEmployedOn,
 } from "./lib/employees.js";
 import {
   ABSENCE_REASONS, daysInMonth, dayKey, todayISO,
@@ -309,7 +309,7 @@ async function listSmMonths(salonKey, empId) {
 }
 /* ЗП салону за місяць = сума по всіх активних співробітниках */
 async function salonSalaryRows(salonKey, ym, employees) {
-  const emps = (employees || []).filter((e) => e.status === "active" && empSalonOn(e, ym) === salonKey);
+  const emps = (employees || []).filter((e) => wasEmployedOn(e, ym) && empSalonOn(e, ym) === salonKey);
   const datas = await Promise.all(emps.map((e) => loadSmData(salonKey, e.id, ym)));
   const calcs = emps.length ? await calcSmBatch(emps.map((e, i) => ({ data: datas[i], salonKey, ym, empId: e.id }))) : [];
   return emps.map((e, i) => ({ emp: e, data: datas[i], calc: calcs[i], total: calcs[i]?.total || 0 }));
@@ -2655,7 +2655,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
   const emps = useMemo(() => (employees || [])
-    .filter((e) => e.status === "active" && empSalonOn(e, ym) === salon.key)
+    .filter((e) => wasEmployedOn(e, ym) && empSalonOn(e, ym) === salon.key)
     .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
   [employees, salon.key, ym]);
 
@@ -6806,11 +6806,16 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
     return Math.round(h * 10) / 10;
   };
 
+  // Роster за ІСТОРИЧНИМ магазином на місяць ym (empSalonOn), не за поточним
+  // salon_key — інакше минулий місяць показував би того, хто працює ЗАРАЗ
+  // (і зі «замінами» там, де людина просто ще не була переведена), а не того,
+  // хто фактично відпрацював той місяць. Звільнені лишаються видимими за ті
+  // місяці, які вони ще застали (wasEmployedOn).
   const groups = useMemo(() => salons.map((sl) => ({
     salon: sl,
-    emps: employees.filter((e) => e.salon_key === sl.key && e.status === "active")
+    emps: employees.filter((e) => wasEmployedOn(e, ym) && empSalonOn(e, ym) === sl.key)
       .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
-  })), [salons, employees]);
+  })), [salons, employees, ym]);
 
   return (
     <div className="grid-scroll sched-wrap" ref={wrapRef}>
@@ -6835,7 +6840,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
                 <tr className="grp"><td colSpan={nDays + 2}>{salonLabel(salon)}</td></tr>
                 {emps.length === 0 && <tr><td className="rh muted" colSpan={nDays + 2}>немає співробітників</td></tr>}
                 {emps.map((e) => {
-                  const t = monthTally(shifts, e.id, e.salon_key);
+                  const t = monthTally(shifts, e.id, salon.key);
                   const hrs = showH ? hoursOf(e.id) : 0;
                   return (
                     <tr key={e.id}>
@@ -6852,7 +6857,7 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
                           <td key={d} data-emp={e.id} data-day={d}
                             className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""} ${(inDrag || inSelection) ? "sh-sel" : ""}`}
                             title={title || undefined}
-                            onPointerDown={edit ? (ev) => { ev.preventDefault(); setDrag({ empId: e.id, homeSalon: e.salon_key, start: d }); setDragEnd(d); } : undefined}>
+                            onPointerDown={edit ? (ev) => { ev.preventDefault(); setDrag({ empId: e.id, homeSalon: salon.key, start: d }); setDragEnd(d); } : undefined}>
                             {txt}
                           </td>
                         );
@@ -7002,13 +7007,17 @@ function ShiftSubstAnalysis({ cab, ym, employees, shifts }) {
   const scope = useMemo(() => new Set((cab.type === "tm" ? SALONS.filter((s) => salonTmOn(s.key) === my) : SALONS).map((s) => s.key)), [cab.type, my]);
   const empById = useMemo(() => Object.fromEntries(employees.map((e) => [e.id, e])), [employees]);
 
+  // «домашній» магазин — на момент ym (empSalonOn), а не поточний e.salon_key,
+  // інакше минулі місяці показували б фальшиві заміни там, де людину вже
+  // перевели в інший магазин ПІСЛЯ того місяця.
   const recs = useMemo(() => shifts
     .filter((s) => s.state === "work" && s.fact_h != null)
     .map((s) => ({ s, e: empById[s.employee_id] }))
-    .filter(({ s, e }) => e && e.salon_key !== s.salon_key && (scope.has(e.salon_key) || scope.has(s.salon_key)))
-    .filter(({ s, e }) => salonF === "all" || e.salon_key === salonF || s.salon_key === salonF)
-    .map(({ s, e }) => ({ emp: e, home: e.salon_key, dest: s.salon_key, day: Number(s.work_date.slice(8, 10)), h: Number(s.fact_h) !== 1 ? Number(s.fact_h) : 0 })),
-  [shifts, empById, scope, salonF]);
+    .map(({ s, e }) => ({ s, e, home: e ? empSalonOn(e, ym) : null }))
+    .filter(({ s, e, home }) => e && home !== s.salon_key && (scope.has(home) || scope.has(s.salon_key)))
+    .filter(({ s, home }) => salonF === "all" || home === salonF || s.salon_key === salonF)
+    .map(({ s, e, home }) => ({ emp: e, home, dest: s.salon_key, day: Number(s.work_date.slice(8, 10)), h: Number(s.fact_h) !== 1 ? Number(s.fact_h) : 0 })),
+  [shifts, empById, scope, salonF, ym]);
 
   const rows = useMemo(() => {
     const m = {};

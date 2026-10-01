@@ -108,6 +108,18 @@ export function empSalonOn(emp, ym) {
   return events.length ? events[events.length - 1].salon_key : emp.salon_key;
 }
 
+/* Чи числився співробітник ще/вже в компанії в місяці ym (а не лише «активний
+   зараз»). Без цього звільнений за жовтень зникав би зі свого вересневого графіка
+   й ЗП, попри те, що фактично відпрацював вересень цілком. */
+export function wasEmployedOn(emp, ym) {
+  if (!emp) return false;
+  const hired = (emp.hired_at || "").slice(0, 7);
+  if (hired && hired > ym) return false;
+  if (emp.status === "active") return true;
+  const fired = (emp.fired_at || "").slice(0, 7);
+  return !fired || fired >= ym;
+}
+
 /* днів до дня народження (0 = сьогодні, null = немає дати / далі ніж 60 днів) */
 export function birthdayIn(dob) {
   if (!dob) return null;
