@@ -44,7 +44,7 @@ import {
 import {
   EMP_ROLES, EMP_ROLE_ORDER,
   listEmployees, createEmployee, updateEmployee, fireEmployee, rehireEmployee, transferEmployee, deleteEmployee, subscribeEmployees,
-  birthdayIn, tenure,
+  birthdayIn, tenure, empSalonOn,
 } from "./lib/employees.js";
 import {
   ABSENCE_REASONS, daysInMonth, dayKey, todayISO,
@@ -308,7 +308,7 @@ async function listSmMonths(salonKey, empId) {
 }
 /* ЗП салону за місяць = сума по всіх активних співробітниках */
 async function salonSalaryRows(salonKey, ym, employees) {
-  const emps = (employees || []).filter((e) => e.salon_key === salonKey && e.status === "active");
+  const emps = (employees || []).filter((e) => e.status === "active" && empSalonOn(e, ym) === salonKey);
   const datas = await Promise.all(emps.map((e) => loadSmData(salonKey, e.id, ym)));
   const calcs = emps.length ? await calcSmBatch(emps.map((e, i) => ({ data: datas[i], salonKey, ym }))) : [];
   return emps.map((e, i) => ({ emp: e, data: datas[i], calc: calcs[i], total: calcs[i]?.total || 0 }));
@@ -2581,9 +2581,9 @@ function SmStoreSalary({ salon, review, ymProp }) {
 
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
   const emps = useMemo(() => (employees || [])
-    .filter((e) => e.salon_key === salon.key && e.status === "active")
+    .filter((e) => e.status === "active" && empSalonOn(e, ym) === salon.key)
     .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name)),
-  [employees, salon.key]);
+  [employees, salon.key, ym]);
 
   // завантаження документів усіх співробітників за місяць
   useEffect(() => {

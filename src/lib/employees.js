@@ -79,6 +79,20 @@ export function subscribeEmployees(onChange) {
   return () => { supabase.removeChannel(ch); };
 }
 
+/* У якому магазині співробітник вважається «своїм» для розрахунку ЗП за місяць ym.
+   emp.salon_key — лише ПОТОЧНИЙ магазин; при переведенні серед місяця ЗП за
+   попередній місяць має й далі рахуватись у старому магазині, інакше СМ, звідки
+   людину забрали, просто не бачить її в пікері співробітників за той місяць.
+   Відновлюємо з history: беремо останню подію-переведення/прийом, чий місяць
+   не пізніше за ym («hired» пише поле salon, решта — salon_key). */
+export function empSalonOn(emp, ym) {
+  const events = (emp.history || [])
+    .map((h) => ({ ym: String(h.at || "").slice(0, 7), salon_key: h.salon_key || h.salon }))
+    .filter((h) => h.salon_key && h.ym && h.ym <= ym)
+    .sort((a, b) => (a.ym < b.ym ? -1 : a.ym > b.ym ? 1 : 0));
+  return events.length ? events[events.length - 1].salon_key : emp.salon_key;
+}
+
 /* днів до дня народження (0 = сьогодні, null = немає дати / далі ніж 60 днів) */
 export function birthdayIn(dob) {
   if (!dob) return null;
