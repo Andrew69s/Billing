@@ -5220,6 +5220,7 @@ function InvoiceCreateModal({ cab, inv, onClose, onCreated }) {
   const [invNo, setInvNo] = useState(inv?.invoice_no || "");
   const [comment, setComment] = useState(inv?.comment || "");
   const [ai, setAi] = useState("");        // "" | "run" | "ok" | "fail"
+  const [aiErr, setAiErr] = useState("");  // справжня причина збою розпізнавання
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -5232,7 +5233,7 @@ function InvoiceCreateModal({ cab, inv, onClose, onCreated }) {
   }, [editing, inv?.id, inv?.has_shot]);
 
   const onImage = async (url) => {
-    setShot(url); setAi("run"); setErr("");
+    setShot(url); setAi("run"); setErr(""); setAiErr("");
     try {
       const r = await extractInvoice(url);
       setCounterparty((c) => c || r.buyer || "");
@@ -5242,7 +5243,12 @@ function InvoiceCreateModal({ cab, inv, onClose, onCreated }) {
       setVat(deriveVat(r.issuer, r.vat));
       if (Array.isArray(r.items) && r.items.length) setItems(r.items);
       setAi(r.buyer || r.amount ? "ok" : "fail");
-    } catch { setAi("fail"); }
+    } catch (e) {
+      // раніше причина відкидалась мовчки — показуємо її, бо «не налаштовано AI»,
+      // «забагато запитів» і «немає в рахунку» потребують зовсім різних дій
+      setAiErr(String(e.message || e));
+      setAi("fail");
+    }
   };
 
   const submit = async () => {
@@ -5281,7 +5287,12 @@ function InvoiceCreateModal({ cab, inv, onClose, onCreated }) {
           )}
           {ai === "run" && <p className="inv-ai inv-ai-run"><Sparkles size={13} /> Розпізнаю рахунок…</p>}
           {ai === "ok" && <p className="inv-ai inv-ai-ok"><Sparkles size={13} /> Розпізнано — перевірте поля</p>}
-          {ai === "fail" && <p className="inv-ai inv-ai-fail"><Sparkles size={13} /> Не вдалося розпізнати — заповніть вручну</p>}
+          {ai === "fail" && (
+            <p className="inv-ai inv-ai-fail">
+              <Sparkles size={13} /> Не вдалося розпізнати — заповніть вручну
+              {aiErr && <span className="inv-ai-detail"> ({aiErr})</span>}
+            </p>
+          )}
 
           <label className="over-field"><span>Покупець (клієнт)</span>
             <input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="Кому виставлено рахунок" />
@@ -13494,6 +13505,7 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .inv-ai-run{color:var(--gold);}
 .inv-ai-ok{color:var(--positive);}
 .inv-ai-fail{color:var(--muted);}
+.inv-ai-detail{color:var(--negative-bright);}
 .task-modal .over-field>input,.task-modal .over-field>textarea{width:100%;}
 
 /* модалка створення задачі */
