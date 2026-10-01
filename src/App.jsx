@@ -6361,11 +6361,19 @@ function EmployeesModule({ cab, archive }) {
   const [fireT, setFireT] = useState(null);
 
   const canManage = !archive && (cab.type === "tm" || cab.type === "manager");
+  const isSm = cab.type === "sm";
+  // СМ за замовчуванням бачить лише свій штат; «Переглянути команду території» —
+  // той самий патерн, що й у графіку змін. Лише перегляд: canManage для СМ і так
+  // завжди false, тож прав редагувати чужий магазин це не додає.
+  const [territory, setTerritory] = useState(false);
   const salons = useMemo(() => {
     if (cab.type === "tm") return salonsOfTm(cab.tmKey || cab.key);
-    if (cab.type === "sm") return [salonByKey(cab.key)].filter(Boolean);
+    if (isSm) {
+      const mine = SALONS.filter((s) => s.key === cab.key);
+      return territory ? [...mine, ...SALONS.filter((s) => s.key !== cab.key)] : mine;
+    }
     return SALONS;
-  }, [cab]);
+  }, [cab, isSm, territory]);
 
   if (rows === null) return <div className="loading">Завантаження…</div>;
 
@@ -6389,6 +6397,11 @@ function EmployeesModule({ cab, archive }) {
     <div className="tasks-mod">
       <div className="tasks-head">
         <h3 className="ov-h">{archive ? "Архів співробітників" : "Команда"}</h3>
+        {!archive && isSm && (
+          <button className="btn-secondary small" onClick={() => setTerritory((v) => !v)}>
+            {territory ? "Показати лише мій магазин" : "Переглянути команду території"}
+          </button>
+        )}
         {canManage && <button className="btn-primary small" onClick={() => setForm("new")}><UserPlus size={14} /> Прийняти на роботу</button>}
       </div>
 
@@ -6527,6 +6540,16 @@ function ShiftCellMenu({ pos, field, current, homeSalon, onClose, onSet }) {
    назвою того магазину (без окремого рядка). Години бачить СМ магазину співробітника і ТМ. */
 function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays, canEditSalon, lockedFor, onChange, cabKey, today, seeAllHours, viewerSalon }) {
   const [menu, setMenu] = useState(null); // { empId, day, homeSalon, pos }
+  // Виділення кількох клітинок поспіль в одному рядку — щоб не відмічати вихідні
+  // по одному. drag — поки тягнуть пальцем/мишею; selection — після відпускання,
+  // відкриває панель масових дій (без годин/заміни — лише прості стани).
+  const [drag, setDrag] = useState(null);       // { empId, homeSalon, start }
+  const [dragEnd, setDragEnd] = useState(null); // день під курсором під час тягнення
+  const [selection, setSelection] = useState(null); // { empId, homeSalon, days, pos }
+  const dragRef = React.useRef(null);
+  const dragEndRef = React.useRef(null);
+  dragRef.current = drag;
+  dragEndRef.current = dragEnd;
   const wrapRef = React.useRef(null);
   // рядок з числами липне під верхньою панеллю кабінету при прокрутці вниз
   useEffect(() => {
@@ -6541,11 +6564,79 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
   const nDays = daysInMonth(ym);
   const modeAllowed = (k) => canEditSalon(k) && !(lockedFor && lockedFor(k));
 
-  const openMenu = (e, empId, day, homeSalon) => {
-    if (!modeAllowed(homeSalon)) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    const z = window.__uiZoom || 1; // фіксоване позиціювання рахується в масштабованих px
-    setMenu({ empId, day, homeSalon, pos: { top: Math.min(r.bottom / z + 4, window.innerHeight / z - 250), left: Math.min(r.left / z, window.innerWidth / z - 220) } });
+  const posNear = (td, h) => {
+    const r = td?.getBoundingClientRect();
+    const z = window.__uiZoom || 1;
+    if (!r) return { top: 100, left: 100 };
+    return { top: Math.min(r.bottom / z + 4, window.innerHeight / z - h), left: Math.min(r.left / z, window.innerWidth / z - 220) };
+  };
+
+  // Тягнення по клітинках одного рядка: pointerdown стартує, pointermove (на
+  // window — палець/курсор легко виходить за межі td) оновлює кінець у межах
+  // того самого співробітника, pointerup завершує. Без руху — звичайний тап,
+  // поводиться точно як одинарний клік раніше.
+  useEffect(() => {
+    if (!drag) return undefined;
+    const onMove = (ev) => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const td = el?.closest?.("td[data-day]");
+      if (!td || td.dataset.emp !== drag.empId) return;
+      setDragEnd(Number(td.dataset.day));
+    };
+    const onUp = () => {
+      const end = dragEndRef.current ?? drag.start;
+      if (end === drag.start) {
+        const td = document.querySelector(`td[data-emp="${drag.empId}"][data-day="${drag.start}"]`);
+        if (td) setMenu({ empId: drag.empId, day: drag.start, homeSalon: drag.homeSalon, pos: posNear(td, 250) });
+      } else {
+        const lo = Math.min(drag.start, end), hi = Math.max(drag.start, end);
+        const days = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+        const td = document.querySelector(`td[data-emp="${drag.empId}"][data-day="${end}"]`);
+        setSelection({ empId: drag.empId, homeSalon: drag.homeSalon, days, pos: posNear(td, 180) });
+      }
+      setDrag(null); setDragEnd(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+  }, [drag]);
+
+  // Той самий набір дій, що в ShiftCellMenu, але без годин і без заміни —
+  // для діапазону днів вони не мають однозначного сенсу.
+  const performDayFor = async (empId, homeSalon, day, action) => {
+    const wd = dayKey(ym, day);
+    const cur = shiftMap[`${empId}:${wd}`] || {};
+    let row = { employee_id: empId, work_date: wd, salon_key: homeSalon, plan_h: cur.plan_h ?? null, fact_h: cur.fact_h ?? null, state: "work", absence_reason: cur.absence_reason || "", is_senior: cur.is_senior || false, updated_by: cabKey };
+    const factOnly = field === "fact";
+    if (action.type === "clear") {
+      if (factOnly && cur.plan_h != null) { row.fact_h = null; row.state = "work"; row.absence_reason = ""; await upsertShift(row); return; }
+      await deleteShift(empId, wd); return;
+    }
+    if (action.type === "worked") {
+      row.state = "work"; row.absence_reason = ""; row[field === "plan" ? "plan_h" : "fact_h"] = 1;
+    } else if (action.type === "off") {
+      row.state = "off"; row.fact_h = null; if (!factOnly) row.plan_h = null;
+    } else if (action.type === "absent") {
+      row.state = "absent"; row.absence_reason = action.reasonKey || "vacation"; row.fact_h = null;
+    }
+    await upsertShift(row);
+  };
+
+  const applyBulk = async (actionType) => {
+    if (!selection) return;
+    const { empId, homeSalon, days } = selection;
+    setSelection(null);
+    let action = { type: actionType };
+    if (actionType === "absent") {
+      const reason = prompt("Причина (відпустка / лікарняний / відгул / прогул / навчання):", "відпустка") || "";
+      const key = Object.entries(ABSENCE_REASONS).find(([, v]) => v.toLowerCase() === reason.trim().toLowerCase())?.[0] || "vacation";
+      action = { type: "absent", reasonKey: key };
+    }
+    try {
+      for (const d of days) await performDayFor(empId, homeSalon, d, action);
+      pushToast({ title: "Застосовано", body: `${employees.find((x) => x.id === empId)?.full_name || ""} · ${days.length} ${days.length === 1 ? "день" : "дн."}` });
+    } catch (e) { alert(shiftErr(e)); }
+    onChange();
   };
 
   const applySet = async (action) => {
@@ -6654,11 +6745,14 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
                         let s = shiftMap[`${e.id}:${wd}`];
                         if (!s && closedDays[`${salon.key}:${wd}`]) s = { state: "closed" };
                         const { txt, cls, title } = cellInfo(s, salon.key, showH);
+                        const inDrag = drag && drag.empId === e.id
+                          && d >= Math.min(drag.start, dragEnd ?? drag.start) && d <= Math.max(drag.start, dragEnd ?? drag.start);
+                        const inSelection = selection && selection.empId === e.id && selection.days.includes(d);
                         return (
-                          <td key={d}
-                            className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""}`}
+                          <td key={d} data-emp={e.id} data-day={d}
+                            className={`sh ${cls} ${wd === today ? "sh-today" : ""} ${edit ? "sh-edit" : ""} ${(inDrag || inSelection) ? "sh-sel" : ""}`}
                             title={title || undefined}
-                            onClick={edit ? (ev) => openMenu(ev, e.id, d, e.salon_key) : undefined}>
+                            onPointerDown={edit ? (ev) => { ev.preventDefault(); setDrag({ empId: e.id, homeSalon: e.salon_key, start: d }); setDragEnd(d); } : undefined}>
                             {txt}
                           </td>
                         );
@@ -6682,7 +6776,30 @@ function ShiftTable({ field, ym, salons, employees, shifts, shiftMap, closedDays
           current={shiftMap[`${menu.empId}:${dayKey(ym, menu.day)}`]}
         />
       )}
+      {selection && (
+        <ShiftBulkBar pos={selection.pos} count={selection.days.length} onClose={() => setSelection(null)} onApply={applyBulk} />
+      )}
     </div>
+  );
+}
+
+/* Панель дій на кілька виділених клітинок одразу — без годин і без заміни,
+   лише прості стани (для них діапазон і потрібен найчастіше: кілька вихідних поспіль). */
+function ShiftBulkBar({ pos, count, onClose, onApply }) {
+  return createPortal(
+    <>
+      <div className="dtf-backdrop" onClick={onClose} />
+      <div className="shift-menu" style={{ top: pos.top, left: pos.left }}>
+        <div className="shift-bulk-hd">{count} {count === 1 ? "день" : count < 5 ? "дні" : "днів"} вибрано</div>
+        <div className="shift-swatches">
+          <button className="sw-btn sw-black" onClick={() => onApply("worked")}><i className="sw-ic sw-ic-black" />На зміні</button>
+          <button className="sw-btn sw-amber" onClick={() => onApply("off")}><i className="sw-ic sw-ic-amber" />Вихідний</button>
+          <button className="sw-btn sw-red" onClick={() => onApply("absent")}><i className="sw-ic sw-ic-red" />Відпустка</button>
+          <button className="sw-btn sw-clear" onClick={() => onApply("clear")}><i className="sw-ic sw-ic-clear" />Прибрати</button>
+        </div>
+      </div>
+    </>,
+    document.body,
   );
 }
 
@@ -13199,7 +13316,7 @@ table.sched .rh .rl{font-size:10.5px;color:var(--muted);font-weight:400;}
 table.sched .grp td{background:var(--surface-alt);text-align:left;padding:8px 10px;font-size:12px;font-weight:500;letter-spacing:.04em;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 table.sched tr.grp:not(:first-child) td{border-top:6px solid transparent;background-clip:padding-box;}
 td.sh{height:36px;background:var(--surface);color:var(--ink);overflow:hidden;white-space:nowrap;text-overflow:clip;font-size:12.5px;font-weight:700;}
-td.sh-edit{cursor:pointer;}
+td.sh-edit{cursor:pointer;touch-action:none;} /* touch-action інакше тягнення на тач-пристрої скролить сторінку */
 td.sh-edit:hover{filter:brightness(1.35);}
 td.sh-off{background:linear-gradient(rgba(190,138,46,.24),rgba(190,138,46,.24)),var(--surface);}
 td.sh-vac{background:linear-gradient(rgba(160,58,42,.42),rgba(160,58,42,.42)),var(--surface)!important;color:var(--negative-bright)!important;font-weight:700;}
@@ -13210,6 +13327,7 @@ td.sh-fill{background:#0B0F14;color:#ECE6D7;font-weight:700;}
 td.sh-fill-plan{background:linear-gradient(135deg,#0B0F14 0 46%,transparent 46%);}
 td.sh-fill.sh-edit:hover{background:#26303B;filter:none;}
 td.sh-today{outline:2px solid var(--gold);outline-offset:-2px;}
+td.sh-sel{background:rgba(190,138,46,.28)!important;box-shadow:inset 0 0 0 1px var(--gold);}
 td.sh-sum,th.sh-sum-h{width:170px;background:var(--surface);font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);padding:0 12px;text-align:left;line-height:1.2;white-space:nowrap;}
 th.sh-sum-h{font-size:11px;letter-spacing:.06em;text-transform:uppercase;}
 td.sh-sum b{color:var(--ink);font-weight:600;}
@@ -13224,6 +13342,7 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .shift-menu{position:fixed;z-index:301;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 20px 50px -14px rgba(0,0,0,.5);padding:10px;width:200px;animation:fadeIn .14s ease both;}
 /* палітра — клік по клітинці спершу пропонує обрати КОЛІР (стан), як на паперовому графіку */
 .shift-swatches{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+.shift-bulk-hd{font-size:11.5px;color:var(--muted);margin-bottom:8px;}
 .sw-btn{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-alt);font-family:inherit;font-size:12px;color:var(--ink-soft);cursor:pointer;text-align:left;}
 .sw-btn:hover{background:rgba(190,138,46,.14);color:var(--ink);}
 .sw-ic{width:14px;height:14px;border-radius:4px;flex-shrink:0;border:1px solid var(--line-strong);}
