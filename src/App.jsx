@@ -6404,10 +6404,15 @@ function FireModal({ emp, cab, onClose, onDone }) {
           <label className="over-field"><span>Останній робочий день</span>
             <input type="date" value={lastDay} onChange={(e) => setLastDay(e.target.value)} />
           </label>
+          {lastDay !== new Date().toISOString().slice(0, 10) && (
+            <p className="hint" style={{ color: "var(--gold-ink,var(--ink))" }}>
+              Звільнення заднім числом: у графіку й ЗП людина лишиться видимою по {fmtDeadline(lastDay)} включно, з наступного місяця — зникне зі списку активних.
+            </p>
+          )}
           <label className="over-field"><span>Причина / коментар</span>
             <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
           </label>
-          <p className="hint">Запис перейде в «Архів». Дані за відпрацьовані місяці (графік, ЗП) лишаться доступні.</p>
+          <p className="hint">Якщо людина фактично вже не працює кілька днів/тижнів — виставте справжній останній робочий день вище, а не сьогодні: саме ним визначається, за які місяці ще рахується ЗП і графік. Запис перейде в «Архів», дані не губляться.</p>
         </div>
         <div className="modal-foot">
           <button className="btn-secondary" onClick={onClose}>Скасувати</button>
