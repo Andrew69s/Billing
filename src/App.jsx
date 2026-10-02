@@ -3609,13 +3609,13 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                             <NumInput className="kpi-plan-in" value={plan.ez_plan} onChange={setPlanField(s.key, "ez_plan")} readOnly={ezReadOnly} />
                           </td>
                         )}
-                        {idx === 0 && <td rowSpan={n} className="muted">{c0 ? stNum(c0.ezTotalSum) : "—"}</td>}
+                        {idx === 0 && <td rowSpan={n} className={c0?.ezTotalSum ? "gold" : "muted"}>{c0 ? stNum(c0.ezTotalSum) : "—"}</td>}
                         {idx === 0 && (
                           <td rowSpan={n}>
                             <NumInput className="kpi-plan-in" value={plan.turnover_plan} onChange={setPlanField(s.key, "turnover_plan")} readOnly={toReadOnly} />
                           </td>
                         )}
-                        {idx === 0 && <td rowSpan={n} className="muted">{c0 ? stNum(c0.factAdjusted) : "—"}</td>}
+                        {idx === 0 && <td rowSpan={n} className={c0 ? "gold" : "muted"}>{c0 ? stNum(c0.factAdjusted) : "—"}</td>}
                         {idx === 0 && (
                           <td rowSpan={n}>
                             <span className="kpi-pct-wrap">
@@ -14688,17 +14688,18 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .kpi-month-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:10px;}
 
 .kpi-tbl-wrap{overflow-x:auto;border-radius:var(--radius-md);border:1px solid var(--line);}
-table.kpi-sheet-tbl{border-collapse:collapse;width:100%;min-width:2460px;font-size:12.5px;color:var(--ink);background:var(--surface);}
+table.kpi-sheet-tbl{border-collapse:collapse;width:100%;min-width:2560px;font-size:12.5px;color:var(--ink);background:var(--surface);}
 table.kpi-sheet-tbl th,table.kpi-sheet-tbl td{border:1px solid var(--line);padding:7px 9px;text-align:center;vertical-align:middle;}
 table.kpi-sheet-tbl th{background:var(--surface-alt);color:var(--ink-soft);font-size:10px;letter-spacing:.04em;text-transform:uppercase;font-weight:600;}
 table.kpi-sheet-tbl th .sub{display:block;font-weight:400;font-size:9.5px;letter-spacing:0;text-transform:none;color:var(--muted);margin-top:2px;}
 table.kpi-sheet-tbl td.name{text-align:left;}
 table.kpi-sheet-tbl td.muted{color:var(--muted);}
+table.kpi-sheet-tbl td.gold{color:var(--gold);font-weight:700;font-size:13px;}
 table.kpi-sheet-tbl .col-store{width:220px;min-width:220px;max-width:220px;text-align:left;font-weight:600;position:sticky;left:0;z-index:3;background:var(--surface-alt);}
 table.kpi-sheet-tbl .col-name{width:150px;min-width:150px;max-width:150px;position:sticky;left:220px;z-index:3;background:var(--surface);box-shadow:5px 0 10px -5px rgba(20,15,5,.12);}
 table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(--surface-alt);z-index:4;}
 
-.kpi-thr-in{width:42px;background:var(--input-bg);border:1.5px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:11.5px;text-align:center;padding:3px 2px;font-family:'IBM Plex Mono',monospace;}
+.kpi-thr-in{width:50px;background:var(--input-bg);border:1.5px solid var(--line-strong);border-radius:7px;color:var(--ink);font-size:12.5px;font-weight:600;text-align:center;padding:5px 3px;font-family:'IBM Plex Mono',monospace;}
 .kpi-thr-in.thr-y{border-color:var(--gold);box-shadow:0 0 0 1px rgba(190,138,46,.35) inset;}
 .kpi-thr-in.thr-o{border-color:#C97A2E;box-shadow:0 0 0 1px rgba(201,122,46,.35) inset;}
 .kpi-thr-in.thr-g{border-color:var(--positive);box-shadow:0 0 0 1px rgba(63,107,74,.3) inset;}
