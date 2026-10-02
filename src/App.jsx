@@ -3412,7 +3412,6 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
   const [calcs, setCalcs] = useState({});       // { [empId]: calc result }
   const [hist, setHist] = useState({});         // { [salonKey]: { [ym]: row } }
   const [editingPlan, setEditingPlan] = useState({});
-  const [busyFix, setBusyFix] = useState({});
   const draftsTouched = useRef(new Set());
   const plansTouched = useRef(new Set());
 
@@ -3478,30 +3477,49 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
     plansTouched.current.add(salonKey);
     setPlans((p) => ({ ...p, [salonKey]: { ...p[salonKey], [field]: v } }));
   };
-  const onFixPlan = async (salonKey) => {
-    setBusyFix((b) => ({ ...b, [salonKey]: true }));
+  const [busyFixAll, setBusyFixAll] = useState(false);
+  const fixOne = async (salonKey) => {
+    // зберігаємо ВЕСЬ рядок плану разом (пороги/RRI/ТО/ЕЗ), не лише один стовпець —
+    // «Зафіксувати» стосується плану магазину в цілому
+    await saveSmPlan(salonKey, ym, plans[salonKey], tmKey);
+    await fixSmPlan(salonKey, ym);
+    // лише тепер магазин (СМ) дізнається, що план на місяць проставлено —
+    // до фіксації ТМ міг ще правити цифри, і проміжні зміни СМ не бачить
+    notify({
+      recipient: salonKey, kind: "plans",
+      title: "Проставлено плани на цей місяць",
+      body: monthLabel(ym), actor: tmKey, link: "salary",
+    }).catch(() => {});
+  };
+  const anySalons = salons.length > 0;
+  // статус плану по всіх магазинах місяця одразу — дії внизу зводяться в один
+  // куток таблиці, а не розкидані по кожному рядку/магазину окремо
+  const fixableSalons = salons.filter((s) => { const p = plans?.[s.key]; return p && !p.locked && !p.plan_fixed; });
+  const allFixedOrLocked = anySalons && plans && salons.every((s) => { const p = plans[s.key]; return !p || p.locked || p.plan_fixed; });
+  const anyEditing = Object.values(editingPlan).some(Boolean);
+  const editAllPlans = () => {
+    setEditingPlan((prev) => {
+      const next = { ...prev };
+      for (const s of salons) next[s.key] = true;
+      return next;
+    });
+  };
+  const fixAllPlans = async () => {
+    setBusyFixAll(true);
     try {
-      // зберігаємо ВЕСЬ рядок плану разом (пороги/RRI/ТО/ЕЗ), не лише один стовпець —
-      // «Зафіксувати» стосується плану магазину в цілому
-      await saveSmPlan(salonKey, ym, plans[salonKey], tmKey);
-      await fixSmPlan(salonKey, ym);
-      setPlans((p) => ({ ...p, [salonKey]: { ...p[salonKey], plan_fixed: true, updated_by: tmKey } }));
-      setEditingPlan((e) => ({ ...e, [salonKey]: false }));
-      pushToast({ title: "План зафіксовано", body: `${salonLabel(salonByKey(salonKey))} · ${monthLabel(ym)}` });
-      // лише тепер магазин (СМ) дізнається, що план на місяць проставлено —
-      // до фіксації ТМ міг ще правити цифри, і проміжні зміни СМ не бачить
-      notify({
-        recipient: salonKey, kind: "plans",
-        title: "Проставлено плани на цей місяць",
-        body: monthLabel(ym), actor: tmKey, link: "salary",
-      }).catch(() => {});
+      await Promise.all(fixableSalons.map((s) => fixOne(s.key)));
+      setPlans((p) => {
+        const next = { ...p };
+        for (const s of fixableSalons) next[s.key] = { ...next[s.key], plan_fixed: true, updated_by: tmKey };
+        return next;
+      });
+      setEditingPlan({});
+      pushToast({ title: "План зафіксовано", body: `${fixableSalons.length} магазин(ів) · ${monthLabel(ym)}` });
     } catch (e) {
       pushToast({ title: "Не вдалося зафіксувати", body: String(e.message || e) });
     }
-    setBusyFix((b) => ({ ...b, [salonKey]: false }));
+    setBusyFixAll(false);
   };
-
-  const anySalons = salons.length > 0;
 
   return (
     <details className="kpi-month" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
@@ -3516,13 +3534,26 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
         ) : !open ? null : drafts === null ? (
           <div className="loading">Завантаження…</div>
         ) : (
+          <>
+          <div className="kpi-month-toolbar">
+            {allFixedOrLocked ? (
+              <span className="kpi-fixed-badge">🔒 план на {monthLabel(ym)} зафіксовано по всіх магазинах</span>
+            ) : (
+              <>
+                {!anyEditing && <button type="button" className="kpi-edit-btn" onClick={editAllPlans}>✎ Редагувати план ТО/ЕЗ</button>}
+                <button type="button" className="kpi-fix-btn" disabled={busyFixAll || !fixableSalons.length} onClick={fixAllPlans}>
+                  {busyFixAll ? "Фіксую…" : `Зафіксувати план на ${monthLabel(ym)} (${fixableSalons.length})`}
+                </button>
+              </>
+            )}
+          </div>
           <div className="kpi-tbl-wrap">
             <table className="kpi-sheet-tbl">
               <thead>
                 <tr>
                   <th className="col-store" rowSpan={2}>Магазин</th>
                   <th className="col-name" rowSpan={2}>ПІБ</th>
-                  <th rowSpan={2}>План</th>
+                  <th rowSpan={2}>Статус<br />плану</th>
                   <th rowSpan={2}>План ЕЗ</th>
                   <th rowSpan={2}>Факт ЕЗ</th>
                   <th rowSpan={2}>План ТО<br />(ОС)</th>
@@ -3552,7 +3583,6 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                   const editing = !!editingPlan[s.key];
                   const toReadOnly = plan.locked || plan.plan_fixed || (isPlannerSrc && !editing);
                   const ezReadOnly = toReadOnly;
-                  const showEditBtn = isPlannerSrc && !plan.plan_fixed && !plan.locked && !editing;
                   const h = hist[s.key] || {};
                   return emps.map((e, idx) => {
                     const c = calcs[e.id];
@@ -3562,20 +3592,10 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         {idx === 0 && <td className="store col-store" rowSpan={n}>{salonLabel(s)}</td>}
                         <td className="name col-name">{e.full_name}</td>
                         {idx === 0 && (
-                          <td rowSpan={n} className="kpi-actions-cell">
-                            {/* дії застосовуються до всього плану магазину (пороги, RRI, ТО, ЕЗ разом), не до одного стовпця */}
-                            <div className="kpi-cell-stack">
-                              {plan.locked ? (
-                                <span className="kpi-fixed-badge">🔒 місяць закрито</span>
-                              ) : plan.plan_fixed ? (
-                                <span className="kpi-fixed-badge">🔒 зафіксовано</span>
-                              ) : (
-                                <>
-                                  {showEditBtn && <button type="button" className="kpi-edit-btn" onClick={() => setEditingPlan((p) => ({ ...p, [s.key]: true }))}>✎ редагувати</button>}
-                                  <button type="button" className="kpi-fix-btn" disabled={busyFix[s.key]} onClick={() => onFixPlan(s.key)}>{busyFix[s.key] ? "…" : "Зафіксувати"}</button>
-                                </>
-                              )}
-                            </div>
+                          <td rowSpan={n} className="kpi-actions-cell muted">
+                            {/* дії по плану — одна кнопка на весь місяць у верхньому кутку таблиці,
+                                тут лише статус цього магазину */}
+                            {plan.locked ? "🔒 місяць закрито" : plan.plan_fixed ? "🔒 зафіксовано" : isPlannerSrc ? (editing ? "редагується" : "з планера") : "вручну"}
                           </td>
                         )}
                         {idx === 0 && (
@@ -3648,6 +3668,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
     </details>
@@ -14657,6 +14678,7 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .kpi-month-tag{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--gold-ink);background:rgba(190,138,46,.14);border-radius:999px;padding:2px 9px;}
 .kpi-month-body{border-top:1px solid var(--line);padding:14px 18px 18px;}
 .kpi-more{align-self:flex-start;}
+.kpi-month-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:10px;}
 
 .kpi-tbl-wrap{overflow-x:auto;border-radius:var(--radius-md);border:1px solid var(--line);}
 table.kpi-sheet-tbl{border-collapse:collapse;width:100%;min-width:2460px;font-size:12.5px;color:var(--ink);background:var(--surface);}
