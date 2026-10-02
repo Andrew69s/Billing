@@ -12199,7 +12199,7 @@ function TmCabinet({ tmKey, onExit, onLogout }) {
     { key: "overview", label: "Огляд", group: "Головне", icon: <LayoutGrid size={16} />, render: () => <TmOverview tmKey={tmKey} /> },
     { key: "salary", label: "Розрахунок ЗП", group: "Головне", icon: <Calculator size={16} />, render: () => <TmView tmKey={tmKey} tmName={tm.name} embedded /> },
     { key: "salons", wide: true, label: "ЗП салонів", group: "Головне", icon: <Store size={16} />, render: () => <SalonReviewPanel tmKey={tmKey} reviewer="tm" /> },
-    { key: "plans", label: "План показників", group: "Головне", icon: <TrendingUp size={16} />, render: () => <SmPlanPanel tmKey={tmKey} /> },
+    { key: "plans", wide: true, label: "План показників", group: "Головне", icon: <TrendingUp size={16} />, render: () => <SmPlanPanel tmKey={tmKey} /> },
     { key: "analytics", label: "Аналітика", group: "Головне", icon: <TrendingUp size={16} />, render: () => <AnalyticsPanel cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "kpi", label: "Показники території", group: "Щоденне", icon: <BarChart3 size={16} />, render: () => <TerritoryModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
     { key: "ez", label: "ЕЗ", group: "Щоденне", icon: <BadgePercent size={16} />, render: () => <EzSalesModule cab={{ key: tmKey, type: "tm", tmKey }} /> },
