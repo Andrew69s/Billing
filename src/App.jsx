@@ -3717,7 +3717,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
 function SmPlanPanel({ tmKey }) {
   const [employees, setEmployees] = useState(null);
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
-  const months = useMemo(() => recentMonths(12), []);
+  const months = useMemo(() => recentMonths(5), []);
 
   if (employees === null) return <div className="loading">Завантаження…</div>;
 
