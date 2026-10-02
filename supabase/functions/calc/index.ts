@@ -313,14 +313,20 @@ function calcPpi(p: any, teamSize = 1, excluded = false) {
 }
 // Доля RRI (план/факт — ТМ вносить вручну в KPI-листі): виконано → 3% від
 // обороту «основної групи» (factAdjusted) на команду, не виконано → 1%.
-// Той самий командний розподіл, що й PPI/рекорд/БН.
-function calcRri(rriPlan: number, rriFact: number, factAdjusted: number, teamSize = 1, excluded = false) {
+// Доля RRI (факт) = оборот RRI (рахунок ТМ вносить сумою) / загальний оборот
+// ОС · 100% — порівнюється з планом ТМ, заданим теж у відсотках. Той самий
+// командний розподіл, що й PPI/рекорд/БН.
+function calcRri(rriPlanPct: number, rriRevenue: number, factAdjusted: number, teamSize = 1, excluded = false) {
   const team = Math.max(1, teamSize || 1);
-  const tracked = (rriPlan || 0) > 0; // ТМ ще не вносив план по RRI цей місяць → бонусу взагалі нема (не 1% за замовчуванням)
-  const met = tracked && (rriFact || 0) >= rriPlan;
+  const tracked = (rriPlanPct || 0) > 0; // ТМ ще не вносив план по RRI цей місяць → бонусу взагалі нема (не 1% за замовчуванням)
+  const factPct = factAdjusted > 0 ? ((rriRevenue || 0) / factAdjusted) * 100 : 0;
+  const met = tracked && factPct >= rriPlanPct;
   const pct = !tracked ? 0 : met ? 3 : 1;
   const teamBonus = Math.round((factAdjusted || 0) * (pct / 100));
-  return { plan: rriPlan || 0, fact: rriFact || 0, tracked, met, pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
+  return {
+    plan: rriPlanPct || 0, revenue: rriRevenue || 0, factPct,
+    tracked, met, pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team),
+  };
 }
 const recordThreshold = (prev: number) => Math.max(1_000_000, Math.round((prev || 0) * 1.1));
 function calcRecord(r: any, teamSize = 1, excluded = false) {

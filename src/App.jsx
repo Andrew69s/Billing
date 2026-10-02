@@ -3161,7 +3161,7 @@ function SmStoreSalary({ salon, review, ymProp }) {
                 {!!c0.rri && (
                   <StRow label="Доля RRI"
                     inp={<span className="st-hint">
-                      {c0.rri.tracked ? `план ${stNum(c0.rri.plan)} · факт ${stNum(c0.rri.fact)} · ${c0.rri.met ? "виконано (3%)" : "не виконано (1%)"}` : "план ще не внесено в «План показників» — бонус 0"}
+                      {c0.rri.tracked ? `план ${c0.rri.plan}% · факт ${c0.rri.factPct.toFixed(1)}% (оборот RRI ${stNum(c0.rri.revenue)}) · ${c0.rri.met ? "виконано (3%)" : "не виконано (1%)"}` : "план ще не внесено в «План показників» — бонус 0"}
                       {" "}на {c0.bonus.team}
                     </span>}
                     cells={each((e) => stMoney(c(e).bonus.rri))} />
@@ -3535,8 +3535,8 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                   <th rowSpan={2}>Факт ЕЗ</th>
                   <th rowSpan={2}>План ТО<br />(ОС)</th>
                   <th rowSpan={2}>Факт ТО<br />(ОС)</th>
-                  <th rowSpan={2}>План долі<br />RRI</th>
-                  <th rowSpan={2}>Факт долі<br />RRI</th>
+                  <th rowSpan={2}>План долі RRI<br /><span className="sub">% від обороту ОС</span></th>
+                  <th rowSpan={2}>Оборот RRI<br /><span className="sub">факт, грн</span></th>
                   <th colSpan={2}>Середній чек<span className="sub">бонус 700 / 1500 / 2000 ₴</span></th>
                   <th colSpan={2}>Довжина чека<span className="sub">бонус 500 / 1000 / 1500 ₴</span></th>
                   <th colSpan={4}>ТО за 3 місяці (без ЕЗ, Віктора й НРТ)</th>
@@ -3601,12 +3601,14 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         {idx === 0 && (
                           <td rowSpan={n}>
                             <NumInput className="kpi-plan-in" value={plan.rri_plan} onChange={setPlanField(s.key, "rri_plan")} readOnly={plan.locked} />
+                            <span className="kpi-bonus-hint">% від обороту ОС</span>
                           </td>
                         )}
                         {idx === 0 && (
                           <td rowSpan={n}>
                             <NumInput className="kpi-plan-in" value={plan.rri_fact} onChange={setPlanField(s.key, "rri_fact")} readOnly={plan.locked} />
-                            {c0?.rri && <span className={`kpi-bonus-hint ${c0.rri.met ? "ok" : "bad"}`}>{c0.rri.met ? "виконано" : "не виконано"} · +{stNum(c0.rri.bonus)}</span>}
+                            <span className="kpi-bonus-hint">оборот RRI, грн</span>
+                            {c0?.rri && <span className={`kpi-bonus-hint ${c0.rri.met ? "ok" : "bad"}`}>факт {c0.rri.factPct.toFixed(1)}% · {c0.rri.met ? "виконано" : "не виконано"} · +{stNum(c0.rri.bonus)}</span>}
                           </td>
                         )}
                         {idx === 0 && (
