@@ -3481,11 +3481,20 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
   const onFixPlan = async (salonKey) => {
     setBusyFix((b) => ({ ...b, [salonKey]: true }));
     try {
+      // зберігаємо ВЕСЬ рядок плану разом (пороги/RRI/ТО/ЕЗ), не лише один стовпець —
+      // «Зафіксувати» стосується плану магазину в цілому
       await saveSmPlan(salonKey, ym, plans[salonKey], tmKey);
       await fixSmPlan(salonKey, ym);
       setPlans((p) => ({ ...p, [salonKey]: { ...p[salonKey], plan_fixed: true, updated_by: tmKey } }));
       setEditingPlan((e) => ({ ...e, [salonKey]: false }));
       pushToast({ title: "План зафіксовано", body: `${salonLabel(salonByKey(salonKey))} · ${monthLabel(ym)}` });
+      // лише тепер магазин (СМ) дізнається, що план на місяць проставлено —
+      // до фіксації ТМ міг ще правити цифри, і проміжні зміни СМ не бачить
+      notify({
+        recipient: salonKey, kind: "plans",
+        title: "Проставлено плани на цей місяць",
+        body: monthLabel(ym), actor: tmKey, link: "salary",
+      }).catch(() => {});
     } catch (e) {
       pushToast({ title: "Не вдалося зафіксувати", body: String(e.message || e) });
     }
@@ -3513,6 +3522,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                 <tr>
                   <th className="col-store" rowSpan={2}>Магазин</th>
                   <th className="col-name" rowSpan={2}>ПІБ</th>
+                  <th rowSpan={2}>План</th>
                   <th rowSpan={2}>План ЕЗ</th>
                   <th rowSpan={2}>Факт ЕЗ</th>
                   <th rowSpan={2}>План ТО<br />(ОС)</th>
@@ -3543,7 +3553,6 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                   const toReadOnly = plan.locked || plan.plan_fixed || (isPlannerSrc && !editing);
                   const ezReadOnly = toReadOnly;
                   const showEditBtn = isPlannerSrc && !plan.plan_fixed && !plan.locked && !editing;
-                  const showFixBtn = isPlannerSrc && !plan.plan_fixed && !plan.locked;
                   const h = hist[s.key] || {};
                   return emps.map((e, idx) => {
                     const c = calcs[e.id];
@@ -3553,6 +3562,23 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         {idx === 0 && <td className="store col-store" rowSpan={n}>{salonLabel(s)}</td>}
                         <td className="name col-name">{e.full_name}</td>
                         {idx === 0 && (
+                          <td rowSpan={n} className="kpi-actions-cell">
+                            {/* дії застосовуються до всього плану магазину (пороги, RRI, ТО, ЕЗ разом), не до одного стовпця */}
+                            <div className="kpi-cell-stack">
+                              {plan.locked ? (
+                                <span className="kpi-fixed-badge">🔒 місяць закрито</span>
+                              ) : plan.plan_fixed ? (
+                                <span className="kpi-fixed-badge">🔒 зафіксовано</span>
+                              ) : (
+                                <>
+                                  {showEditBtn && <button type="button" className="kpi-edit-btn" onClick={() => setEditingPlan((p) => ({ ...p, [s.key]: true }))}>✎ редагувати</button>}
+                                  <button type="button" className="kpi-fix-btn" disabled={busyFix[s.key]} onClick={() => onFixPlan(s.key)}>{busyFix[s.key] ? "…" : "Зафіксувати"}</button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        )}
+                        {idx === 0 && (
                           <td rowSpan={n}>
                             <NumInput className="kpi-plan-in" value={plan.ez_plan} onChange={setPlanField(s.key, "ez_plan")} readOnly={ezReadOnly} />
                           </td>
@@ -3560,13 +3586,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         {idx === 0 && <td rowSpan={n} className="muted">{c0 ? stNum(c0.ezTotalSum) : "—"}</td>}
                         {idx === 0 && (
                           <td rowSpan={n}>
-                            <div className="kpi-cell-stack">
-                              <NumInput className="kpi-plan-in" value={plan.turnover_plan} onChange={setPlanField(s.key, "turnover_plan")} readOnly={toReadOnly} />
-                              {plan.locked && <span className="kpi-fixed-badge">місяць закрито</span>}
-                              {showEditBtn && <button type="button" className="kpi-edit-btn" onClick={() => setEditingPlan((p) => ({ ...p, [s.key]: true }))}>✎ редагувати</button>}
-                              {showFixBtn && <button type="button" className="kpi-fix-btn" disabled={busyFix[s.key]} onClick={() => onFixPlan(s.key)}>{busyFix[s.key] ? "…" : "Зафіксувати"}</button>}
-                              {plan.plan_fixed && <span className="kpi-fixed-badge">🔒 зафіксовано</span>}
-                            </div>
+                            <NumInput className="kpi-plan-in" value={plan.turnover_plan} onChange={setPlanField(s.key, "turnover_plan")} readOnly={toReadOnly} />
                           </td>
                         )}
                         {idx === 0 && <td rowSpan={n} className="muted">{c0 ? stNum(c0.factAdjusted) : "—"}</td>}
@@ -3578,7 +3598,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         {idx === 0 && (
                           <td rowSpan={n}>
                             <NumInput className="kpi-plan-in" value={plan.rri_fact} onChange={setPlanField(s.key, "rri_fact")} readOnly={plan.locked} />
-                            {c0?.rri && <span className="kpi-bonus-hint">{c0.rri.met ? "виконано" : "не виконано"} · +{stNum(c0.rri.bonus)}</span>}
+                            {c0?.rri && <span className={`kpi-bonus-hint ${c0.rri.met ? "ok" : "bad"}`}>{c0.rri.met ? "виконано" : "не виконано"} · +{stNum(c0.rri.bonus)}</span>}
                           </td>
                         )}
                         {idx === 0 && (
@@ -3592,7 +3612,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         )}
                         <td>
                           <NumInput className="kpi-fact-in" value={d.bonus.avgCheckFact} onChange={setEmpField(e.id, ["bonus", "avgCheckFact"])} readOnly={plan.locked} />
-                          {!!c?.bonus?.avgCheck && <span className="kpi-bonus-hint">+{stNum(c.bonus.avgCheck)}</span>}
+                          {!!(d.bonus.avgCheckFact > 0) && <span className={`kpi-bonus-hint ${c?.bonus?.avgCheck ? "ok" : "bad"}`}>{c?.bonus?.avgCheck ? `+${stNum(c.bonus.avgCheck)}` : "без бонусу"}</span>}
                         </td>
                         {idx === 0 && (
                           <td rowSpan={n}>
@@ -3605,7 +3625,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         )}
                         <td>
                           <NumInput className="kpi-fact-in" value={d.bonus.checkLenFact} onChange={setEmpField(e.id, ["bonus", "checkLenFact"])} readOnly={plan.locked} />
-                          {!!c?.bonus?.checkLen && <span className="kpi-bonus-hint">+{stNum(c.bonus.checkLen)}</span>}
+                          {!!(d.bonus.checkLenFact > 0) && <span className={`kpi-bonus-hint ${c?.bonus?.checkLen ? "ok" : "bad"}`}>{c?.bonus?.checkLen ? `+${stNum(c.bonus.checkLen)}` : "без бонусу"}</span>}
                         </td>
                         {idx === 0 && histMonths.map((m) => (
                           <td key={m} rowSpan={n} className="muted">{h[m] ? stNum(h[m].turnover_ex_ez) : "—"}</td>
@@ -13927,8 +13947,8 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .embedded{animation:fadeIn .28s ease both;}
 
 /* ---------- оболонка кабінету з лівою панеллю ---------- */
-.cab-shell{max-width:1120px;animation:none;}  /* без transform — щоб мобільна шухляда позиціонувалась від краю екрана */
-.cab-shell.cab-wide{max-width:none;}
+.cab-shell{max-width:min(1680px,94vw);animation:none;}  /* без transform — щоб мобільна шухляда позиціонувалась від краю екрана */
+.cab-shell.cab-wide{max-width:min(2200px,97vw);}
 .cab-layout{display:grid;grid-template-columns:232px 1fr;gap:22px;align-items:start;}
 .cab-side{position:sticky;top:78px;display:flex;flex-direction:column;gap:2px;padding:8px;background:rgba(var(--sf),.03);border:1px solid var(--line-dark);border-radius:var(--radius-md);}
 .cab-side-item{display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;border:none;border-radius:var(--radius-sm);background:none;color:var(--on-dark-2);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;text-align:left;transition:background .14s var(--ease),color .14s var(--ease);}
@@ -14652,6 +14672,9 @@ table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(
 .kpi-fact-in{width:72px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
 .kpi-plan-in{width:86px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
 .kpi-bonus-hint{display:block;margin-top:3px;font-size:10px;color:var(--muted);font-weight:500;white-space:nowrap;}
+.kpi-bonus-hint.ok{color:var(--positive);font-weight:700;}
+.kpi-bonus-hint.bad{color:var(--negative);}
+.kpi-actions-cell{min-width:120px;}
 .kpi-cell-stack{display:flex;flex-direction:column;align-items:center;gap:3px;}
 .kpi-edit-btn,.kpi-fix-btn{border:1px solid var(--line-strong);background:var(--surface);color:var(--ink-soft);border-radius:6px;font-size:10px;padding:2px 7px;cursor:pointer;margin-top:2px;}
 .kpi-fix-btn{color:var(--gold-ink);border-color:var(--gold);}
