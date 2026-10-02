@@ -316,10 +316,11 @@ function calcPpi(p: any, teamSize = 1, excluded = false) {
 // Той самий командний розподіл, що й PPI/рекорд/БН.
 function calcRri(rriPlan: number, rriFact: number, factAdjusted: number, teamSize = 1, excluded = false) {
   const team = Math.max(1, teamSize || 1);
-  const met = (rriPlan || 0) > 0 && (rriFact || 0) >= (rriPlan || 0);
-  const pct = met ? 3 : 1;
+  const tracked = (rriPlan || 0) > 0; // ТМ ще не вносив план по RRI цей місяць → бонусу взагалі нема (не 1% за замовчуванням)
+  const met = tracked && (rriFact || 0) >= rriPlan;
+  const pct = !tracked ? 0 : met ? 3 : 1;
   const teamBonus = Math.round((factAdjusted || 0) * (pct / 100));
-  return { plan: rriPlan || 0, fact: rriFact || 0, met, pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
+  return { plan: rriPlan || 0, fact: rriFact || 0, tracked, met, pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
 }
 const recordThreshold = (prev: number) => Math.max(1_000_000, Math.round((prev || 0) * 1.1));
 function calcRecord(r: any, teamSize = 1, excluded = false) {
