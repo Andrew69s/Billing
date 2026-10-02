@@ -3600,8 +3600,11 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         {idx === 0 && <td rowSpan={n} className="muted">{c0 ? stNum(c0.factAdjusted) : "—"}</td>}
                         {idx === 0 && (
                           <td rowSpan={n}>
-                            <NumInput className="kpi-plan-in" value={plan.rri_plan} onChange={setPlanField(s.key, "rri_plan")} readOnly={plan.locked} />
-                            <span className="kpi-bonus-hint">% від обороту ОС</span>
+                            <span className="kpi-pct-wrap">
+                              <NumInput className="kpi-plan-in" value={plan.rri_plan} onChange={setPlanField(s.key, "rri_plan")} readOnly={plan.locked} />
+                              <b>%</b>
+                            </span>
+                            <span className="kpi-bonus-hint">від обороту ОС</span>
                           </td>
                         )}
                         {idx === 0 && (
@@ -14685,6 +14688,8 @@ table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(
 .kpi-bonus-hint.ok{color:var(--positive);font-weight:700;}
 .kpi-bonus-hint.bad{color:var(--negative);}
 .kpi-actions-cell{min-width:120px;}
+.kpi-pct-wrap{display:inline-flex;align-items:center;gap:3px;}
+.kpi-pct-wrap b{font-size:12px;color:var(--ink-soft);}
 .kpi-cell-stack{display:flex;flex-direction:column;align-items:center;gap:3px;}
 .kpi-edit-btn,.kpi-fix-btn{border:1px solid var(--line-strong);background:var(--surface);color:var(--ink-soft);border-radius:6px;font-size:10px;padding:2px 7px;cursor:pointer;margin-top:2px;}
 .kpi-fix-btn{color:var(--gold-ink);border-color:var(--gold);}
