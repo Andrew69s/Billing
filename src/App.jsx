@@ -3473,6 +3473,23 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
     draftsTouched.current.add(empId);
     setDrafts((d) => ({ ...d, [empId]: _.set(_.cloneDeep(d[empId]), path, v) }));
   };
+  // факт ТО/чеки Віктора/НРТ — спільні на весь магазин (однакові в документі
+  // кожного співробітника, як і в «ЗП салонів») — пишемо одразу всім
+  const setStoreField = (salonKey, path) => (v) => {
+    const ids = (empsBySalon[salonKey] || []).map((e) => e.id);
+    for (const id of ids) draftsTouched.current.add(id);
+    setDrafts((d) => {
+      const next = { ...d };
+      for (const id of ids) {
+        const doc = _.set(_.cloneDeep(d[id]), path, v);
+        // лише тепер (а не в чернетці) факт реально йде в історію обороту —
+        // ТМ вносить дані напряму тут, без етапу подання СМ
+        if (doc.status === "draft") doc.status = "corrected";
+        next[id] = doc;
+      }
+      return next;
+    });
+  };
   const setPlanField = (salonKey, field) => (v) => {
     plansTouched.current.add(salonKey);
     setPlans((p) => ({ ...p, [salonKey]: { ...p[salonKey], [field]: v } }));
@@ -3578,6 +3595,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                   const n = emps.length;
                   const plan = plans?.[s.key] || emptyPlan();
                   const c0 = calcs[emps[0].id];
+                  const d0 = drafts[emps[0].id] || emptySmData();
                   const isPlannerSrc = plan.updated_by === "planner";
                   const editing = !!editingPlan[s.key];
                   const toReadOnly = plan.locked || plan.plan_fixed || (isPlannerSrc && !editing);
@@ -3601,7 +3619,18 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                             <NumInput className="kpi-plan-in" value={plan.turnover_plan} onChange={setPlanField(s.key, "turnover_plan")} readOnly={toReadOnly} />
                           </td>
                         )}
-                        {idx === 0 && <td rowSpan={n} className="muted">{c0 ? stNum(c0.factAdjusted) : "—"}</td>}
+                        {idx === 0 && (
+                          <td rowSpan={n}>
+                            <div className="kpi-cell-stack">
+                              <NumInput className="kpi-plan-in" value={d0.base.monthFact} onChange={setStoreField(s.key, ["base", "monthFact"])} readOnly={plan.locked} />
+                              <span className="kpi-bonus-hint">ОС: {c0 ? stNum(c0.factAdjusted) : "—"}</span>
+                              <span className="kpi-mini-row">
+                                <label className="kpi-mini-label">Віктора<NumInput className="kpi-mini-in" value={d0.base.viktorChecks} onChange={setStoreField(s.key, ["base", "viktorChecks"])} readOnly={plan.locked} /></label>
+                                <label className="kpi-mini-label">НРТ<NumInput className="kpi-mini-in" value={d0.base.lowMarginChecks} onChange={setStoreField(s.key, ["base", "lowMarginChecks"])} readOnly={plan.locked} /></label>
+                              </span>
+                            </div>
+                          </td>
+                        )}
                         {idx === 0 && (
                           <td rowSpan={n}>
                             <span className="kpi-pct-wrap">
@@ -14696,6 +14725,9 @@ table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(
 .kpi-fact-cell{min-width:132px;text-align:left;}
 .kpi-fact-row{display:flex;align-items:baseline;gap:6px;white-space:nowrap;}
 .kpi-fact-row .kpi-bonus-hint{display:inline;margin-top:0;font-size:9.5px;}
+.kpi-mini-row{display:flex;gap:6px;margin-top:3px;justify-content:center;}
+.kpi-mini-label{display:flex;flex-direction:column;align-items:center;gap:1px;font-size:8.5px;color:var(--muted);}
+.kpi-mini-in{width:46px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:4px;color:var(--ink);font-size:10.5px;text-align:center;padding:2px;font-family:'IBM Plex Mono',monospace;}
 .kpi-plan-in{width:86px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
 .kpi-bonus-hint{display:block;margin-top:3px;font-size:10px;color:var(--muted);font-weight:500;white-space:nowrap;}
 .kpi-bonus-hint.ok{color:var(--positive);font-weight:700;}
