@@ -3388,8 +3388,22 @@ function SalonReviewPanel({ tmKey, reviewer }) {
 ========================================================= */
 const catCls = (key) => `cat-badge cat-${String(key || "C").replace("+", "p")}`;
 
+// чи розгорнутий місяць — памʼятаємо в браузері, щоб не згортало все знову
+// при поверненні на цю вкладку (сама по собі лише зручність перегляду,
+// не дані — втрата значення нешкідлива)
+const kpiOpenKey = (tmKey, ym) => `kpi-month-open:${tmKey}:${ym}`;
+function readKpiOpen(tmKey, ym, fallback) {
+  try {
+    const v = localStorage.getItem(kpiOpenKey(tmKey, ym));
+    return v === null ? fallback : v === "1";
+  } catch { return fallback; }
+}
+function writeKpiOpen(tmKey, ym, isOpen) {
+  try { localStorage.setItem(kpiOpenKey(tmKey, ym), isOpen ? "1" : "0"); } catch { /* ignore */ }
+}
+
 function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(() => readKpiOpen(tmKey, ym, defaultOpen));
   const salons = useMemo(() => salonsOfTm(tmKey, ym), [tmKey, ym]);
   const empsBySalon = useMemo(() => {
     const out = {};
@@ -3539,7 +3553,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
   };
 
   return (
-    <details className="kpi-month" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details className="kpi-month" open={open} onToggle={(e) => { const v = e.currentTarget.open; setOpen(v); writeKpiOpen(tmKey, ym, v); }}>
       <summary className="kpi-month-bar">
         <ChevronRight size={16} className="kpi-chev" />
         <span className="kpi-month-name">{monthLabel(ym)}</span>
@@ -3703,7 +3717,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
 function SmPlanPanel({ tmKey }) {
   const [employees, setEmployees] = useState(null);
   useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
-  const [months, setMonths] = useState(() => [nowYm()]);
+  const months = useMemo(() => recentMonths(12), []);
 
   if (employees === null) return <div className="loading">Завантаження…</div>;
 
@@ -3711,14 +3725,11 @@ function SmPlanPanel({ tmKey }) {
     <div className="embedded kpi-sheet">
       <div className="detail-head">
         <span className="detail-title">KPI СМ — зведена таблиця</span>
-        <span className="detail-sub">план/факт по всіх магазинах одразу — місяці нижче, розгортаються через стрілку</span>
+        <span className="detail-sub">план/факт по всіх магазинах одразу — клікніть на місяць, щоб розгорнути</span>
       </div>
       {months.map((ym, i) => (
         <KpiMonthSheet key={ym} tmKey={tmKey} ym={ym} employees={employees} defaultOpen={i === 0} />
       ))}
-      <button type="button" className="btn-secondary kpi-more" onClick={() => setMonths((m) => [...m, prevYm(m[m.length - 1])])}>
-        + Показати {monthLabel(prevYm(months[months.length - 1]))}
-      </button>
     </div>
   );
 }
