@@ -7,7 +7,9 @@ export const emptyPlan = () => ({
   ez_plan: 0,
   avg_check_t1: 0, avg_check_t2: 0, avg_check_t3: 0,
   check_len_t1: 0, check_len_t2: 0, check_len_t3: 0,
+  rri_plan: 0, rri_fact: 0,
   locked: false,
+  plan_fixed: false,
 });
 
 export async function getSmPlan(salonKey, ym) {
@@ -56,6 +58,7 @@ export async function saveSmPlan(salonKey, ym, plan, by) {
     ez_plan: Number(plan.ez_plan) || 0,
     avg_check_t1: Number(plan.avg_check_t1) || 0, avg_check_t2: Number(plan.avg_check_t2) || 0, avg_check_t3: Number(plan.avg_check_t3) || 0,
     check_len_t1: Number(plan.check_len_t1) || 0, check_len_t2: Number(plan.check_len_t2) || 0, check_len_t3: Number(plan.check_len_t3) || 0,
+    rri_plan: Number(plan.rri_plan) || 0, rri_fact: Number(plan.rri_fact) || 0,
     updated_by: by || "",
   };
   const { error } = await supabase.from("sm_plans").upsert(row, { onConflict: "salon_key,ym" });
@@ -65,6 +68,13 @@ export async function saveSmPlan(salonKey, ym, plan, by) {
 export async function setPlanLock(salonKey, ym, locked, by) {
   const { error } = await supabase.from("sm_plans")
     .upsert({ salon_key: salonKey, ym, locked, updated_by: by || "" }, { onConflict: "salon_key,ym" });
+  if (error) throw error;
+}
+
+// ТМ сам фіксує план ТО/ЕЗ проти нічної автопідтяжки з планера (одноразово,
+// назад — лише адмін/керівник через пряме розблокування в базі)
+export async function fixSmPlan(salonKey, ym) {
+  const { error } = await supabase.rpc("fix_sm_plan", { p_salon_key: salonKey, p_ym: ym });
   if (error) throw error;
 }
 

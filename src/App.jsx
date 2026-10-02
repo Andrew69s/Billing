@@ -52,8 +52,8 @@ import {
   getStoreDay, setStoreDay, listStoreDays, subscribeShifts, monthTally,
   listScheduleLocks, setScheduleLock, scheduleLockedFor, subscribeScheduleLocks, planFactGaps,
 } from "./lib/shifts.js";
-import { getSmPlan, listSmPlans, listSmPlansForSalon, listSmPlansForSalons, saveSmPlan, setPlanLock, subscribePlans, emptyPlan } from "./lib/plans.js";
-import { upsertTurnoverMonthFact, listTurnoverHistory, listTurnoverHistoryForSalons, subscribeTurnoverHistory } from "./lib/turnover.js";
+import { listSmPlans, listSmPlansForSalon, listSmPlansForSalons, saveSmPlan, setPlanLock, fixSmPlan, subscribePlans, emptyPlan } from "./lib/plans.js";
+import { upsertTurnoverFact, listTurnoverHistory, listTurnoverHistoryForSalons, subscribeTurnoverHistory } from "./lib/turnover.js";
 import { EZ_PAYMENT_METHODS, listEzSales, createEzSale, updateEzSale, processEzSale, deleteEzSale, recomputeTurnoverEz, subscribeEzSales } from "./lib/ez.js";
 import {
   listNotifications, markRead, markAllRead, notify, subscribeNotifications,
@@ -294,10 +294,12 @@ async function loadSmData(salonKey, empId, ym) {
 }
 async function saveSmData(salonKey, empId, ym, data) {
   try { await window.storage.set(smKey(salonKey, empId, ym), JSON.stringify(data), true); } catch (e) { console.error(e); }
-  // фіксуємо реальний оборот в історію (для авто-категоризації) — лише коли це вже
-  // не чернетка: подано СМ або скориговано ТМ
+  // фіксуємо реальний оборот в історію (для авто-категоризації й «ТО за 3
+  // місяці») — лише коли це вже не чернетка: подано СМ або скориговано ТМ.
+  // Та сама формула «основної групи», що й у розрахунку ЗП: мінус чеки
+  // Віктора й НРТ (ЕЗ віднімає сама SQL-функція з ez_sales).
   if ((data.status === "submitted" || data.status === "corrected") && data.base?.monthFact) {
-    upsertTurnoverMonthFact(salonKey, ym, data.base.monthFact).catch(() => {});
+    upsertTurnoverFact(salonKey, ym, data.base.monthFact, data.base.viktorChecks, data.base.lowMarginChecks).catch(() => {});
   }
 }
 async function listSmMonths(salonKey, empId) {
@@ -3375,116 +3377,277 @@ function SalonReviewPanel({ tmKey, reviewer }) {
 /* =========================================================
    ТМ · ПЛАН ПОКАЗНИКІВ (оборот + пороги чека) по кожному магазину
 ========================================================= */
-function SmPlanForm({ salon, ym, tmKey, onBack }) {
-  const [plan, setPlan] = useState(emptyPlan());
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+/* =========================================================
+   KPI СМ — зведена таблиця (одним листом, усі магазини ТМ одразу).
+   Місяці складено стосом (поточний угорі, розгорнутий; попередні —
+   згорнуті, розгортаються через +). У кожному місяці: план ТО/ЕЗ (з
+   планера, ТМ може відредагувати й «зафіксувати» проти нічної синхронізації),
+   пороги/факт середнього чека й довжини чека, план/факт долі RRI, автоматичне
+   «ТО за 3 місяці» (3 останні ВЖЕ завершені місяці) і категорія магазину —
+   усе йде напряму в розрахунок мотивації (Edge Function calc).
+========================================================= */
+const catCls = (key) => `cat-badge cat-${String(key || "C").replace("+", "p")}`;
 
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    getSmPlan(salon.key, ym).then((p) => { if (active) { setPlan(p); setLoading(false); } });
-    return () => { active = false; };
-  }, [salon.key, ym]);
-
-  const upd = (k) => (v) => setPlan((p) => ({ ...p, [k]: v }));
-  const fromPlanner = plan.updated_by === "planner";
-  const save = async () => {
-    setSaving(true);
-    try {
-      await saveSmPlan(salon.key, ym, plan, tmKey);
-      pushToast({ title: "План збережено", body: `${salonLabel(salon)} · ${monthLabel(ym)}` });
-      onBack();
-    } catch (e) {
-      pushToast({ title: "Не вдалося зберегти", body: e.message === "plan_locked" ? "Місяць заблоковано адміном" : String(e.message || e) });
+function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const salons = useMemo(() => salonsOfTm(tmKey, ym), [tmKey, ym]);
+  const empsBySalon = useMemo(() => {
+    const out = {};
+    for (const s of salons) {
+      out[s.key] = (employees || [])
+        .filter((e) => wasEmployedOn(e, ym) && empSalonOn(e, ym) === s.key)
+        .sort((a, b) => EMP_ROLE_ORDER.indexOf(a.role) - EMP_ROLE_ORDER.indexOf(b.role) || a.full_name.localeCompare(b.full_name));
     }
-    setSaving(false);
+    return out;
+  }, [salons, employees, ym]);
+  const empIdToSalon = useMemo(() => {
+    const m = {};
+    for (const s of salons) for (const e of empsBySalon[s.key] || []) m[e.id] = s.key;
+    return m;
+  }, [salons, empsBySalon]);
+  const histMonths = useMemo(() => { const m1 = prevYm(ym), m2 = prevYm(m1), m3 = prevYm(m2); return [m3, m2, m1]; }, [ym]);
+
+  const [plans, setPlans] = useState(null);     // { [salonKey]: planRow }
+  const [drafts, setDrafts] = useState(null);   // { [empId]: smdata doc }
+  const [calcs, setCalcs] = useState({});       // { [empId]: calc result }
+  const [hist, setHist] = useState({});         // { [salonKey]: { [ym]: row } }
+  const [editingPlan, setEditingPlan] = useState({});
+  const [busyFix, setBusyFix] = useState({});
+  const draftsTouched = useRef(new Set());
+  const plansTouched = useRef(new Set());
+
+  // початкове завантаження — лише коли секцію розгорнуто (ліниво)
+  useEffect(() => {
+    if (!open || !employees) return undefined;
+    if (!salons.length) { setDrafts({}); setPlans({}); return undefined; }
+    let alive = true;
+    const salonKeys = salons.map((s) => s.key);
+    (async () => {
+      const [plansBy, histBy] = await Promise.all([
+        listSmPlansForSalons(salonKeys, [ym]),
+        listTurnoverHistoryForSalons(salonKeys, histMonths),
+      ]);
+      const perSalonDocs = await Promise.all(salons.map((s) =>
+        Promise.all((empsBySalon[s.key] || []).map((e) => loadSmData(s.key, e.id, ym).then((d) => [e.id, d]))),
+      ));
+      if (!alive) return;
+      const docs = {};
+      perSalonDocs.flat().forEach(([id, d]) => { docs[id] = d; });
+      const planState = {};
+      for (const s of salons) planState[s.key] = plansBy[s.key]?.[ym] || emptyPlan();
+      setHist(histBy);
+      setPlans(planState);
+      setDrafts(docs);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, employees, salons, ym]);
+
+  // дебаунс-збереження змінених полів + перерахунок на сервері
+  useEffect(() => {
+    if (!drafts || !plans) return undefined;
+    let alive = true;
+    const t = setTimeout(async () => {
+      const empIds = [...draftsTouched.current]; draftsTouched.current.clear();
+      const salonKeysP = [...plansTouched.current]; plansTouched.current.clear();
+      if (empIds.length || salonKeysP.length) {
+        await Promise.all([
+          ...empIds.map((id) => (empIdToSalon[id] ? saveSmData(empIdToSalon[id], id, ym, drafts[id]) : null)),
+          ...salonKeysP.map((sk) => saveSmPlan(sk, ym, plans[sk], tmKey)),
+        ]).catch(() => {});
+      }
+      if (!alive) return;
+      const items = salons.flatMap((s) => (empsBySalon[s.key] || []).map((e) => ({ data: drafts[e.id], salonKey: s.key, ym, empId: e.id })));
+      if (!items.length) return;
+      calcSmBatch(items).then((cs) => {
+        if (!alive) return;
+        const next = {}; let i = 0;
+        for (const s of salons) for (const e of (empsBySalon[s.key] || [])) next[e.id] = cs[i++];
+        setCalcs(next);
+      }).catch(() => {});
+    }, 450);
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts, plans]);
+
+  const setEmpField = (empId, path) => (v) => {
+    draftsTouched.current.add(empId);
+    setDrafts((d) => ({ ...d, [empId]: _.set(_.cloneDeep(d[empId]), path, v) }));
+  };
+  const setPlanField = (salonKey, field) => (v) => {
+    plansTouched.current.add(salonKey);
+    setPlans((p) => ({ ...p, [salonKey]: { ...p[salonKey], [field]: v } }));
+  };
+  const onFixPlan = async (salonKey) => {
+    setBusyFix((b) => ({ ...b, [salonKey]: true }));
+    try {
+      await saveSmPlan(salonKey, ym, plans[salonKey], tmKey);
+      await fixSmPlan(salonKey, ym);
+      setPlans((p) => ({ ...p, [salonKey]: { ...p[salonKey], plan_fixed: true, updated_by: tmKey } }));
+      setEditingPlan((e) => ({ ...e, [salonKey]: false }));
+      pushToast({ title: "План зафіксовано", body: `${salonLabel(salonByKey(salonKey))} · ${monthLabel(ym)}` });
+    } catch (e) {
+      pushToast({ title: "Не вдалося зафіксувати", body: String(e.message || e) });
+    }
+    setBusyFix((b) => ({ ...b, [salonKey]: false }));
   };
 
-  if (loading) return <div className="loading">Завантаження…</div>;
+  const anySalons = salons.length > 0;
+
   return (
-    <div className="embedded">
-      <div className="detail-head">
-        <button className="topbar-back" onClick={onBack}><ChevronLeft size={16} /> До списку магазинів</button>
-        <span className="detail-title">{salonLabel(salon)} <span className="detail-sub">· {monthLabel(ym)}</span></span>
-      </div>
-      {plan.locked && (
-        <p className="hint" style={{ color: "var(--negative-bright)" }}>
-          Місяць заблоковано адміном — редагування недоступне. Щоб змінити, попросіть Шаха розблокувати в Адміністрування → «Замок планів».
-        </p>
-      )}
-      <div className="criteria-form">
-        <div className="item-fields">
-          <Field label="План обороту на місяць (основна група, без ЕЗ)" suffix="грн" value={plan.turnover_plan} onChange={upd("turnover_plan")} readOnly={plan.locked || fromPlanner} />
-          <Field label="План ЕЗ на місяць" suffix="грн" value={plan.ez_plan} onChange={upd("ez_plan")} readOnly={plan.locked || fromPlanner} />
-        </div>
-        {fromPlanner && !plan.locked && (
-          <p className="hint">Обидва плани підтягнуто з планера автоматично (щодня) — вручну не редагуються.</p>
+    <details className="kpi-month" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="kpi-month-bar">
+        <ChevronRight size={16} className="kpi-chev" />
+        <span className="kpi-month-name">{monthLabel(ym)}</span>
+        {ym === nowYm() && <span className="kpi-month-tag">поточний</span>}
+      </summary>
+      <div className="kpi-month-body">
+        {!anySalons ? (
+          <p className="hint">Немає магазинів у цьому місяці.</p>
+        ) : !open ? null : drafts === null ? (
+          <div className="loading">Завантаження…</div>
+        ) : (
+          <div className="kpi-tbl-wrap">
+            <table className="kpi-sheet-tbl">
+              <thead>
+                <tr>
+                  <th className="col-store" rowSpan={2}>Магазин</th>
+                  <th className="col-name" rowSpan={2}>ПІБ</th>
+                  <th rowSpan={2}>План ЕЗ</th>
+                  <th rowSpan={2}>Факт ЕЗ</th>
+                  <th rowSpan={2}>План ТО<br />(ОС)</th>
+                  <th rowSpan={2}>Факт ТО<br />(ОС)</th>
+                  <th rowSpan={2}>План долі<br />RRI</th>
+                  <th rowSpan={2}>Факт долі<br />RRI</th>
+                  <th colSpan={2}>Середній чек<span className="sub">бонус 700 / 1500 / 2000 ₴</span></th>
+                  <th colSpan={2}>Довжина чека<span className="sub">бонус 500 / 1000 / 1500 ₴</span></th>
+                  <th colSpan={4}>ТО за 3 місяці (без ЕЗ, Віктора й НРТ)</th>
+                  <th rowSpan={2}>Категорія</th>
+                </tr>
+                <tr>
+                  <th>Пороги</th><th>Факт</th>
+                  <th>Пороги</th><th>Факт</th>
+                  {histMonths.map((m) => <th key={m}>{monthLabel(m).split(" ")[0].slice(0, 3)}</th>)}
+                  <th>Середнє</th>
+                </tr>
+              </thead>
+              <tbody>
+                {salons.map((s) => {
+                  const emps = empsBySalon[s.key] || [];
+                  if (!emps.length) return null;
+                  const n = emps.length;
+                  const plan = plans?.[s.key] || emptyPlan();
+                  const c0 = calcs[emps[0].id];
+                  const isPlannerSrc = plan.updated_by === "planner";
+                  const editing = !!editingPlan[s.key];
+                  const toReadOnly = plan.locked || plan.plan_fixed || (isPlannerSrc && !editing);
+                  const ezReadOnly = toReadOnly;
+                  const showEditBtn = isPlannerSrc && !plan.plan_fixed && !plan.locked && !editing;
+                  const showFixBtn = isPlannerSrc && !plan.plan_fixed && !plan.locked;
+                  const h = hist[s.key] || {};
+                  return emps.map((e, idx) => {
+                    const c = calcs[e.id];
+                    const d = drafts[e.id] || emptySmData();
+                    return (
+                      <tr key={e.id}>
+                        {idx === 0 && <td className="store col-store" rowSpan={n}>{salonLabel(s)}</td>}
+                        <td className="name col-name">{e.full_name}</td>
+                        {idx === 0 && (
+                          <td rowSpan={n}>
+                            <NumInput className="kpi-plan-in" value={plan.ez_plan} onChange={setPlanField(s.key, "ez_plan")} readOnly={ezReadOnly} />
+                          </td>
+                        )}
+                        {idx === 0 && <td rowSpan={n} className="muted">{c0 ? stNum(c0.ezTotalSum) : "—"}</td>}
+                        {idx === 0 && (
+                          <td rowSpan={n}>
+                            <div className="kpi-cell-stack">
+                              <NumInput className="kpi-plan-in" value={plan.turnover_plan} onChange={setPlanField(s.key, "turnover_plan")} readOnly={toReadOnly} />
+                              {plan.locked && <span className="kpi-fixed-badge">місяць закрито</span>}
+                              {showEditBtn && <button type="button" className="kpi-edit-btn" onClick={() => setEditingPlan((p) => ({ ...p, [s.key]: true }))}>✎ редагувати</button>}
+                              {showFixBtn && <button type="button" className="kpi-fix-btn" disabled={busyFix[s.key]} onClick={() => onFixPlan(s.key)}>{busyFix[s.key] ? "…" : "Зафіксувати"}</button>}
+                              {plan.plan_fixed && <span className="kpi-fixed-badge">🔒 зафіксовано</span>}
+                            </div>
+                          </td>
+                        )}
+                        {idx === 0 && <td rowSpan={n} className="muted">{c0 ? stNum(c0.factAdjusted) : "—"}</td>}
+                        {idx === 0 && (
+                          <td rowSpan={n}>
+                            <NumInput className="kpi-plan-in" value={plan.rri_plan} onChange={setPlanField(s.key, "rri_plan")} readOnly={plan.locked} />
+                          </td>
+                        )}
+                        {idx === 0 && (
+                          <td rowSpan={n}>
+                            <NumInput className="kpi-plan-in" value={plan.rri_fact} onChange={setPlanField(s.key, "rri_fact")} readOnly={plan.locked} />
+                            {c0?.rri && <span className="kpi-bonus-hint">{c0.rri.met ? "виконано" : "не виконано"} · +{stNum(c0.rri.bonus)}</span>}
+                          </td>
+                        )}
+                        {idx === 0 && (
+                          <td rowSpan={n}>
+                            <div className="kpi-thr-wrap">
+                              <NumInput className="kpi-thr-in thr-y" value={plan.avg_check_t1} onChange={setPlanField(s.key, "avg_check_t1")} readOnly={plan.locked} />
+                              <NumInput className="kpi-thr-in thr-o" value={plan.avg_check_t2} onChange={setPlanField(s.key, "avg_check_t2")} readOnly={plan.locked} />
+                              <NumInput className="kpi-thr-in thr-g" value={plan.avg_check_t3} onChange={setPlanField(s.key, "avg_check_t3")} readOnly={plan.locked} />
+                            </div>
+                          </td>
+                        )}
+                        <td>
+                          <NumInput className="kpi-fact-in" value={d.bonus.avgCheckFact} onChange={setEmpField(e.id, ["bonus", "avgCheckFact"])} readOnly={plan.locked} />
+                          {!!c?.bonus?.avgCheck && <span className="kpi-bonus-hint">+{stNum(c.bonus.avgCheck)}</span>}
+                        </td>
+                        {idx === 0 && (
+                          <td rowSpan={n}>
+                            <div className="kpi-thr-wrap">
+                              <NumInput className="kpi-thr-in thr-y" value={plan.check_len_t1} onChange={setPlanField(s.key, "check_len_t1")} readOnly={plan.locked} />
+                              <NumInput className="kpi-thr-in thr-o" value={plan.check_len_t2} onChange={setPlanField(s.key, "check_len_t2")} readOnly={plan.locked} />
+                              <NumInput className="kpi-thr-in thr-g" value={plan.check_len_t3} onChange={setPlanField(s.key, "check_len_t3")} readOnly={plan.locked} />
+                            </div>
+                          </td>
+                        )}
+                        <td>
+                          <NumInput className="kpi-fact-in" value={d.bonus.checkLenFact} onChange={setEmpField(e.id, ["bonus", "checkLenFact"])} readOnly={plan.locked} />
+                          {!!c?.bonus?.checkLen && <span className="kpi-bonus-hint">+{stNum(c.bonus.checkLen)}</span>}
+                        </td>
+                        {idx === 0 && histMonths.map((m) => (
+                          <td key={m} rowSpan={n} className="muted">{h[m] ? stNum(h[m].turnover_ex_ez) : "—"}</td>
+                        ))}
+                        {idx === 0 && <td rowSpan={n}>{c0?.hasHistory ? stNum(c0.avg3) : <span className="muted">—</span>}</td>}
+                        {idx === 0 && (
+                          <td rowSpan={n}>
+                            {c0 && <span className={catCls(c0.category)}>{c0.category}</span>}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  });
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
-        <div className="hint" style={{ margin: "14px 0 6px" }}>Пороги середнього чека — три градації бонусу (700 / 1 500 / 2 000 грн)</div>
-        <div className="item-fields">
-          <Field label="Поріг 1 → 700 грн" value={plan.avg_check_t1} onChange={upd("avg_check_t1")} readOnly={plan.locked} />
-          <Field label="Поріг 2 → 1 500 грн" value={plan.avg_check_t2} onChange={upd("avg_check_t2")} readOnly={plan.locked} />
-          <Field label="Поріг 3 → 2 000 грн" value={plan.avg_check_t3} onChange={upd("avg_check_t3")} readOnly={plan.locked} />
-        </div>
-        <div className="hint" style={{ margin: "14px 0 6px" }}>Пороги довжини чека — три градації бонусу (700 / 1 500 / 2 000 грн)</div>
-        <div className="item-fields">
-          <Field label="Поріг 1 → 700 грн" value={plan.check_len_t1} onChange={upd("check_len_t1")} readOnly={plan.locked} />
-          <Field label="Поріг 2 → 1 500 грн" value={plan.check_len_t2} onChange={upd("check_len_t2")} readOnly={plan.locked} />
-          <Field label="Поріг 3 → 2 000 грн" value={plan.check_len_t3} onChange={upd("check_len_t3")} readOnly={plan.locked} />
-        </div>
-        {!plan.locked && (
-          <button className="btn-primary" style={{ marginTop: 16 }} onClick={save} disabled={saving}>
-            {saving ? "Зберігаю…" : "Зберегти план"}
-          </button>
-        )}
       </div>
-    </div>
+    </details>
   );
 }
 
 function SmPlanPanel({ tmKey }) {
-  const [ym, setYm] = useState(salaryYm());
-  const salons = useMemo(() => salonsOfTm(tmKey, ym), [tmKey, ym]);
-  const [plans, setPlans] = useState(null);
-  const [openSalon, setOpenSalon] = useState(null);
-  const months = useMemo(() => recentMonths(12), []);
+  const [employees, setEmployees] = useState(null);
+  useEffect(() => { listEmployees().then(setEmployees).catch(() => setEmployees([])); }, []);
+  const [months, setMonths] = useState(() => [nowYm()]);
 
-  const load = React.useCallback(() => {
-    listSmPlans(salons.map((s) => s.key), ym).then(setPlans).catch(() => setPlans({}));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [salons, ym]);
-  useEffect(() => { setPlans(null); load(); }, [load]);
-  useEffect(() => subscribePlans(load), [load]);
-
-  if (openSalon) {
-    return <SmPlanForm salon={salonByKey(openSalon)} ym={ym} tmKey={tmKey} onBack={() => setOpenSalon(null)} />;
-  }
-  if (plans === null) return <div className="loading">Завантаження…</div>;
+  if (employees === null) return <div className="loading">Завантаження…</div>;
 
   return (
-    <div className="embedded">
-      <div className="month-row">
-        <select value={ym} onChange={(e) => setYm(e.target.value)}>
-          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
-        </select>
+    <div className="embedded kpi-sheet">
+      <div className="detail-head">
+        <span className="detail-title">KPI СМ — зведена таблиця</span>
+        <span className="detail-sub">план/факт по всіх магазинах одразу — місяці нижче, розгортаються через стрілку</span>
       </div>
-      <p className="hint" style={{ marginBottom: 12 }}>
-        План обороту й пороги чека на місяць — СМ бачить їх у своїй формі ЗП, але змінити не може.
-      </p>
-      <div className="salon-list">
-        {salons.map((s) => {
-          const p = plans[s.key];
-          return (
-            <button className="salon-row" key={s.key} onClick={() => setOpenSalon(s.key)}>
-              <span className="salon-row-main">
-                <span className="salon-row-name">{salonLabel(s)}</span>
-                <span className="salon-row-sub">{p ? `план ${fmt(p.turnover_plan)}` : "план ще не внесено"}{p?.locked ? " · заблоковано" : ""}</span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      {months.map((ym, i) => (
+        <KpiMonthSheet key={ym} tmKey={tmKey} ym={ym} employees={employees} defaultOpen={i === 0} />
+      ))}
+      <button type="button" className="btn-secondary kpi-more" onClick={() => setMonths((m) => [...m, prevYm(m[m.length - 1])])}>
+        + Показати {monthLabel(prevYm(months[months.length - 1]))}
+      </button>
     </div>
   );
 }
@@ -9551,10 +9714,11 @@ function EzSaleForm({ salonKey, ym: ymProp, cabKey, sale, onClose, onCreated }) 
     try {
       if (editing) {
         await updateEzSale(sale.id, core);
-        if (sale.status === "confirmed") await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
+        await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
         pushToast({ title: "Продаж оновлено", body: suah(total) });
       } else {
         await createEzSale({ salonKey, ym, createdBy: cabKey, ...core });
+        await recomputeTurnoverEz(salonKey, ym).catch(() => {});
         pushToast({ title: "Продаж ЕЗ додано", body: suah(total) });
       }
       onCreated(); onClose();
@@ -9672,8 +9836,8 @@ function EzProcessRow({ sale, cabKey, onDone }) {
     setBusy(true);
     try {
       await processEzSale(sale, { costPrice, costNp, costAcquiring, costVat }, cabKey);
-      // після підтвердження перераховуємо суму всіх підтверджених продажів ЕЗ цього
-      // магазину за місяць — саме вона віднімається від обороту для категоризації
+      // після підтвердження перераховуємо суму ЕЗ в історії обороту — вона
+      // віднімається від обороту для «ТО за 3 місяці» й авто-категоризації
       await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
       pushToast({ title: editingConfirmed ? "Розрахунок оновлено" : "Продаж підтверджено", body: `${salonLabel(salonByKey(sale.salon_key))} · прибуток ${suah(netPreview)}` });
       // магазину показуємо лише його частку, а не чистий прибуток мережі
@@ -9687,7 +9851,7 @@ function EzProcessRow({ sale, cabKey, onDone }) {
     setBusy(true);
     try {
       await deleteEzSale(sale.id);
-      if (editingConfirmed) await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
+      await recomputeTurnoverEz(sale.salon_key, sale.ym).catch(() => {});
       pushToast({ title: "Продаж видалено" });
       onDone();
     } catch (e) { pushToast({ title: "Не вдалося видалити", body: String(e.message || e) }); setBusy(false); }
@@ -10015,7 +10179,7 @@ function EzSalesModule({ cab }) {
                   <button className="zsu-undo" title="Видалити" onClick={async () => {
                     try {
                       await deleteEzSale(s.id);
-                      if (s.status === "confirmed") await recomputeTurnoverEz(s.salon_key, s.ym).catch(() => {});
+                      await recomputeTurnoverEz(s.salon_key, s.ym).catch(() => {});
                       pushToast({ title: "Видалено" }); reload();
                     } catch (e) { pushToast({ title: "Не вдалося", body: String(e.message || e) }); }
                   }}>
@@ -14456,6 +14620,42 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .consol-actions{display:flex;gap:6px;justify-content:flex-end;}
 .consol-total-row{border-bottom:none;border-top:2px solid var(--ink);margin-top:4px;font-weight:700;}
 .consol-total-row .consol-total{font-size:15px;color:var(--gold);}
+
+/* ---------- KPI СМ — зведений лист (усі магазини одним екраном) ---------- */
+.kpi-sheet{display:flex;flex-direction:column;gap:14px;}
+.kpi-month{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--sh-1);overflow:hidden;}
+.kpi-month-bar{list-style:none;display:flex;align-items:center;gap:10px;padding:14px 18px;cursor:pointer;user-select:none;font-weight:600;color:var(--ink);}
+.kpi-month-bar::-webkit-details-marker{display:none;}
+.kpi-chev{transition:transform .15s var(--ease);color:var(--muted);flex:0 0 auto;}
+.kpi-month[open]>.kpi-month-bar .kpi-chev{transform:rotate(90deg);}
+.kpi-month-name{font-size:14.5px;}
+.kpi-month-tag{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--gold-ink);background:rgba(190,138,46,.14);border-radius:999px;padding:2px 9px;}
+.kpi-month-body{border-top:1px solid var(--line);padding:14px 18px 18px;}
+.kpi-more{align-self:flex-start;}
+
+.kpi-tbl-wrap{overflow-x:auto;border-radius:var(--radius-md);border:1px solid var(--line);}
+table.kpi-sheet-tbl{border-collapse:collapse;width:100%;min-width:2460px;font-size:12.5px;color:var(--ink);background:var(--surface);}
+table.kpi-sheet-tbl th,table.kpi-sheet-tbl td{border:1px solid var(--line);padding:7px 9px;text-align:center;vertical-align:middle;}
+table.kpi-sheet-tbl th{background:var(--surface-alt);color:var(--ink-soft);font-size:10px;letter-spacing:.04em;text-transform:uppercase;font-weight:600;}
+table.kpi-sheet-tbl th .sub{display:block;font-weight:400;font-size:9.5px;letter-spacing:0;text-transform:none;color:var(--muted);margin-top:2px;}
+table.kpi-sheet-tbl td.name{text-align:left;}
+table.kpi-sheet-tbl td.muted{color:var(--muted);}
+table.kpi-sheet-tbl .col-store{width:220px;min-width:220px;max-width:220px;text-align:left;font-weight:600;position:sticky;left:0;z-index:3;background:var(--surface-alt);}
+table.kpi-sheet-tbl .col-name{width:150px;min-width:150px;max-width:150px;position:sticky;left:220px;z-index:3;background:var(--surface);box-shadow:5px 0 10px -5px rgba(20,15,5,.12);}
+table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(--surface-alt);z-index:4;}
+
+.kpi-thr-in{width:42px;background:var(--input-bg);border:1.5px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:11.5px;text-align:center;padding:3px 2px;font-family:'IBM Plex Mono',monospace;}
+.kpi-thr-in.thr-y{border-color:var(--gold);box-shadow:0 0 0 1px rgba(190,138,46,.35) inset;}
+.kpi-thr-in.thr-o{border-color:#C97A2E;box-shadow:0 0 0 1px rgba(201,122,46,.35) inset;}
+.kpi-thr-in.thr-g{border-color:var(--positive);box-shadow:0 0 0 1px rgba(63,107,74,.3) inset;}
+.kpi-thr-wrap{display:flex;gap:6px;justify-content:center;}
+.kpi-fact-in{width:72px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
+.kpi-plan-in{width:86px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
+.kpi-bonus-hint{display:block;margin-top:3px;font-size:10px;color:var(--muted);font-weight:500;white-space:nowrap;}
+.kpi-cell-stack{display:flex;flex-direction:column;align-items:center;gap:3px;}
+.kpi-edit-btn,.kpi-fix-btn{border:1px solid var(--line-strong);background:var(--surface);color:var(--ink-soft);border-radius:6px;font-size:10px;padding:2px 7px;cursor:pointer;margin-top:2px;}
+.kpi-fix-btn{color:var(--gold-ink);border-color:var(--gold);}
+.kpi-fixed-badge{font-size:10px;color:var(--positive);margin-top:2px;display:block;}
 `;
 
 const KEEP_KEY = "dnipro-m-keep";   // «Не виходити» відмічено

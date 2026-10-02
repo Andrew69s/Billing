@@ -1,7 +1,7 @@
 /* Продажі ЕЗ (генератори/електроінструмент) по магазину:
    СМ вносить продаж → ТМ опрацьовує (вхідна ціна, затрати) → рахується чистий прибуток. */
 import { supabase, rtChannel } from "./supabase.js";
-import { upsertTurnoverEzSum } from "./turnover.js";
+import { refreshTurnoverEz } from "./turnover.js";
 
 export const EZ_PAYMENT_METHODS = { cash: "Готівка", card: "Картка", transfer: "Перерахунок", installment: "ОЧ", combined: "Комбінована" };
 
@@ -67,13 +67,11 @@ export async function deleteEzSale(id) {
   if (error) throw error;
 }
 
-/* сума підтверджених продажів ЕЗ цього магазину за місяць — саме вона віднімається
-   від обороту для авто-категоризації. Викликати після будь-якої зміни, що могла
-   вплинути на список підтверджених (опрацювання, редагування, видалення). */
+/* перерахунок суми ЕЗ в історії обороту — УСІ продажі незалежно від статусу
+   (так само, як factAdjusted), не лише підтверджені. Викликати після будь-якої
+   зміни списку продажів (створення, опрацювання, редагування, видалення). */
 export async function recomputeTurnoverEz(salonKey, ym) {
-  const all = await listEzSales({ salonKey, ym });
-  const sum = all.filter((s) => s.status === "confirmed").reduce((s2, s) => s2 + (Number(s.amount) || 0), 0);
-  await upsertTurnoverEzSum(salonKey, ym, sum);
+  await refreshTurnoverEz(salonKey, ym);
 }
 
 export function subscribeEzSales(onChange) {

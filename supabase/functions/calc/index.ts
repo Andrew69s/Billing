@@ -311,6 +311,16 @@ function calcPpi(p: any, teamSize = 1, excluded = false) {
   const teamBonus = Math.round((p.ppiRevenue || 0) * (pct / 100));
   return { pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
 }
+// Доля RRI (план/факт — ТМ вносить вручну в KPI-листі): виконано → 3% від
+// обороту «основної групи» (factAdjusted) на команду, не виконано → 1%.
+// Той самий командний розподіл, що й PPI/рекорд/БН.
+function calcRri(rriPlan: number, rriFact: number, factAdjusted: number, teamSize = 1, excluded = false) {
+  const team = Math.max(1, teamSize || 1);
+  const met = (rriPlan || 0) > 0 && (rriFact || 0) >= (rriPlan || 0);
+  const pct = met ? 3 : 1;
+  const teamBonus = Math.round((factAdjusted || 0) * (pct / 100));
+  return { plan: rriPlan || 0, fact: rriFact || 0, met, pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
+}
 const recordThreshold = (prev: number) => Math.max(1_000_000, Math.round((prev || 0) * 1.1));
 function calcRecord(r: any, teamSize = 1, excluded = false) {
   const team = Math.max(1, teamSize || 1);
@@ -373,6 +383,9 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
   const ezTeam = excludedFromTeam ? 0 : Math.round(((ezProfitSum || 0) * 0.20) / Math.max(1, teamSize || 1));
   bonus.ezTeam = ezTeam;
   bonus.subtotal += ezTeam;
+  const rri = calcRri(planRow?.rri_plan || 0, planRow?.rri_fact || 0, factAdjusted, teamSize, excludedFromTeam);
+  bonus.rri = rri.bonus;
+  bonus.subtotal += rri.bonus;
   const ppi = calcPpi(data.ppi, teamSize, excludedFromTeam);
   const record = calcRecord(data.record, teamSize, excludedFromTeam);
   const quarterly = calcQuarterly(data.quarterly);
@@ -392,7 +405,7 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
     ezPlan: planRow?.ez_plan || 0, ezTotalSum,
     hasPlan: !!planRow, hasHistory: avg3FromHistory != null,
     planThresholds: { scN1: effectiveBonusInput.scN1, scN2: effectiveBonusInput.scN2, scN3: effectiveBonusInput.scN3, clN1: effectiveBonusInput.clN1, clN2: effectiveBonusInput.clN2, clN3: effectiveBonusInput.clN3 },
-    mgr, bonus, ppi, record, quarterly, bonusExtra, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total,
+    mgr, bonus, ppi, record, rri, quarterly, bonusExtra, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total,
   };
 }
 
@@ -556,15 +569,17 @@ Deno.serve(async (req) => {
       const d = new Date(y, m - 2, 1);
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
     };
-    // середній оборот (без ЕЗ) — за останні 3 місяці, або за скільки їх уже є
-    // (1-2), щоб на перших місяцях після впровадження салон не провалювався в
-    // найнижчу категорію через відсутність повної історії. null — лише коли
-    // історії нема геть жодної (тоді calcSmAll бере самовведене base.avg3To).
+    // середній оборот (без ЕЗ) — за 3 ОСТАННІ ВЖЕ ЗАВЕРШЕНІ місяці перед ym
+    // (для жовтня — липень/серпень/вересень, сам жовтень ще не закритий і в
+    // середнє не входить), або за скільки їх уже є (1-2), щоб на перших
+    // місяцях після впровадження салон не провалювався в найнижчу категорію
+    // через відсутність повної історії. null — лише коли історії нема геть
+    // жодної (тоді calcSmAll бере самовведене base.avg3To).
     const avg3For = (salonKey: string, ym: string): { avg: number | null; months: number } => {
       const h = historyBySalon[salonKey];
       if (!h) return { avg: null, months: 0 };
-      const y2 = prevYm(ym), y3 = prevYm(y2);
-      const vals = [ym, y2, y3].map((y) => h[y]).filter((v) => v != null);
+      const y1 = prevYm(ym), y2 = prevYm(y1), y3 = prevYm(y2);
+      const vals = [y1, y2, y3].map((y) => h[y]).filter((v) => v != null);
       if (!vals.length) return { avg: null, months: 0 };
       return { avg: Math.round(vals.reduce((s, v) => s + v, 0) / vals.length), months: vals.length };
     };
