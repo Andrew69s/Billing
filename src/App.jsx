@@ -3643,7 +3643,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         )}
                         <td className="kpi-fact-cell">
                           <span className="kpi-fact-row">
-                            <NumInput className="kpi-fact-in" value={d.bonus.avgCheckFact} onChange={setEmpField(e.id, ["bonus", "avgCheckFact"])} readOnly={plan.locked} />
+                            <NumInput className={`kpi-fact-in ${d.bonus.avgCheckFact > 0 ? (c?.bonus?.avgCheck ? "ok" : "bad") : ""}`} value={d.bonus.avgCheckFact} onChange={setEmpField(e.id, ["bonus", "avgCheckFact"])} readOnly={plan.locked} />
                             {!!(d.bonus.avgCheckFact > 0) && <span className={`kpi-bonus-hint ${c?.bonus?.avgCheck ? "ok" : "bad"}`}>{c?.bonus?.avgCheck ? `+${stNum(c.bonus.avgCheck)}` : "без бонусу"}</span>}
                           </span>
                         </td>
@@ -3658,7 +3658,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                         )}
                         <td className="kpi-fact-cell">
                           <span className="kpi-fact-row">
-                            <NumInput className="kpi-fact-in" value={d.bonus.checkLenFact} onChange={setEmpField(e.id, ["bonus", "checkLenFact"])} readOnly={plan.locked} />
+                            <NumInput className={`kpi-fact-in ${d.bonus.checkLenFact > 0 ? (c?.bonus?.checkLen ? "ok" : "bad") : ""}`} value={d.bonus.checkLenFact} onChange={setEmpField(e.id, ["bonus", "checkLenFact"])} readOnly={plan.locked} />
                             {!!(d.bonus.checkLenFact > 0) && <span className={`kpi-bonus-hint ${c?.bonus?.checkLen ? "ok" : "bad"}`}>{c?.bonus?.checkLen ? `+${stNum(c.bonus.checkLen)}` : "без бонусу"}</span>}
                           </span>
                         </td>
@@ -14690,7 +14690,7 @@ td.sh-sum b{color:var(--ink);font-weight:600;}
 .kpi-tbl-wrap{overflow-x:auto;border-radius:var(--radius-md);border:1px solid var(--line);}
 table.kpi-sheet-tbl{border-collapse:collapse;width:100%;min-width:2560px;font-size:12.5px;color:var(--ink);background:var(--surface);}
 table.kpi-sheet-tbl th,table.kpi-sheet-tbl td{border:1px solid var(--line);padding:7px 9px;text-align:center;vertical-align:middle;}
-table.kpi-sheet-tbl th{background:var(--surface-alt);color:var(--ink-soft);font-size:10px;letter-spacing:.04em;text-transform:uppercase;font-weight:600;}
+table.kpi-sheet-tbl th{background:var(--surface-alt);color:var(--gold-bright);font-size:10px;letter-spacing:.04em;text-transform:uppercase;font-weight:600;}
 table.kpi-sheet-tbl th .sub{display:block;font-weight:400;font-size:9.5px;letter-spacing:0;text-transform:none;color:var(--muted);margin-top:2px;}
 table.kpi-sheet-tbl td.name{text-align:left;}
 table.kpi-sheet-tbl td.muted{color:var(--muted);}
@@ -14700,15 +14700,21 @@ table.kpi-sheet-tbl .col-name{width:150px;min-width:150px;max-width:150px;positi
 table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(--surface-alt);z-index:4;}
 
 .kpi-thr-in{width:50px;background:var(--input-bg);border:1.5px solid var(--line-strong);border-radius:7px;color:var(--ink);font-size:12.5px;font-weight:600;text-align:center;padding:5px 3px;font-family:'IBM Plex Mono',monospace;}
-.kpi-thr-in.thr-y{border-color:var(--gold);box-shadow:0 0 0 1px rgba(190,138,46,.35) inset;}
-.kpi-thr-in.thr-o{border-color:#C97A2E;box-shadow:0 0 0 1px rgba(201,122,46,.35) inset;}
+.kpi-thr-in.thr-y{border-color:var(--gold-bright);box-shadow:0 0 0 1px rgba(220,169,74,.4) inset;}
+.kpi-thr-in.thr-o{border-color:#D9722E;box-shadow:0 0 0 1px rgba(217,114,46,.4) inset;}
 .kpi-thr-in.thr-g{border-color:var(--positive);box-shadow:0 0 0 1px rgba(63,107,74,.3) inset;}
 .kpi-thr-wrap{display:flex;gap:6px;justify-content:center;}
-.kpi-fact-in{width:66px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12.5px;text-align:center;padding:4px;font-family:'IBM Plex Mono',monospace;}
+.kpi-fact-in{width:66px;background:transparent;border:1px solid transparent;border-radius:5px;color:var(--ink);font-weight:700;font-size:13px;text-align:center;padding:4px;font-family:'IBM Plex Mono',monospace;transition:background .12s var(--ease),border-color .12s var(--ease);}
+.kpi-fact-in:hover{background:var(--input-bg);border-color:var(--line);}
+.kpi-fact-in:focus{background:var(--input-bg);border-color:var(--line-strong);outline:none;}
+.kpi-fact-in:read-only{color:var(--muted);font-weight:500;}
+.kpi-fact-in.ok{color:var(--positive);}
+.kpi-fact-in.bad{color:var(--negative);}
 .kpi-fact-cell{min-width:132px;text-align:left;}
 .kpi-fact-row{display:flex;align-items:baseline;gap:6px;white-space:nowrap;}
 .kpi-fact-row .kpi-bonus-hint{display:inline;margin-top:0;font-size:9.5px;}
-.kpi-plan-in{width:86px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
+.kpi-plan-in{width:86px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;transition:background .12s var(--ease),border-color .12s var(--ease);}
+.kpi-plan-in:read-only{background:transparent;border-color:transparent;font-weight:600;}
 .kpi-bonus-hint{display:block;margin-top:3px;font-size:10px;color:var(--muted);font-weight:500;white-space:nowrap;}
 .kpi-bonus-hint.ok{color:var(--positive);font-weight:700;}
 .kpi-bonus-hint.bad{color:var(--negative);}
