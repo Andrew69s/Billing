@@ -3553,7 +3553,6 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                 <tr>
                   <th className="col-store" rowSpan={2}>Магазин</th>
                   <th className="col-name" rowSpan={2}>ПІБ</th>
-                  <th rowSpan={2}>Статус<br />плану</th>
                   <th rowSpan={2}>План ЕЗ</th>
                   <th rowSpan={2}>Факт ЕЗ</th>
                   <th rowSpan={2}>План ТО<br />(ОС)</th>
@@ -3591,13 +3590,6 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                       <tr key={e.id}>
                         {idx === 0 && <td className="store col-store" rowSpan={n}>{salonLabel(s)}</td>}
                         <td className="name col-name">{e.full_name}</td>
-                        {idx === 0 && (
-                          <td rowSpan={n} className="kpi-actions-cell muted">
-                            {/* дії по плану — одна кнопка на весь місяць у верхньому кутку таблиці,
-                                тут лише статус цього магазину */}
-                            {plan.locked ? "🔒 місяць закрито" : plan.plan_fixed ? "🔒 зафіксовано" : isPlannerSrc ? (editing ? "редагується" : "з планера") : "вручну"}
-                          </td>
-                        )}
                         {idx === 0 && (
                           <td rowSpan={n}>
                             <NumInput className="kpi-plan-in" value={plan.ez_plan} onChange={setPlanField(s.key, "ez_plan")} readOnly={ezReadOnly} />
@@ -14708,7 +14700,6 @@ table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(
 .kpi-bonus-hint{display:block;margin-top:3px;font-size:10px;color:var(--muted);font-weight:500;white-space:nowrap;}
 .kpi-bonus-hint.ok{color:var(--positive);font-weight:700;}
 .kpi-bonus-hint.bad{color:var(--negative);}
-.kpi-actions-cell{min-width:120px;}
 .kpi-pct-wrap{display:inline-flex;align-items:center;gap:3px;}
 .kpi-pct-wrap b{font-size:12px;color:var(--ink-soft);}
 .kpi-cell-stack{display:flex;flex-direction:column;align-items:center;gap:3px;}
