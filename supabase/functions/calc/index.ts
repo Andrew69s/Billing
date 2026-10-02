@@ -311,23 +311,6 @@ function calcPpi(p: any, teamSize = 1, excluded = false) {
   const teamBonus = Math.round((p.ppiRevenue || 0) * (pct / 100));
   return { pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team) };
 }
-// Доля RRI (план/факт — ТМ вносить вручну в KPI-листі): виконано → 3% від
-// обороту «основної групи» (factAdjusted) на команду, не виконано → 1%.
-// Доля RRI (факт) = оборот RRI (рахунок ТМ вносить сумою) / загальний оборот
-// ОС · 100% — порівнюється з планом ТМ, заданим теж у відсотках. Той самий
-// командний розподіл, що й PPI/рекорд/БН.
-function calcRri(rriPlanPct: number, rriRevenue: number, factAdjusted: number, teamSize = 1, excluded = false) {
-  const team = Math.max(1, teamSize || 1);
-  const tracked = (rriPlanPct || 0) > 0; // ТМ ще не вносив план по RRI цей місяць → бонусу взагалі нема (не 1% за замовчуванням)
-  const factPct = factAdjusted > 0 ? ((rriRevenue || 0) / factAdjusted) * 100 : 0;
-  const met = tracked && factPct >= rriPlanPct;
-  const pct = !tracked ? 0 : met ? 3 : 1;
-  const teamBonus = Math.round((factAdjusted || 0) * (pct / 100));
-  return {
-    plan: rriPlanPct || 0, revenue: rriRevenue || 0, factPct,
-    tracked, met, pct, team, teamBonus, bonus: excluded ? 0 : Math.round(teamBonus / team),
-  };
-}
 const recordThreshold = (prev: number) => Math.max(1_000_000, Math.round((prev || 0) * 1.1));
 function calcRecord(r: any, teamSize = 1, excluded = false) {
   const team = Math.max(1, teamSize || 1);
@@ -390,9 +373,6 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
   const ezTeam = excludedFromTeam ? 0 : Math.round(((ezProfitSum || 0) * 0.20) / Math.max(1, teamSize || 1));
   bonus.ezTeam = ezTeam;
   bonus.subtotal += ezTeam;
-  const rri = calcRri(planRow?.rri_plan || 0, planRow?.rri_fact || 0, factAdjusted, teamSize, excludedFromTeam);
-  bonus.rri = rri.bonus;
-  bonus.subtotal += rri.bonus;
   const ppi = calcPpi(data.ppi, teamSize, excludedFromTeam);
   const record = calcRecord(data.record, teamSize, excludedFromTeam);
   const quarterly = calcQuarterly(data.quarterly);
@@ -412,7 +392,7 @@ function calcSmAll(data: any, ym: string, area: string, teamSize = 1, planRow?: 
     ezPlan: planRow?.ez_plan || 0, ezTotalSum,
     hasPlan: !!planRow, hasHistory: avg3FromHistory != null,
     planThresholds: { scN1: effectiveBonusInput.scN1, scN2: effectiveBonusInput.scN2, scN3: effectiveBonusInput.scN3, clN1: effectiveBonusInput.clN1, clN2: effectiveBonusInput.clN2, clN3: effectiveBonusInput.clN3 },
-    mgr, bonus, ppi, record, rri, quarterly, bonusExtra, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total,
+    mgr, bonus, ppi, record, quarterly, bonusExtra, adj, advance, official, birthdays, inventory, ownUse, grossTotal, deducted, total,
   };
 }
 

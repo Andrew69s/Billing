@@ -3158,14 +3158,6 @@ function SmStoreSalary({ salon, review, ymProp }) {
                 <StRow label="ЕЗ"
                   labelExtra={<TeamGear title="Хто ділить бонус ЕЗ" onClick={() => setTeamPickerOpen(true)} />}
                   inp={<span className="st-two"><button type="button" className="wh-link" onClick={() => setEzOpen(true)}>{ez.list.length} прод. за місяць · переглянути →</button><span className="st-hint">на {c0.bonus.team}</span></span>} cells={each((e) => stMoney(c(e).bonus.ezTeam))} />
-                {!!c0.rri && (
-                  <StRow label="Доля RRI"
-                    inp={<span className="st-hint">
-                      {c0.rri.tracked ? `план ${c0.rri.plan}% · факт ${c0.rri.factPct.toFixed(1)}% (оборот RRI ${stNum(c0.rri.revenue)}) · ${c0.rri.met ? "виконано (3%)" : "не виконано (1%)"}` : "план ще не внесено в «План показників» — бонус 0"}
-                      {" "}на {c0.bonus.team}
-                    </span>}
-                    cells={each((e) => stMoney(c(e).bonus.rri))} />
-                )}
                 <StRow label="Бонус (додатково)" inp={<span className="st-hint">вноситься по кожному →</span>}
                   cells={each((e) => <StIn v={d(e).bonusExtra?.amount || 0} set={setEmp(e.id, ["bonusExtra", "amount"])} label={`Бонус — ${e.full_name}`} cls="st-in-w" />)} />
                 {showTmAdj && <StRow label="Додатково від ТМ" inp={<span className="st-hint">вносить ТМ</span>}
