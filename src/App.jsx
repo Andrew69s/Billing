@@ -3559,7 +3559,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                   <th rowSpan={2}>План ТО<br />(ОС)</th>
                   <th rowSpan={2}>Факт ТО<br />(ОС)</th>
                   <th rowSpan={2}>План долі RRI<br /><span className="sub">% від обороту ОС</span></th>
-                  <th rowSpan={2}>Оборот RRI<br /><span className="sub">факт, грн</span></th>
+                  <th rowSpan={2}>Факт доля RRI<br /><span className="sub">оборот RRI, грн</span></th>
                   <th colSpan={2}>Середній чек<span className="sub">бонус 700 / 1500 / 2000 ₴</span></th>
                   <th colSpan={2}>Довжина чека<span className="sub">бонус 500 / 1000 / 1500 ₴</span></th>
                   <th colSpan={4}>ТО за 3 місяці (без ЕЗ, Віктора й НРТ)</th>
