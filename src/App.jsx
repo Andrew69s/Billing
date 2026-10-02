@@ -14701,8 +14701,8 @@ table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(
 .kpi-thr-in.thr-g{border-color:var(--positive);box-shadow:0 0 0 1px rgba(63,107,74,.3) inset;}
 .kpi-thr-wrap{display:flex;gap:6px;justify-content:center;}
 .kpi-fact-in{width:66px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12.5px;text-align:center;padding:4px;font-family:'IBM Plex Mono',monospace;}
-.kpi-fact-cell{min-width:132px;}
-.kpi-fact-row{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap;}
+.kpi-fact-cell{min-width:132px;text-align:left;}
+.kpi-fact-row{display:flex;align-items:baseline;gap:6px;white-space:nowrap;}
 .kpi-fact-row .kpi-bonus-hint{display:inline;margin-top:0;font-size:9.5px;}
 .kpi-plan-in{width:86px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
 .kpi-bonus-hint{display:block;margin-top:3px;font-size:10px;color:var(--muted);font-weight:500;white-space:nowrap;}
