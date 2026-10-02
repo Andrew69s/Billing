@@ -3487,7 +3487,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
     // до фіксації ТМ міг ще правити цифри, і проміжні зміни СМ не бачить
     notify({
       recipient: salonKey, kind: "plans",
-      title: "Проставлено плани на цей місяць",
+      title: "Проставлено показники на цей місяць",
       body: monthLabel(ym), actor: tmKey, link: "salary",
     }).catch(() => {});
   };
@@ -3514,7 +3514,7 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
         return next;
       });
       setEditingPlan({});
-      pushToast({ title: "План зафіксовано", body: `${fixableSalons.length} магазин(ів) · ${monthLabel(ym)}` });
+      pushToast({ title: "Показники зафіксовано", body: `${fixableSalons.length} магазин(ів) · ${monthLabel(ym)}` });
     } catch (e) {
       pushToast({ title: "Не вдалося зафіксувати", body: String(e.message || e) });
     }
@@ -3537,12 +3537,12 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
           <>
           <div className="kpi-month-toolbar">
             {allFixedOrLocked ? (
-              <span className="kpi-fixed-badge">🔒 план на {monthLabel(ym)} зафіксовано по всіх магазинах</span>
+              <span className="kpi-fixed-badge">🔒 показники за {monthLabel(ym)} зафіксовано по всіх магазинах</span>
             ) : (
               <>
                 {!anyEditing && <button type="button" className="kpi-edit-btn" onClick={editAllPlans}>✎ Редагувати план ТО/ЕЗ</button>}
                 <button type="button" className="kpi-fix-btn" disabled={busyFixAll || !fixableSalons.length} onClick={fixAllPlans}>
-                  {busyFixAll ? "Фіксую…" : `Зафіксувати план на ${monthLabel(ym)} (${fixableSalons.length})`}
+                  {busyFixAll ? "Фіксую…" : `Зафіксувати показники за ${monthLabel(ym)} (${fixableSalons.length})`}
                 </button>
               </>
             )}
@@ -3635,9 +3635,11 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                             </div>
                           </td>
                         )}
-                        <td>
-                          <NumInput className="kpi-fact-in" value={d.bonus.avgCheckFact} onChange={setEmpField(e.id, ["bonus", "avgCheckFact"])} readOnly={plan.locked} />
-                          {!!(d.bonus.avgCheckFact > 0) && <span className={`kpi-bonus-hint ${c?.bonus?.avgCheck ? "ok" : "bad"}`}>{c?.bonus?.avgCheck ? `+${stNum(c.bonus.avgCheck)}` : "без бонусу"}</span>}
+                        <td className="kpi-fact-cell">
+                          <span className="kpi-fact-row">
+                            <NumInput className="kpi-fact-in" value={d.bonus.avgCheckFact} onChange={setEmpField(e.id, ["bonus", "avgCheckFact"])} readOnly={plan.locked} />
+                            {!!(d.bonus.avgCheckFact > 0) && <span className={`kpi-bonus-hint ${c?.bonus?.avgCheck ? "ok" : "bad"}`}>{c?.bonus?.avgCheck ? `+${stNum(c.bonus.avgCheck)}` : "без бонусу"}</span>}
+                          </span>
                         </td>
                         {idx === 0 && (
                           <td rowSpan={n}>
@@ -3648,9 +3650,11 @@ function KpiMonthSheet({ tmKey, ym, employees, defaultOpen }) {
                             </div>
                           </td>
                         )}
-                        <td>
-                          <NumInput className="kpi-fact-in" value={d.bonus.checkLenFact} onChange={setEmpField(e.id, ["bonus", "checkLenFact"])} readOnly={plan.locked} />
-                          {!!(d.bonus.checkLenFact > 0) && <span className={`kpi-bonus-hint ${c?.bonus?.checkLen ? "ok" : "bad"}`}>{c?.bonus?.checkLen ? `+${stNum(c.bonus.checkLen)}` : "без бонусу"}</span>}
+                        <td className="kpi-fact-cell">
+                          <span className="kpi-fact-row">
+                            <NumInput className="kpi-fact-in" value={d.bonus.checkLenFact} onChange={setEmpField(e.id, ["bonus", "checkLenFact"])} readOnly={plan.locked} />
+                            {!!(d.bonus.checkLenFact > 0) && <span className={`kpi-bonus-hint ${c?.bonus?.checkLen ? "ok" : "bad"}`}>{c?.bonus?.checkLen ? `+${stNum(c.bonus.checkLen)}` : "без бонусу"}</span>}
+                          </span>
                         </td>
                         {idx === 0 && histMonths.map((m) => (
                           <td key={m} rowSpan={n} className="muted">{h[m] ? stNum(h[m].turnover_ex_ez) : "—"}</td>
@@ -14696,7 +14700,10 @@ table.kpi-sheet-tbl th.col-store,table.kpi-sheet-tbl th.col-name{background:var(
 .kpi-thr-in.thr-o{border-color:#C97A2E;box-shadow:0 0 0 1px rgba(201,122,46,.35) inset;}
 .kpi-thr-in.thr-g{border-color:var(--positive);box-shadow:0 0 0 1px rgba(63,107,74,.3) inset;}
 .kpi-thr-wrap{display:flex;gap:6px;justify-content:center;}
-.kpi-fact-in{width:72px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
+.kpi-fact-in{width:66px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12.5px;text-align:center;padding:4px;font-family:'IBM Plex Mono',monospace;}
+.kpi-fact-cell{min-width:132px;}
+.kpi-fact-row{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap;}
+.kpi-fact-row .kpi-bonus-hint{display:inline;margin-top:0;font-size:9.5px;}
 .kpi-plan-in{width:86px;background:var(--input-bg);border:1px solid var(--line-strong);border-radius:5px;color:var(--ink);font-size:12px;text-align:center;padding:3px 4px;font-family:'IBM Plex Mono',monospace;}
 .kpi-bonus-hint{display:block;margin-top:3px;font-size:10px;color:var(--muted);font-weight:500;white-space:nowrap;}
 .kpi-bonus-hint.ok{color:var(--positive);font-weight:700;}
